@@ -15,9 +15,10 @@
 """Coordinate transformations."""
 
 import astropy.units as u
-from tqdm import trange
 import numpy as np
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
+                                 SkyCoord, SphericalRepresentation)
+from tqdm import trange
 
 
 def cartesian_to_r_theta_phi(x, y, z, center=[0.0, 0.0, 0.0]):
@@ -29,6 +30,29 @@ def cartesian_to_r_theta_phi(x, y, z, center=[0.0, 0.0, 0.0]):
     phi = np.mod(np.arctan2(y - y0, x - x0), 2.0 * np.pi)
 
     return r, theta, phi
+
+
+def cartesian_icrs_to_galactic_spherical(pos, center):
+    """
+    Convert ICRS Cartesian coordinates to Galactic spherical coordinates
+    (r, ell, b) about a fixed pivot `center` (observer).
+    """
+    pos_q = u.Quantity(pos, copy=False)
+    cen_q = u.Quantity(center, copy=False)
+
+    # Broadcast and shift to the chosen center.
+    rel = pos_q - cen_q  # shape (..., 3)
+
+    rep = CartesianRepresentation(rel[..., 0], rel[..., 1], rel[..., 2])
+    icrs = ICRS(rep)
+    gal = icrs.transform_to(Galactic())
+    sph = gal.represent_as(SphericalRepresentation)
+
+    ell = sph.lon.to(u.deg).value
+    b = sph.lat.to(u.deg).value
+    r = sph.distance.value
+
+    return r, ell, b
 
 
 def cartesian_icrs_to_galactic(pos, center, chunk=None):
