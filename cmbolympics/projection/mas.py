@@ -16,12 +16,15 @@
 import healpy as hp
 import numpy as np
 from tqdm import trange
+from scipy.interpolate import RegularGridInterpolator
+from scipy.integrate import simpson
 
 from ..utils.coords import cartesian_to_r_theta_phi
+from ..utils import fprint
 
 
-def particle_ngp_projection(nside, pos, observer, Rmax=None, chunk=1000_000,
-                            verbose=True):
+def particle_ngp_projection(nside, pos, observer, Rmin=None, Rmax=None,
+                            chunk=1000_000, verbose=True):
     """
     Nearest-grid pixel projection of particles onto a HEALPix map.
 
@@ -38,16 +41,67 @@ def particle_ngp_projection(nside, pos, observer, Rmax=None, chunk=1000_000,
                    "disable": not verbose or npart < chunk}
     for i in trange(0, npart, chunk, **iter_kwargs):
         sl = slice(i, min(i + chunk, npart))
+
         r, theta, phi = cartesian_to_r_theta_phi(
             pos[sl, 0], pos[sl, 1], pos[sl, 2], center=observer)
 
         if Rmax is not None:
             mask = r <= Rmax
+            r, theta, phi = r[mask], theta[mask], phi[mask]
+
+        if Rmin is not None:
+            mask = r >= Rmin
             theta, phi = theta[mask], phi[mask]
 
         out += np.bincount(hp.ang2pix(nside, theta, phi), minlength=npix)
 
     return out
+
+
+def grid_ngp_projection(nside, rho, boxsize, observer, rmax,
+                        dr, rmin=0, chunksize=10_000, r_power=2, verbose=True):
+
+    nx, ny, nz = rho.shape
+    x = (np.arange(nx) + 0.5) * boxsize / nx
+    y = (np.arange(ny) + 0.5) * boxsize / ny
+    z = (np.arange(nz) + 0.5) * boxsize / nz
+
+    # Interpolator (periodic handled by manual wrapping)
+    fprint("building the 3D grid interpolator...", verbose=verbose)
+    interp = RegularGridInterpolator((x, y, z), rho, bounds_error=True)
+
+    # Radial samples
+    r = np.arange(rmin, rmax + dr, dr)
+    nr = r.size
+    fprint(f"going to evaluate {nr} radial samples from {rmin} to {rmax}...",
+           verbose=verbose)
+
+    npix = hp.nside2npix(nside)
+    map_out = np.zeros(npix, dtype=np.float64)
+
+    # Pixel directions
+    pix_rhat = np.array(hp.pix2vec(nside, np.arange(npix))).T  # (npix,3)
+
+    norm = simpson(r**r_power, x=r)
+
+    # Chunk over pixels to control memory
+    iter_kwargs = {"desc": "Projecting grid",
+                   "disable": not verbose or npix < chunksize}
+    for i0 in trange(0, npix, chunksize, **iter_kwargs):
+        i1 = min(i0 + chunksize, npix)
+        nhat = pix_rhat[i0:i1]  # (chunk_size, 3)
+
+        # Ray points: (nr, chunk_size, 3)
+        pts = observer[None, None, :] + r[:, None, None] * nhat[None, :, :]
+        pts = pts.reshape(-1, 3)
+
+        # Interpolate rho along rays, reshape to (nr, C) and integrate
+        vals = interp(pts).reshape(nr, i1 - i0)
+        vals = simpson(r[:, None]**r_power * vals, x=r, axis=0) / norm
+
+        map_out[i0:i1] = vals
+
+    return map_out
 
 
 def gaussian_smooth_map(input_map, fwhm_arcmin, nside_out=None):
