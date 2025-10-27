@@ -13,6 +13,14 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+from .cmb import (                                                              # noqa
+    read_Planck_comptonSZ,                                                      # noqa
+    )                                                                           # noqa
+
 from .snapshot  import (                                                        # noqa
     Gadget4Reader,                                                              # noqa
     )
+
+from .halo import (                                                             # noqa
+    FoFHaloReader,                                                              # noqa
+    )                                                                           # noqa

@@ -15,6 +15,7 @@
 
 from .coords import (                                                           # noqa
     cartesian_to_r_theta_phi,                                                   # noqa
+    cartesian_icrs_to_galactic_spherical,                                       # noqa
     cartesian_icrs_to_galactic,                                                 # noqa
     )                                                                           # noqa
 

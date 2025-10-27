@@ -16,3 +16,8 @@
 from .cross import (                                                            # noqa
     cross_cl_healpix,                                                           # noqa
     )                                                                           # noqa
+
+from .pointing import (                                                         # noqa
+    radial_mean_profile,                                                        # noqa
+    measure_random_profiles,                                                    # noqa
+    )                                                                           # noqa
