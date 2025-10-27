@@ -15,5 +15,6 @@
 
 from .mas import (                                                              # noqa
     particle_ngp_projection,                                                    # noqa
+    grid_ngp_projection,                                                        # noqa
     gaussian_smooth_map,                                                        # noqa
     )                                                                           # noqa
