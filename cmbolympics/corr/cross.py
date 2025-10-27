@@ -45,7 +45,7 @@ def cross_cl_healpix(map1, map2, mask=None, lmax=None, deconvolve_pixwin=True,
         good &= (mask > 0)
 
     f_sky = float(np.mean(good))
-    print(f"f_sky = {f_sky:.3f}")
+    # print(f"f_sky = {f_sky:.3f}")
 
     mm1 = hp.ma(map1)
     mm2 = hp.ma(map2)

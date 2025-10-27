@@ -58,8 +58,8 @@ def particle_ngp_projection(nside, pos, observer, Rmin=None, Rmax=None,
     return out
 
 
-def grid_ngp_projection(nside, rho, boxsize, observer, rmax,
-                        dr, rmin=0, chunksize=10_000, r_power=2, verbose=True):
+def grid_ngp_projection(nside, rho, boxsize, observer, Rmax,
+                        dr, Rmin=0, chunksize=10_000, r_power=2, verbose=True):
 
     nx, ny, nz = rho.shape
     x = (np.arange(nx) + 0.5) * boxsize / nx
@@ -71,9 +71,9 @@ def grid_ngp_projection(nside, rho, boxsize, observer, rmax,
     interp = RegularGridInterpolator((x, y, z), rho, bounds_error=True)
 
     # Radial samples
-    r = np.arange(rmin, rmax + dr, dr)
+    r = np.arange(Rmin, Rmax + dr, dr)
     nr = r.size
-    fprint(f"going to evaluate {nr} radial samples from {rmin} to {rmax}...",
+    fprint(f"going to evaluate {nr} radial samples from {Rmin} to {Rmax}...",
            verbose=verbose)
 
     npix = hp.nside2npix(nside)
