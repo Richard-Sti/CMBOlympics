@@ -15,4 +15,14 @@
 
 from .coords import (                                                           # noqa
     cartesian_to_r_theta_phi,                                                   # noqa
+    cartesian_icrs_to_galactic,                                                 # noqa
     )                                                                           # noqa
+
+from datetime import datetime
+
+
+def fprint(*args, verbose=True, **kwargs):
+    """Prints a message with a timestamp prepended."""
+    if verbose:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S%f")[:-6]
+        print(f"{timestamp}", *args, **kwargs)
