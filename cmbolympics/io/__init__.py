@@ -24,3 +24,28 @@ from .snapshot  import (                                                        
 from .halo import (                                                             # noqa
     FoFHaloReader,                                                              # noqa
     )                                                                           # noqa
+
+from h5py import File
+
+
+def dump_to_hdf5(fname, **kwargs):
+    """Shortcut to dump multiple arrays to an HDF5 file."""
+    with File(fname, "w") as f:
+        for key, val in kwargs.items():
+            f.create_dataset(key, data=val)
+
+
+def read_from_hdf5(fname, *args):
+    """Shortcut to read multiple arrays from an HDF5 file."""
+    out = []
+    with File(fname, "r") as f:
+        for key in args:
+            if key not in f:
+                raise KeyError(f"Key '{key}' not found in file '{fname}'. "
+                               f"Available keys: {list(f.keys())}")
+            out.append(f[key][...])
+
+    if len(args) == 1:
+        return out[0]
+
+    return out
