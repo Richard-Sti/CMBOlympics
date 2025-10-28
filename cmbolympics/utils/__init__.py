@@ -20,6 +20,7 @@ from .coords import (                                                           
     )                                                                           # noqa
 
 from datetime import datetime
+from scipy.stats import norm
 
 
 def fprint(*args, verbose=True, **kwargs):
@@ -27,3 +28,8 @@ def fprint(*args, verbose=True, **kwargs):
     if verbose:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S%f")[:-6]
         print(f"{timestamp}", *args, **kwargs)
+
+
+def pvalue_to_sigma(pval):
+    """Convert a one-sided p-value to a Gaussian sigma significance."""
+    return norm.isf(pval)
