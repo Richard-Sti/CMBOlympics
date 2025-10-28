@@ -29,7 +29,6 @@ class FoFHaloReader:
     def __getitem__(self, name):
         with File(self.fname, "r") as f:
             grp = f["Group"]
-            print(grp.keys())
             x = grp[name][...]
             if name == "GroupPos" and self.flip_xz:
                 fprint(f"Flipping x and z coordinates for {self.fname}.")
