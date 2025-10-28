@@ -18,6 +18,8 @@ from .cross import (                                                            
     )                                                                           # noqa
 
 from .pointing import (                                                         # noqa
-    radial_mean_profile,                                                        # noqa
-    measure_random_profiles,                                                    # noqa
+    pointing_enclosed_profile,                                                  # noqa
+    pointing_enclosed_profile_per_source,                                       # noqa
+    randpoint_enclosed_profiles,                                                # noqa
+    get_pointing_pvalue,                                                        # noqa
     )                                                                           # noqa
