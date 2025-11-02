@@ -102,26 +102,41 @@ class PointingEnclosedProfile:
         out = np.full(len(radii_arcmin), np.nan)
         for i, r_arcmin in enumerate(radii_arcmin):
             r_rad = np.radians(r_arcmin / 60.0)
-            idx = hp.query_disc(self.nside, v0, r_rad, inclusive=False, fact=4)
-            good = self.mask[idx]
-            if np.any(good):
+            if subtract_background:
+                r_outer_rad = np.radians((r_arcmin + self.fwhm_arcmin) / 60.0)
+                idx_outer = hp.query_disc(
+                    self.nside, v0, r_outer_rad, inclusive=False, fact=4)
+                if idx_outer.size == 0:
+                    continue
+
+                values_outer = self.m[idx_outer]
+                good_outer = self.mask[idx_outer]
+                if not np.any(good_outer):
+                    continue
+
+                vec_outer = np.array(hp.pix2vec(self.nside, idx_outer)).T
+                cosang = np.einsum("ij,j->i", vec_outer, v0)
+                cosang = np.clip(cosang, -1.0, 1.0)
+                theta_outer = np.arccos(cosang)
+
+                inner_mask = theta_outer <= r_rad
+                good_inner = good_outer & inner_mask
+                if not np.any(good_inner):
+                    continue
+
+                signal = np.mean(values_outer[good_inner])
+
+                annulus_mask = good_outer & (~inner_mask)
+                if np.any(annulus_mask):
+                    background = np.mean(values_outer[annulus_mask])
+                    signal -= background
+            else:
+                idx = hp.query_disc(
+                    self.nside, v0, r_rad, inclusive=False, fact=4)
+                good = self.mask[idx]
+                if not np.any(good):
+                    continue
                 signal = np.mean(self.m[idx][good])
-
-                # Subtract background from annular aperture if requested
-                if subtract_background:
-                    r_outer_rad = np.radians(
-                        (r_arcmin + self.fwhm_arcmin) / 60.0)
-
-                    # Get all pixels within outer radius
-                    idx_outer = hp.query_disc(
-                        self.nside, v0, r_outer_rad, inclusive=False, fact=4)
-                    # Annulus = outer circle - inner circle
-                    idx_annulus = np.setdiff1d(idx_outer, idx)
-
-                    good_annulus = self.mask[idx_annulus]
-                    if np.any(good_annulus):
-                        background = np.mean(self.m[idx_annulus][good_annulus])
-                        signal -= background
 
                 out[i] = signal
 
