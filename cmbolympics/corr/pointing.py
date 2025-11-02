@@ -26,38 +26,249 @@ from tqdm import trange
 from tqdm.auto import tqdm
 
 
-def pointing_enclosed_profile(map_in, ell_deg, b_deg, radii_arcmin, mask=None):
+class PointingEnclosedProfile:
     """
-    Mean enclosed profile around some pointing (ell_deg, b_deg) in
-    degrees, `radii_arcmin` can be a scalar or array of radii in arcminutes.
+    Class for computing enclosed radial profiles from HEALPix maps.
+
+    Parameters
+    ----------
+    m : array_like
+        HEALPix map (Galactic).
+    mask : array_like or None, optional
+        HEALPix mask in the same NSIDE/order as map. Default: None.
+    n_jobs : int, optional
+        Number of parallel jobs. Default: 1.
+    prefer : str, optional
+        Joblib parallelization preference ("processes" or "threads").
+        Default: "processes".
+    batch_size : str or int, optional
+        Joblib batch size. Default: "auto".
     """
-    assert isinstance(ell_deg, (float, int)), "`ell_deg` must be a scalar."
-    assert isinstance(b_deg, (float, int)), "`b_deg` must be a scalar"
 
-    radii_arcmin = np.atleast_1d(radii_arcmin)
-    nside = hp.get_nside(map_in)
-    if mask is None:
-        mask = np.isfinite(map_in) & (map_in != hp.UNSEEN)
-    else:
-        mask = (mask > 0) & np.isfinite(map_in) & (map_in != hp.UNSEEN)
+    def __init__(self, m, mask=None, n_jobs=1, prefer="processes",
+                 batch_size="auto"):
+        self.m = m
+        self.nside = hp.get_nside(m)
 
-    th0 = np.radians(90.0 - b_deg)
-    ph0 = np.radians(ell_deg)
-    v0 = hp.ang2vec(th0, ph0)
+        # Set up mask
+        if mask is None:
+            self.mask = np.isfinite(m) & (m != hp.UNSEEN)
+        else:
+            self.mask = (mask > 0) & np.isfinite(m) & (m != hp.UNSEEN)
 
-    out = np.full(len(radii_arcmin), np.nan)
-    for i, r_arcmin in enumerate(radii_arcmin):
-        r_rad = np.radians(r_arcmin / 60.0)
-        idx = hp.query_disc(nside, v0, r_rad, inclusive=False, fact=4)
-        good = mask[idx]
-        if np.any(good):
-            out[i] = np.mean(map_in[idx][good])
+        self.n_jobs = n_jobs
+        self.prefer = prefer
+        self.batch_size = batch_size
 
-    # If input was scalar, return scalar mean for convenience
-    if out.size == 1:
-        return out[0]
+    def get_profile(self, ell_deg, b_deg, radii_arcmin):
+        """
+        Mean enclosed profile around a single pointing.
 
-    return out
+        Parameters
+        ----------
+        ell_deg : float
+            Galactic longitude [deg].
+        b_deg : float
+            Galactic latitude [deg].
+        radii_arcmin : float or array_like
+            Aperture radius/radii [arcmin].
+
+        Returns
+        -------
+        profile : float or ndarray
+            Mean value(s) within aperture(s).
+        """
+        assert isinstance(ell_deg, (float, int)), "`ell_deg` must be a scalar."
+        assert isinstance(b_deg, (float, int)), "`b_deg` must be a scalar"
+
+        radii_arcmin = np.atleast_1d(radii_arcmin)
+
+        th0 = np.radians(90.0 - b_deg)
+        ph0 = np.radians(ell_deg)
+        v0 = hp.ang2vec(th0, ph0)
+
+        out = np.full(len(radii_arcmin), np.nan)
+        for i, r_arcmin in enumerate(radii_arcmin):
+            r_rad = np.radians(r_arcmin / 60.0)
+            idx = hp.query_disc(self.nside, v0, r_rad, inclusive=False, fact=4)
+            good = self.mask[idx]
+            if np.any(good):
+                out[i] = np.mean(self.m[idx][good])
+
+        # If input was scalar, return scalar mean for convenience
+        if out.size == 1:
+            return out[0]
+
+        return out
+
+    def get_profiles_per_source(self, ell_deg, b_deg, radii_arcmin):
+        """
+        Mean enclosed profile around multiple pointings.
+
+        Parameters
+        ----------
+        ell_deg : array_like
+            Galactic longitudes [deg].
+        b_deg : array_like
+            Galactic latitudes [deg].
+        radii_arcmin : array_like
+            Aperture radii [arcmin], one per pointing.
+
+        Returns
+        -------
+        profiles : ndarray
+            Mean values within each aperture.
+        """
+        ell_deg = np.asarray(np.atleast_1d(ell_deg))
+        b_deg = np.asarray(np.atleast_1d(b_deg))
+        radii_arcmin = np.asarray(np.atleast_1d(radii_arcmin))
+        assert ell_deg.shape == b_deg.shape == radii_arcmin.shape
+
+        n = ell_deg.size
+        out = np.full(n, np.nan, dtype=float)
+
+        with tempfile.NamedTemporaryFile(suffix=".mmap", delete=False) as tmp:
+            mmap_path = tmp.name
+        try:
+            joblib.dump(self.m, mmap_path, compress=0)
+            map_mm = joblib.load(mmap_path, mmap_mode="r")
+
+            # Create temporary object with memory-mapped array
+            temp_obj = PointingEnclosedProfile(
+                map_mm, mask=self.mask, n_jobs=1,
+                prefer=self.prefer, batch_size=self.batch_size
+            )
+
+            if self.n_jobs == 1:
+                for i in tqdm(range(n), desc="Measuring profiles"):
+                    out[i] = temp_obj.get_profile(
+                        ell_deg[i], b_deg[i], radii_arcmin[i]
+                    )
+            else:
+                from contextlib import nullcontext
+                ctx = tqdm_joblib(tqdm(total=n, desc="Measuring profiles")) \
+                    if 'tqdm_joblib' in globals() else nullcontext()
+
+                with ctx:
+                    res = Parallel(n_jobs=self.n_jobs, prefer=self.prefer,
+                                   batch_size=self.batch_size)(
+                        delayed(temp_obj.get_profile)(
+                            ell_deg[i], b_deg[i], radii_arcmin[i])
+                        for i in range(n)
+                    )
+                out[:] = np.asarray(res, dtype=float)
+        finally:
+            if os.path.exists(mmap_path):
+                os.remove(mmap_path)
+
+        return out
+
+    def get_random_profiles(self, radii_arcmin, n_points, abs_b_min=None,
+                            seed=None):
+        """
+        Mean radial profiles at random HEALPix positions.
+
+        Parameters
+        ----------
+        radii_arcmin : float or array_like
+            Aperture radius/radii [arcmin] to measure at each random position.
+        n_points : int
+            Number of random positions to generate.
+        abs_b_min : float or None, optional
+            If given, require |b| >= abs_b_min [deg].
+        seed : int or None, optional
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        profiles : ndarray
+            Radial profiles at random positions (excluding NaN profiles).
+        """
+        ell_deg, b_deg, __ = random_sky_positions(n_points, abs_b_min, seed)
+        radii_arcmin = np.asarray(radii_arcmin)
+
+        with tempfile.NamedTemporaryFile(suffix=".mmap", delete=False) as tmp:
+            mmap_path = tmp.name
+        try:
+            joblib.dump(self.m, mmap_path, compress=0)
+            map_in_mm = joblib.load(mmap_path, mmap_mode="r")
+
+            # Create temporary object with memory-mapped array
+            temp_obj = PointingEnclosedProfile(
+                map_in_mm, mask=self.mask, n_jobs=1,
+                prefer=self.prefer, batch_size=self.batch_size
+            )
+
+            if self.n_jobs == 1:
+                results = []
+                for i in tqdm(range(n_points), desc="Measuring profiles"):
+                    prof = temp_obj.get_profile(
+                        ell_deg[i], b_deg[i], radii_arcmin
+                    )
+                    results.append(prof)
+            else:
+                with tqdm_joblib(tqdm(total=n_points,
+                                      desc="Measuring profiles")):
+                    results = Parallel(
+                        n_jobs=self.n_jobs, prefer=self.prefer,
+                        batch_size=self.batch_size
+                    )(
+                        delayed(temp_obj.get_profile)(
+                            ell_deg[i], b_deg[i], radii_arcmin)
+                        for i in range(n_points)
+                    )
+        finally:
+            if os.path.exists(mmap_path):
+                os.remove(mmap_path)
+
+        profiles, num_skipped = [], 0
+        for prof in results:
+            if np.any(np.isnan(prof)):
+                num_skipped += 1
+            else:
+                profiles.append(prof)
+
+        print(f"Skipped {num_skipped} / {n_points} profiles due to NaNs.")
+        return np.asarray(profiles, dtype=float)
+
+    @staticmethod
+    def get_pvalue(signal_source, theta200, theta_rand, signal_rand):
+        """
+        Get empirical p-values for source signals based on random pointing
+        signals.
+
+        Defined as the fraction of random signals greater than or equal to the
+        source signal at the closest matching aperture size.
+
+        Parameters
+        ----------
+        signal_source : array_like
+            Source signals to test.
+        theta200 : array_like
+            Aperture sizes for sources.
+        theta_rand : array_like
+            Aperture sizes for random sample.
+        signal_rand : ndarray, shape (n_random, n_apertures)
+            Random signals.
+
+        Returns
+        -------
+        pval : ndarray
+            P-values for each source.
+        """
+        assert theta_rand.ndim == 1 and signal_rand.ndim == 2
+        assert signal_rand.shape[1] == len(theta_rand)
+
+        signal_rand = np.sort(signal_rand, axis=0)
+        nr = len(signal_rand)
+
+        pval = np.full(len(theta200), np.nan)
+
+        for i in range(len(theta200)):
+            k = np.argmin(np.abs(theta_rand - theta200[i]))
+            pval[i] = 1 - np.searchsorted(signal_rand[:, k], signal_source[i]) / nr  # noqa
+
+        return pval
 
 
 @contextmanager
@@ -74,54 +285,6 @@ def tqdm_joblib(tqdm_object):
     finally:
         joblib.parallel.BatchCompletionCallBack = old_cb
         tqdm_object.close()
-
-
-def pointing_enclosed_profile_per_source(map_in, ell_deg, b_deg, radii_arcmin,
-                                         mask=None, n_jobs=-1,
-                                         prefer="processes",
-                                         batch_size="auto"):
-    """
-    Mean enclosed profile around multiple pointings (ell_deg, b_deg)
-    with sizes of `radii_arcmin` (one per pointing).
-    """
-    ell_deg = np.asarray(np.atleast_1d(ell_deg))
-    b_deg = np.asarray(np.atleast_1d(b_deg))
-    radii_arcmin = np.asarray(np.atleast_1d(radii_arcmin))
-    assert ell_deg.shape == b_deg.shape == radii_arcmin.shape
-
-    n = ell_deg.size
-    out = np.full(n, np.nan, dtype=float)
-
-    with tempfile.NamedTemporaryFile(suffix=".mmap", delete=False) as tmp:
-        mmap_path = tmp.name
-    try:
-        joblib.dump(map_in, mmap_path, compress=0)
-        map_mm = joblib.load(mmap_path, mmap_mode="r")
-
-        if n_jobs == 1:
-            for i in tqdm(range(n), desc="Measuring profiles"):
-                out[i] = pointing_enclosed_profile(
-                    map_mm, ell_deg[i], b_deg[i], radii_arcmin[i], mask=mask
-                )
-        else:
-            from contextlib import nullcontext
-            ctx = tqdm_joblib(tqdm(total=n, desc="Measuring profiles")) \
-                if 'tqdm_joblib' in globals() else nullcontext()
-
-            with ctx:
-                res = Parallel(n_jobs=n_jobs, prefer=prefer,
-                               batch_size=batch_size)(
-                    delayed(pointing_enclosed_profile)(
-                        map_mm, ell_deg[i], b_deg[i], radii_arcmin[i],
-                        mask=mask)
-                    for i in range(n)
-                )
-            out[:] = np.asarray(res, dtype=float)
-    finally:
-        if os.path.exists(mmap_path):
-            os.remove(mmap_path)
-
-    return out  # (n,)
 
 
 def random_sky_positions(n_points, abs_b_min=None, seed=None):
@@ -159,78 +322,6 @@ def random_sky_positions(n_points, abs_b_min=None, seed=None):
     ell_deg = np.rad2deg(gen.uniform(0.0, 2.0 * np.pi, size=n_points))
 
     return ell_deg, b_deg, gen
-
-
-def randpoint_enclosed_profiles(map_in, radii_arcmin, n_points, abs_b_min=None,
-                                mask=None, seed=None, n_jobs=1,
-                                prefer="processes", batch_size="auto"):
-    """
-    Mean radial profiles at `n_points` random HEALPix positions with radii
-    `radii_arcmin`. If `abs_b_min` (deg) is given, require |b| >= abs_b_min.
-    Parallelised with joblib+tqdm. Memory-maps `map_in` and cleans up.
-
-    `prefer` can be "threads" or "processes".
-    """
-    ell_deg, b_deg, __ = random_sky_positions(n_points, abs_b_min, seed)
-    radii_arcmin = np.asarray(radii_arcmin)
-
-    with tempfile.NamedTemporaryFile(suffix=".mmap", delete=False) as tmp:
-        mmap_path = tmp.name
-    try:
-        joblib.dump(map_in, mmap_path, compress=0)
-        map_in_mm = joblib.load(mmap_path, mmap_mode="r")
-
-        if n_jobs == 1:
-            results = []
-            for i in tqdm(range(n_points), desc="Measuring profiles"):
-                prof = pointing_enclosed_profile(
-                    map_in_mm, ell_deg[i], b_deg[i], radii_arcmin, mask=mask
-                )
-                results.append(prof)
-        else:
-            with tqdm_joblib(tqdm(total=n_points, desc="Measuring profiles")):
-                results = Parallel(
-                    n_jobs=n_jobs, prefer=prefer, batch_size=batch_size
-                )(
-                    delayed(pointing_enclosed_profile)(
-                        map_in_mm, ell_deg[i], b_deg[i], radii_arcmin,
-                        mask=mask) for i in range(n_points)
-                )
-    finally:
-        if os.path.exists(mmap_path):
-            os.remove(mmap_path)
-
-    profiles, num_skipped = [], 0
-    for prof in results:
-        if np.any(np.isnan(prof)):
-            num_skipped += 1
-        else:
-            profiles.append(prof)
-
-    print(f"Skipped {num_skipped} / {n_points} profiles due to NaNs.")
-    return np.asarray(profiles, dtype=float)
-
-
-def get_pointing_pvalue(signal_source, theta200, theta_rand, signal_rand):
-    """
-    Get empirical p-values for source signals based on random pointing signals.
-
-    Defined as the fraction of random signals greater than or equal to the
-    source signal at the closest matching aperture size.
-    """
-    assert theta_rand.ndim == 1 and signal_rand.ndim == 2
-    assert signal_rand.shape[1] == len(theta_rand)
-
-    signal_rand = np.sort(signal_rand, axis=0)
-    nr = len(signal_rand)
-
-    pval = np.full(len(theta200), np.nan)
-
-    for i in range(len(theta200)):
-        k = np.argmin(np.abs(theta_rand - theta200[i]))
-        pval[i] = 1 - np.searchsorted(signal_rand[:, k], signal_source[i]) / nr
-
-    return pval
 
 
 ###############################################################################

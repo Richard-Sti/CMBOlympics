@@ -18,10 +18,7 @@ from .cross import (                                                            
     )                                                                           # noqa
 
 from .pointing import (                                                         # noqa
-    pointing_enclosed_profile,                                                  # noqa
-    pointing_enclosed_profile_per_source,                                       # noqa
     random_sky_positions,                                                       # noqa
-    randpoint_enclosed_profiles,                                                # noqa
-    get_pointing_pvalue,                                                        # noqa
+    PointingEnclosedProfile,                                                    # noqa
     Pointing2DCutout,                                                           # noqa
     )                                                                           # noqa
