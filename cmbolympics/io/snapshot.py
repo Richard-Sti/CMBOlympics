@@ -12,7 +12,7 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-"""Various particle snapshot readers."""
+"""Particle snapshot readers for Gadget-4 HDF5 outputs."""
 
 from h5py import File
 import numpy as np
@@ -22,11 +22,22 @@ class Gadget4Reader:
     """Minimal reader for Gadget-4 HDF5 snapshots."""
 
     def __init__(self, fname, flip_xz=False):
+        """Store metadata about the snapshot file to read.
+
+        Parameters
+        ----------
+        fname : str or path-like
+            Path to the Gadget-4 HDF5 snapshot.
+        flip_xz : bool, optional
+            If True, swap the x and z axes when reading coordinates,
+            by default False.
+        """
         self.fname = fname
         self.flip_xz = flip_xz
 
     @property
     def header(self):
+        """Return a small subset of the snapshot header attributes."""
         with File(self.fname, "r") as f:
             h = f["Header"].attrs
 
@@ -35,11 +46,31 @@ class Gadget4Reader:
 
     @property
     def part_types(self):
+        """List the particle type groups present in the file."""
         with File(self.fname, "r") as f:
             return sorted([k for k in f.keys() if k.startswith("PartType")])
 
     def load_positions(self, part_types=None, chunk=None, concat=False,
                        dtype=np.float32):
+        """Load particle coordinates for the requested types.
+
+        Parameters
+        ----------
+        part_types : str or iterable of str, optional
+            Particle type labels (e.g., ``PartType0``). None loads all.
+        chunk : int, optional
+            Read data in blocks of this many rows to limit memory usage.
+        concat : bool, optional
+            If True, return a single stacked array instead of a dict.
+        dtype : np.dtype, optional
+            Target dtype for the returned arrays.
+
+        Returns
+        -------
+        dict[str, np.ndarray] or np.ndarray
+            Mapping of particle type to coordinate array, or a concatenated
+            array if ``concat`` is True.
+        """
         # Normalize part_types to a list
         if part_types is None:
             part_types = self.part_types
