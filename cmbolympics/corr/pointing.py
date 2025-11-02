@@ -138,7 +138,7 @@ class PointingEnclosedProfile:
                     continue
                 signal = np.mean(self.m[idx][good])
 
-                out[i] = signal
+            out[i] = signal
 
         # If input was scalar, return scalar mean for convenience
         if out.size == 1:
