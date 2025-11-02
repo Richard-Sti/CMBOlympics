@@ -15,9 +15,16 @@
 
 from setuptools import setup, find_packages
 
+# Read version from package
+with open("cmbolympics/__init__.py") as f:
+    for line in f:
+        if line.startswith("__version__"):
+            version = line.split("=")[1].strip().strip('"').strip("'")
+            break
+
 setup(
     name="cmbolympics",
-    version="0.1.0",
+    version=version,
     author="Richard Stiskalek",
     author_email="richard.stiskalek@protonmail.com",
     description="CMB Olympics",
