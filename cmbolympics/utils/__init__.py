@@ -18,6 +18,7 @@ from .coords import (                                                           
     cartesian_icrs_to_galactic_spherical,                                       # noqa
     cartesian_icrs_to_galactic,                                                 # noqa
     )                                                                           # noqa
+from .smoothing import smooth_map_gaussian                                      # noqa
 
 from datetime import datetime
 from scipy.stats import norm
