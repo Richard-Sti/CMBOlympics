@@ -43,10 +43,13 @@ class PointingEnclosedProfile:
         Default: "processes".
     batch_size : str or int, optional
         Joblib batch size. Default: "auto".
+    fwhm_arcmin : float, optional
+        Width of the annular aperture for background subtraction [arcmin].
+        Default: 9.66 (Planck 100 GHz FWHM).
     """
 
     def __init__(self, m, mask=None, n_jobs=1, prefer="processes",
-                 batch_size="auto"):
+                 batch_size="auto", fwhm_arcmin=9.66):
         self.m = m
         self.nside = hp.get_nside(m)
 
@@ -59,8 +62,10 @@ class PointingEnclosedProfile:
         self.n_jobs = n_jobs
         self.prefer = prefer
         self.batch_size = batch_size
+        self.fwhm_arcmin = fwhm_arcmin
 
-    def get_profile(self, ell_deg, b_deg, radii_arcmin):
+    def get_profile(self, ell_deg, b_deg, radii_arcmin,
+                    subtract_background=True):
         """
         Mean enclosed profile around a single pointing.
 
@@ -72,14 +77,21 @@ class PointingEnclosedProfile:
             Galactic latitude [deg].
         radii_arcmin : float or array_like
             Aperture radius/radii [arcmin].
+        subtract_background : bool, optional
+            If True, subtract the mean value from an annular aperture to
+            remove large-scale foreground contamination. The annulus has
+            inner radius = radii_arcmin and outer radius =
+            radii_arcmin + fwhm_arcmin, where fwhm_arcmin is set during
+            initialization. Default: True.
 
         Returns
         -------
         profile : float or ndarray
-            Mean value(s) within aperture(s).
+            Mean value(s) within aperture(s). If subtract_background=True, the
+            mean value in the annular aperture is subtracted.
         """
         assert isinstance(ell_deg, (float, int)), "`ell_deg` must be a scalar."
-        assert isinstance(b_deg, (float, int)), "`b_deg` must be a scalar"
+        assert isinstance(b_deg, (float, int)), "`b_deg` must be a scalar."
 
         radii_arcmin = np.atleast_1d(radii_arcmin)
 
@@ -93,7 +105,25 @@ class PointingEnclosedProfile:
             idx = hp.query_disc(self.nside, v0, r_rad, inclusive=False, fact=4)
             good = self.mask[idx]
             if np.any(good):
-                out[i] = np.mean(self.m[idx][good])
+                signal = np.mean(self.m[idx][good])
+
+                # Subtract background from annular aperture if requested
+                if subtract_background:
+                    r_outer_rad = np.radians(
+                        (r_arcmin + self.fwhm_arcmin) / 60.0)
+
+                    # Get all pixels within outer radius
+                    idx_outer = hp.query_disc(
+                        self.nside, v0, r_outer_rad, inclusive=False, fact=4)
+                    # Annulus = outer circle - inner circle
+                    idx_annulus = np.setdiff1d(idx_outer, idx)
+
+                    good_annulus = self.mask[idx_annulus]
+                    if np.any(good_annulus):
+                        background = np.mean(self.m[idx_annulus][good_annulus])
+                        signal -= background
+
+                out[i] = signal
 
         # If input was scalar, return scalar mean for convenience
         if out.size == 1:
@@ -101,7 +131,8 @@ class PointingEnclosedProfile:
 
         return out
 
-    def get_profiles_per_source(self, ell_deg, b_deg, radii_arcmin):
+    def get_profiles_per_source(self, ell_deg, b_deg, radii_arcmin,
+                                subtract_background=True):
         """
         Mean enclosed profile around multiple pointings.
 
@@ -113,11 +144,15 @@ class PointingEnclosedProfile:
             Galactic latitudes [deg].
         radii_arcmin : array_like
             Aperture radii [arcmin], one per pointing.
+        subtract_background : bool, optional
+            If True, subtract the mean value from an annular aperture to
+            remove large-scale foreground contamination. Default: True.
 
         Returns
         -------
         profiles : ndarray
-            Mean values within each aperture.
+            Mean values within each aperture. If subtract_background=True, the
+            mean value in the annular aperture is subtracted.
         """
         ell_deg = np.asarray(np.atleast_1d(ell_deg))
         b_deg = np.asarray(np.atleast_1d(b_deg))
@@ -136,13 +171,15 @@ class PointingEnclosedProfile:
             # Create temporary object with memory-mapped array
             temp_obj = PointingEnclosedProfile(
                 map_mm, mask=self.mask, n_jobs=1,
-                prefer=self.prefer, batch_size=self.batch_size
+                prefer=self.prefer, batch_size=self.batch_size,
+                fwhm_arcmin=self.fwhm_arcmin
             )
 
             if self.n_jobs == 1:
                 for i in tqdm(range(n), desc="Measuring profiles"):
                     out[i] = temp_obj.get_profile(
-                        ell_deg[i], b_deg[i], radii_arcmin[i]
+                        ell_deg[i], b_deg[i], radii_arcmin[i],
+                        subtract_background=subtract_background
                     )
             else:
                 from contextlib import nullcontext
@@ -153,7 +190,8 @@ class PointingEnclosedProfile:
                     res = Parallel(n_jobs=self.n_jobs, prefer=self.prefer,
                                    batch_size=self.batch_size)(
                         delayed(temp_obj.get_profile)(
-                            ell_deg[i], b_deg[i], radii_arcmin[i])
+                            ell_deg[i], b_deg[i], radii_arcmin[i],
+                            subtract_background)
                         for i in range(n)
                     )
                 out[:] = np.asarray(res, dtype=float)
@@ -164,7 +202,7 @@ class PointingEnclosedProfile:
         return out
 
     def get_random_profiles(self, radii_arcmin, n_points, abs_b_min=None,
-                            seed=None):
+                            seed=None, subtract_background=True):
         """
         Mean radial profiles at random HEALPix positions.
 
@@ -178,6 +216,9 @@ class PointingEnclosedProfile:
             If given, require |b| >= abs_b_min [deg].
         seed : int or None, optional
             Random seed for reproducibility.
+        subtract_background : bool, optional
+            If True, subtract the mean value from an annular aperture to
+            remove large-scale foreground contamination. Default: True.
 
         Returns
         -------
@@ -196,14 +237,16 @@ class PointingEnclosedProfile:
             # Create temporary object with memory-mapped array
             temp_obj = PointingEnclosedProfile(
                 map_in_mm, mask=self.mask, n_jobs=1,
-                prefer=self.prefer, batch_size=self.batch_size
+                prefer=self.prefer, batch_size=self.batch_size,
+                fwhm_arcmin=self.fwhm_arcmin
             )
 
             if self.n_jobs == 1:
                 results = []
                 for i in tqdm(range(n_points), desc="Measuring profiles"):
                     prof = temp_obj.get_profile(
-                        ell_deg[i], b_deg[i], radii_arcmin
+                        ell_deg[i], b_deg[i], radii_arcmin,
+                        subtract_background=subtract_background
                     )
                     results.append(prof)
             else:
@@ -214,7 +257,8 @@ class PointingEnclosedProfile:
                         batch_size=self.batch_size
                     )(
                         delayed(temp_obj.get_profile)(
-                            ell_deg[i], b_deg[i], radii_arcmin)
+                            ell_deg[i], b_deg[i], radii_arcmin,
+                            subtract_background)
                         for i in range(n_points)
                     )
         finally:
@@ -338,13 +382,14 @@ class Pointing2DCutout:
     m : array_like
         HEALPix map (Galactic), RING by default unless nest=True.
     npix : int, optional
-        Pixels per side for cutouts (odd keeps center on pixel). Default: 151.
+        Pixels per side for cutouts (odd keeps center on pixel).
+        Default: 301.
     nest : bool, optional
         True if map is NESTED ordering, else RING. Default: False.
     mask : array_like or None, optional
         HEALPix mask in the same NSIDE/order as map. Default: None.
     nbins : int, optional
-        Number of bins for normalized grid. Default: 40.
+        Number of bins for normalized grid. Default: 128.
     grid_halfsize : float or None, optional
         Half-size of normalized grid in theta200 units. If None, auto-sized.
         Default: None.
@@ -361,8 +406,8 @@ class Pointing2DCutout:
 
     def get_cutout_2d(self, ell_deg, b_deg, size_arcmin):
         """
-        Flat-sky cutout (nearest-neighbour) from a HEALPix map in Galactic
-        coordinates
+        Flat-sky cutout (nearest-neighbor) from a HEALPix map in Galactic
+        coordinates.
 
         Parameters
         ----------
