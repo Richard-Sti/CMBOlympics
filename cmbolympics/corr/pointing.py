@@ -516,6 +516,132 @@ class PointingEnclosedProfile:
         return pval
 
 
+def empirical_pvalues_by_theta(theta_arcmin, signal, theta_rand, tsz_rand,
+                               min_pool=200, random_pool_samples=None,
+                               random_theta_samples=5, rng=None):
+    """
+    Convert halo signals to empirical p-values using random pointings.
+
+    Parameters
+    ----------
+    theta_arcmin : array_like
+        Angular sizes (e.g. theta200) for the halo measurements in arcminutes.
+    signal : array_like
+        Measured tSZ signal per halo. Must match ``theta_arcmin`` in shape.
+    theta_rand : array_like
+        Angular sizes for the random pointings.
+    tsz_rand : array_like
+        tSZ measurements for the random pointings. Same length as
+        ``theta_rand``.
+    min_pool : int, optional
+        Minimum number of random samples required for each halo. Defaults to
+        200.
+    random_pool_samples : int or None, optional
+        Number of random pointings for which to compute reference p-values.
+        Defaults to using the entire random pool.
+    random_theta_samples : int, optional
+        Number of theta values (drawn with replacement from
+        ``theta_arcmin``) evaluated per random pointing when computing the
+        null distribution. Defaults to 5.
+    rng : np.random.Generator or None, optional
+        Random number generator used when subsampling the random pool. If
+        None, ``np.random.default_rng()`` is used.
+
+    Returns
+    -------
+    tuple of ndarray
+        ``(pval, random_pval)`` where ``pval`` are the halo p-values and
+        ``random_pval`` are the p-values computed for random pointings.
+    """
+    theta_arcmin = np.asarray(theta_arcmin, dtype=float)
+    signal = np.asarray(signal, dtype=float)
+    theta_rand = np.asarray(theta_rand, dtype=float)
+    tsz_rand = np.asarray(tsz_rand, dtype=float)
+
+    if theta_arcmin.shape != signal.shape:
+        raise ValueError("theta_arcmin and signal must have the same shape.")
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    theta_sample_count = max(1, int(random_theta_samples))
+
+    if tsz_rand.ndim == 1:
+        if theta_rand.shape != tsz_rand.shape:
+            raise ValueError("theta_rand and tsz_rand must have the same shape.")
+
+        order = np.argsort(theta_rand)
+        theta_sorted = theta_rand[order]
+        tsz_sorted = tsz_rand[order]
+
+        def _pool(theta):
+            width = 0.2
+            samples = np.empty(0, dtype=float)
+            max_width = 2.0
+            while samples.size < min_pool and width <= max_width:
+                lo = theta * (1.0 - width)
+                hi = theta * (1.0 + width)
+                left = np.searchsorted(theta_sorted, lo, side="left")
+                right = np.searchsorted(theta_sorted, hi, side="right")
+                samples = tsz_sorted[left:right]
+                width *= 1.5
+            if samples.size < min_pool:
+                samples = tsz_sorted
+            return np.sort(samples), None
+
+        if random_pool_samples is None or random_pool_samples >= len(tsz_rand):
+            selected_rows = np.arange(len(tsz_rand))
+        else:
+            selected_rows = rng.choice(len(tsz_rand), size=int(random_pool_samples), replace=False)
+    elif tsz_rand.ndim == 2:
+        n_rand, n_theta = tsz_rand.shape
+        if theta_rand.shape[0] != n_theta:
+            raise ValueError(
+                "theta_rand length must equal tsz_rand second dimension."
+            )
+
+        def _pool(theta):
+            j = int(np.argmin(np.abs(theta_rand - theta)))
+            return np.sort(tsz_rand[:, j]), j
+
+        if random_pool_samples is None or random_pool_samples >= n_rand:
+            selected_rows = np.arange(n_rand)
+        else:
+            selected_rows = rng.choice(n_rand, size=int(random_pool_samples), replace=False)
+    else:
+        raise ValueError("tsz_rand must be 1D or 2D.")
+
+    def _pvalue_from_pool(val, pool):
+        rank = np.searchsorted(pool, val, side="left")
+        return 1.0 - rank / pool.size
+
+    nhalo = signal.size
+    pval = np.empty(nhalo, dtype=float)
+
+    for i, (theta, sig) in enumerate(zip(theta_arcmin, signal)):
+        pool, _ = _pool(theta)
+        pval[i] = _pvalue_from_pool(sig, pool)
+
+    random_pvals = []
+
+    iterator = trange(len(selected_rows), desc="Random p-values",
+                      disable=len(selected_rows) < 20)
+    for idx_pos in iterator:
+        idx = selected_rows[idx_pos]
+        theta_samples = rng.choice(theta_arcmin, size=theta_sample_count, replace=True)
+        for theta_sel in theta_samples:
+            pool, col = _pool(theta_sel)
+            if tsz_rand.ndim == 1:
+                value = rng.choice(pool)
+            else:
+                value = tsz_rand[idx, col]
+            random_pvals.append(_pvalue_from_pool(value, pool))
+
+    random_pval = np.asarray(random_pvals, dtype=float)
+
+    return pval, random_pval
+
+
 @contextmanager
 def tqdm_joblib(tqdm_object):
     class _TQDMCallback(joblib.parallel.BatchCompletionCallBack):

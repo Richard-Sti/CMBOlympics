@@ -22,4 +22,5 @@ from .pointing import (                                                         
     PointingEnclosedProfile,                                                    # noqa
     Pointing2DCutout,                                                           # noqa
     fit_gaussian_offset,                                                        # noqa
+    empirical_pvalues_by_theta,                                                 # noqa
     )                                                                           # noqa
