@@ -36,113 +36,124 @@ except ModuleNotFoundError:
 tomli = _toml_loader
 
 
-def load_config(config_path):
-    with open(config_path, "rb") as fh:
-        config = tomli.load(fh)
-
-    return config
+def load_config(path):
+    """Return the raw configuration dictionary loaded from a TOML file."""
+    with open(path, "rb") as fh:
+        return tomli.load(fh)
 
 
 def load_halo_catalogue(cfg):
-    which_simulation = cfg["analysis"]["which_simulation"]
-    cfg_sim = cfg["halo_catalogues"][which_simulation]
+    """Load halo phase-space information and apply radial/angle/mass cuts."""
+    analysis_cfg = cfg["analysis"]
+    which_simulation = analysis_cfg["which_simulation"]
+    catalogue_cfg = cfg["halo_catalogues"][which_simulation]
 
     if which_simulation == "csiborg2":
         reader = cmbolympics.io.SimulationHaloReader(
-            cfg_sim["fname"], nsim=cfg_sim["nsim"])
-        center = np.full(3, cfg_sim["box_size"] / 2.0, dtype=float)
+            catalogue_cfg["fname"],
+            nsim=catalogue_cfg["nsim"],
+        )
+        center = np.full(3, catalogue_cfg["box_size"] / 2.0, dtype=float)
         fprint(f"Using centre at {center} Mpc/h for {which_simulation}.")
-
         pos = reader["Coordinates"]
         mass = reader["Group_M_Crit200"]
         rad = reader["Group_R_Crit200"]
-
         r, ell, b = cartesian_icrs_to_galactic_spherical(pos, center)
     else:
         raise ValueError(f"Unknown simulation '{which_simulation}'")
 
-    theta = np.rad2deg(np.arctan(rad / r)) * 60
-
+    theta_arcmin = np.rad2deg(np.arctan(rad / r)) * 60
     cuts = cfg["halo_cuts"]
     mask = np.isfinite(mass)
     mask &= (r >= cuts["r_min"]) & (r <= cuts["r_max"])
-    mask &= (np.abs(b) >= cuts["b_min"])
-    mask &= (theta >= cuts["theta_min"]) & (theta <= cuts["theta_max"])
+    mask &= np.abs(b) >= cuts["b_min"]
+    mask &= theta_arcmin >= cuts["theta_min"]
+    mask &= theta_arcmin <= cuts["theta_max"]
     mask &= (mass >= cuts["mass_min"]) & (mass <= cuts["mass_max"])
-    fprint(f"Selected {np.sum(mask)} haloes after applying cuts "
-           f"from {mass.size}.")
 
-    return {"r": r[mask],
-            "ell": ell[mask],
-            "b": b[mask],
-            "mass": mass[mask],
-            "theta": theta[mask],
-            }
+    selected = int(np.sum(mask))
+    fprint(f"Selected {selected} haloes after applying cuts from {mass.size}.")
+
+    return {
+        "r": r[mask],
+        "ell": ell[mask],
+        "b": b[mask],
+        "mass": mass[mask],
+        "theta": theta_arcmin[mask],
+    }
 
 
 def load_profiler(cfg):
-    kwargs = cfg["input_map"]
-    y_map = cmbolympics.io.read_Planck_comptonSZ(kwargs["signal_map"])
+    """Initialise the profile extractor and radial sampling grid."""
+    map_cfg = cfg["input_map"]
+    analysis_cfg = cfg["analysis"]
+
+    y_map = cmbolympics.io.read_Planck_comptonSZ(map_cfg["signal_map"])
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
     fprint(
-        f"Loaded y-map {kwargs['signal_map']}: mean={mu:.3e}, std={std:.3e}"
-        )
-
+        f"Loaded y-map {map_cfg['signal_map']}: mean={mu:.3e}, std={std:.3e}")
     y_map = cmbolympics.utils.smooth_map_gaussian(
         y_map,
-        fwhm_arcmin=kwargs["smooth_fwhm"],
+        fwhm_arcmin=map_cfg["smooth_fwhm"],
     )
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
-    fprint(f"Smoothed y-map with FWHM {kwargs['smooth_fwhm']}: "
-           f"mean={mu:.3e}, std={std:.3e}")
+    fprint(
+        f"Smoothed y-map with FWHM {map_cfg['smooth_fwhm']}: "
+        f"mean={mu:.3e}, std={std:.3e}"
+    )
 
     profiler = cmbolympics.corr.PointingEnclosedProfile(
         y_map,
-        n_jobs=cfg["analysis"]["n_jobs"],
-        fwhm_arcmin=kwargs["smooth_fwhm"],
+        n_jobs=analysis_cfg["n_jobs"],
+        fwhm_arcmin=map_cfg["smooth_fwhm"],
     )
 
     radii_stack = np.linspace(
-        cfg["analysis"]["stack_rmin"],
-        cfg["analysis"]["stack_rmax"],
-        cfg["analysis"]["stack_n"],
+        analysis_cfg["stack_rmin"],
+        analysis_cfg["stack_rmax"],
+        analysis_cfg["stack_n"],
     )
 
     return profiler, radii_stack
 
 
 def main():
-    config_path = sys.argv[1] if len(sys.argv) > 1 else None
+    """Entry-point for the command-line script."""
+    config_path = sys.argv[1]
     cfg = load_config(config_path)
-    fprint(f"loaded config from {config_path}")
+    fprint(f"Loaded config from {config_path}")
 
     halos = load_halo_catalogue(cfg)
+    analysis_cfg = cfg["analysis"]
+    mass_cfg = cfg["mass_bins"]
+    map_cfg = cfg["input_map"]
 
     # Compute aperture size and log-mass.
-    halos["aperture"] = cfg["analysis"]["aperture_scale"] * halos["theta"]
+    halos["aperture"] = analysis_cfg["aperture_scale"] * halos["theta"]
     halos["log_mass"] = np.log10(halos["mass"])
 
     edges, medians = build_mass_bins(
         halos["mass"],
-        step=cfg["mass_bins"]["mass_step"],
-        top_counts=cfg["mass_bins"]["top_counts"],
-        verbose=cfg["mass_bins"]["verbose_bins"],
+        step=mass_cfg["mass_step"],
+        top_counts=mass_cfg["top_counts"],
+        verbose=mass_cfg["verbose_bins"],
     )
 
     profiler, radii_stack = load_profiler(cfg)
-    fprint("initialised profile extractor.")
+    fprint("Initialised profile extractor.")
 
     theta_rand, tsz_rand = cmbolympics.io.read_from_hdf5(
-        cfg["input_map"]["random_pointing"],
+        map_cfg["random_pointing"],
         "theta_rand",
         "tsz_rand",
     )
-    fprint(f"loaded random pointing pool from "
-           f"{cfg['input_map']['random_pointing']} "
-           f"which has shape {tsz_rand.shape}.")
+    fprint(
+        f"Loaded random pointing pool from {map_cfg['random_pointing']} "
+        f"with shape {tsz_rand.shape}."
+    )
 
-    rng = np.random.default_rng(cfg["analysis"]["seed"])
-    subtract_bg = cfg["analysis"]["subtract_background"]
+    rng = np.random.default_rng(analysis_cfg["seed"])
+    subtract_bg = analysis_cfg["subtract_background"]
 
     signal = profiler.get_profiles_per_source(
         halos["ell"],
@@ -151,7 +162,7 @@ def main():
         subtract_background=subtract_bg,
     )
 
-    pool_samples = cfg["analysis"]["random_pool_samples"]
+    pool_samples = analysis_cfg["random_pool_samples"]
     if pool_samples is not None and pool_samples <= 0:
         pool_samples = None
 
@@ -172,11 +183,11 @@ def main():
             theta_rand,
             tsz_rand,
             random_pool_samples=pool_samples,
-            random_theta_samples=cfg["analysis"]["random_theta_samples"],
+            random_theta_samples=analysis_cfg["random_theta_samples"],
             rng=rng,
         )
 
-        print(f"Computed empirical p-values for {lo:.2f} < log M < {hi}.")
+        fprint(f"Computed empirical p-values for {lo:.2f} < log M < {hi}.")
 
         ks_stat, ks_p = ks_2samp(pval_data, pval_rand)
 
@@ -186,8 +197,8 @@ def main():
             halos["aperture"][bin_mask],
             radii_stack,
             subtract_background=subtract_bg,
-            n_boot=cfg["analysis"]["bootstrap"],
-            seed=cfg["analysis"]["seed"],
+            n_boot=analysis_cfg["bootstrap"],
+            seed=analysis_cfg["seed"],
             random_profile_pool=tsz_rand,
             random_pool_radii=theta_rand,
             random_pool_samples=pool_samples,
