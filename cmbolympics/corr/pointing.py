@@ -22,6 +22,7 @@ import healpy as hp
 import joblib
 import numpy as np
 from joblib import Parallel, delayed
+from scipy.optimize import minimize
 from tqdm import trange
 from tqdm.auto import tqdm
 
@@ -617,6 +618,142 @@ def bootstrap_profile_mean(profiles, n_boot=1000, seed=None):
     err_profile = np.nanstd(boot_means, axis=0, ddof=ddof)
 
     return mean_profile, err_profile
+
+
+###############################################################################
+#                       Gaussian peak fitting helper                          #
+###############################################################################
+
+
+def fit_gaussian_offset(cutout, size_arcmin, mask=None, truncate_sigma=2.0):
+    """
+    Fit a 2D Gaussian to a cutout and return the centroid offset.
+
+    Parameters
+    ----------
+    cutout : ndarray, shape (N, N)
+        2D map cutout centred on the nominal halo position. NaNs are treated
+        as invalid pixels.
+    size_arcmin : float
+        Full width of the cutout in arcminutes.
+    mask : ndarray or None, optional
+        Boolean mask with the same shape as ``cutout``. Pixels where ``mask``
+        is False are ignored. Default: None.
+    truncate_sigma : float or None, optional
+        When greater than zero, only pixels within ``truncate_sigma`` times
+        the Gaussian width (evaluated with the current parameters) contribute
+        to the objective. Default: 2.0.
+
+    Returns
+    -------
+    dict
+        Dictionary containing the fitted parameters and offsets. Keys
+        include ``success``, ``x0_arcmin``, ``y0_arcmin``, ``r_arcmin``,
+        ``amp``, ``sigma_x_arcmin``, ``sigma_y_arcmin`` and ``offset``. The
+        raw optimiser output is stored under ``optimizer``. When the fit
+        fails, ``success`` is False and ``error`` stores the exception
+        string.
+    """
+    data = np.asarray(cutout, dtype=float)
+    if data.ndim != 2 or data.shape[0] != data.shape[1]:
+        raise ValueError("cutout must be a square 2D array.")
+
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != data.shape:
+            raise ValueError("mask must have the same shape as cutout.")
+        data = np.where(mask, data, np.nan)
+
+    valid = np.isfinite(data)
+    if valid.sum() < 6:
+        raise ValueError("Not enough valid pixels to fit a Gaussian.")
+
+    npix = data.shape[0]
+    pixel_size = float(size_arcmin) / npix
+    axis = (np.arange(npix) - (npix - 1) / 2.0) * pixel_size
+    xv, yv = np.meshgrid(axis, axis, indexing="xy")
+
+    x_valid = xv[valid]
+    y_valid = yv[valid]
+    z_valid = data[valid]
+
+    baseline = np.nanmedian(z_valid)
+    amp0 = z_valid.max() - baseline
+    if not np.isfinite(amp0) or np.abs(amp0) < np.finfo(float).eps:
+        amp0 = np.nanmax(z_valid)
+
+    max_index = np.nanargmax(data)
+    iy, ix = divmod(max_index, npix)
+    x0_init = axis[ix]
+    y0_init = axis[iy]
+    sigma_guess = max(pixel_size * 2.0, size_arcmin / 10.0)
+
+    sigma_min = pixel_size / 4.0
+    sigma_max = size_arcmin
+
+    def objective(params):
+        amp, x0, y0, log_sig_x, log_sig_y, offset = params
+        sig_x = np.exp(log_sig_x)
+        sig_y = np.exp(log_sig_y)
+        if not (sigma_min <= sig_x <= sigma_max):
+            return np.inf
+        if not (sigma_min <= sig_y <= sigma_max):
+            return np.inf
+
+        model = offset + amp * np.exp(
+            -0.5
+            * (((x_valid - x0) / sig_x) ** 2 + ((y_valid - y0) / sig_y) ** 2)
+        )
+
+        if truncate_sigma is not None and truncate_sigma > 0:
+            r2 = (
+                ((x_valid - x0) / sig_x) ** 2
+                + ((y_valid - y0) / sig_y) ** 2
+            )
+            use = r2 <= truncate_sigma**2
+            if use.sum() < 6:
+                return np.inf
+            resid = z_valid[use] - model[use]
+        else:
+            resid = z_valid - model
+
+        return np.sum(resid**2)
+
+    p0 = np.array([
+        amp0,
+        x0_init,
+        y0_init,
+        np.log(sigma_guess),
+        np.log(sigma_guess),
+        baseline,
+    ])
+
+    res = minimize(
+        objective,
+        p0,
+        method="Nelder-Mead",
+        options={"maxiter": 4000, "xatol": 1e-4, "fatol": 1e-4},
+    )
+
+    if not res.success:
+        return {"success": False, "error": res.message}
+
+    amp, x0, y0, log_sig_x, log_sig_y, offset = res.x
+    sig_x = float(np.exp(log_sig_x))
+    sig_y = float(np.exp(log_sig_y))
+
+    result = {
+        "success": True,
+        "amp": float(amp),
+        "x0_arcmin": float(x0),
+        "y0_arcmin": float(y0),
+        "r_arcmin": float(np.hypot(x0, y0)),
+        "sigma_x_arcmin": sig_x,
+        "sigma_y_arcmin": sig_y,
+        "offset": float(offset),
+        "optimizer": res,
+    }
+    return result
 
 
 ###############################################################################

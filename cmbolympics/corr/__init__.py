@@ -21,4 +21,5 @@ from .pointing import (                                                         
     random_sky_positions,                                                       # noqa
     PointingEnclosedProfile,                                                    # noqa
     Pointing2DCutout,                                                           # noqa
+    fit_gaussian_offset,                                                        # noqa
     )                                                                           # noqa
