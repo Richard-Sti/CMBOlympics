@@ -72,10 +72,10 @@ def parse_args():
         help="Number of parallel jobs for profile measurement (default: -1).",
     )
     parser.add_argument(
-        "--subtract-background",
+        "--no-background-subtraction",
         action="store_true",
-        help="Subtract annulus background when measuring profiles.",
-    )
+        help="Disable background subtraction (default: subtract).",
+        )
     return parser.parse_args()
 
 
@@ -98,6 +98,12 @@ def main():
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
     fprint(f"Smoothed map: mean={mu:.3e}, std={std:.3e}")
 
+    subtract_background = not args.no_background_subtraction
+    fprint(
+        f"{'Subtracting' if subtract_background else 'Not subtracting'} "
+        f"background from random profiles."
+    )
+
     profiler = cmbolympics.corr.PointingEnclosedProfile(
         y_map, n_jobs=args.n_jobs, fwhm_arcmin=args.fwhm_arcmin)
 
@@ -106,7 +112,7 @@ def main():
         theta_rand,
         n_points=args.n_points,
         abs_b_min=args.abs_b_min,
-        subtract_background=args.subtract_background,
+        subtract_background=subtract_background,
         seed=args.seed,
     )
 
