@@ -372,15 +372,15 @@ class PointingEnclosedProfile:
                     )
                 rand_means[s] = np.nanmean(interp_vals, axis=0)
 
-            valid_rows = ~np.isnan(rand_means).all(axis=1)
-            if np.any(valid_rows):
-                rand_subset = rand_means[valid_rows]
-                random_mean = np.nanmean(rand_subset, axis=0)
-                ddof_rand = 1 if rand_subset.shape[0] > 1 else 0
-                random_err = np.nanstd(rand_subset, axis=0, ddof=ddof_rand)
-            else:
-                random_mean = np.full(n_radii, np.nan, dtype=float)
-                random_err = np.full(n_radii, np.nan, dtype=float)
+        valid_rows = ~np.isnan(rand_means).all(axis=1)
+        if np.any(valid_rows):
+            rand_subset = rand_means[valid_rows]
+            random_mean = np.nanmean(rand_subset, axis=0)
+            ddof_rand = 1 if rand_subset.shape[0] > 1 else 0
+            random_err = np.nanstd(rand_subset, axis=0, ddof=ddof_rand)
+        else:
+            random_mean = np.full(n_radii, np.nan, dtype=float)
+            random_err = np.full(n_radii, np.nan, dtype=float)
 
         outputs = [stacked, stacked_err]
         outputs.extend([random_mean, random_err])
@@ -477,7 +477,7 @@ class PointingEnclosedProfile:
 
 
 def empirical_pvalues_by_theta(theta_arcmin, signal, theta_rand, tsz_rand,
-                               min_pool=200, random_pool_samples=None,
+                               random_pool_samples=None,
                                random_theta_samples=5, rng=None):
     """
     Convert halo signals to empirical p-values using random pointings.
@@ -493,9 +493,6 @@ def empirical_pvalues_by_theta(theta_arcmin, signal, theta_rand, tsz_rand,
     tsz_rand : array_like
         tSZ measurements for the random pointings. Same length as
         ``theta_rand``.
-    min_pool : int, optional
-        Minimum number of random samples required for each halo. Defaults to
-        200.
     random_pool_samples : int or None, optional
         Number of random pointings for which to compute reference p-values.
         Defaults to using the entire random pool.
