@@ -13,12 +13,13 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-from .coords import (                                                           # noqa
-    cartesian_to_r_theta_phi,                                                   # noqa
-    cartesian_icrs_to_galactic_spherical,                                       # noqa
-    cartesian_icrs_to_galactic,                                                 # noqa
-    )                                                                           # noqa
-from .smoothing import smooth_map_gaussian                                      # noqa
+from .coords import (  # noqa: F401
+    build_mass_bins,
+    cartesian_icrs_to_galactic,
+    cartesian_icrs_to_galactic_spherical,
+    cartesian_to_r_theta_phi,
+)
+from .smoothing import smooth_map_gaussian  # noqa: F401
 
 from datetime import datetime
 from scipy.stats import norm

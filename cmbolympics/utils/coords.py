@@ -95,3 +95,95 @@ def cartesian_icrs_to_galactic(pos, center, chunk=None):
             out[sl] = _apply(pos[sl])
 
     return out
+
+
+def build_mass_bins(mass, step=0.2, top_counts=(10, 100, 1000),
+                    verbose=True):
+    """Return log-mass bin edges and medians."""
+    mass = np.asarray(mass, dtype=float)
+    if mass.size == 0:
+        return [], []
+    if np.any(mass <= 0):
+        raise ValueError("mass must contain only positive values")
+
+    logm = np.log10(mass)
+    order = np.argsort(logm)[::-1]
+
+    bins = []
+    consumed = 0
+    prev_lo = None
+
+    for rank_idx, count in enumerate(top_counts):
+        if count <= 0 or consumed >= logm.size:
+            continue
+        end = min(consumed + count, logm.size)
+        idx = order[consumed:end]
+        if idx.size == 0:
+            break
+        lo = float(np.min(logm[idx]))
+        hi = None if rank_idx == 0 else prev_lo
+        label = f"top{idx.size}" if rank_idx == 0 else f"next{idx.size}"
+        bins.append({
+            'lo': lo,
+            'hi': hi,
+            'idx': idx,
+            'label': label,
+        })
+        prev_lo = lo
+        consumed = end
+
+    start = float(bins[-1]['lo']) if bins else float(np.max(logm))
+    min_logm = float(np.min(logm))
+    hi = start
+
+    while True:
+        lo = hi - step
+        if lo <= min_logm:
+            lo = min_logm
+            idx = np.where((logm >= lo) & (logm <= hi))[0]
+            bins.append({
+                'lo': lo,
+                'hi': float(hi),
+                'idx': idx,
+                'label': None,
+            })
+            break
+        idx = np.where((logm >= lo) & (logm < hi))[0]
+        bins.append({
+            'lo': float(lo),
+            'hi': float(hi),
+            'idx': idx,
+            'label': None,
+        })
+        hi = lo
+
+    edges = []
+    medians = []
+    for entry in bins:
+        idx = entry['idx']
+        cnt = int(idx.size)
+        med = float(np.median(logm[idx])) if cnt > 0 else float('nan')
+        lo = entry['lo']
+        hi = entry['hi']
+        label = entry['label']
+        tag = f"{label}: " if label else ""
+
+        if hi is None:
+            if verbose:
+                msg = (
+                    f"{tag}log M ∈ [{lo:.2f}, ∞): "
+                    f"{cnt} halos, median log M = {med:.2f}"
+                )
+                print(msg)
+            edges.append([lo, None])
+        else:
+            if verbose:
+                msg = (
+                    f"{tag}log M ∈ [{lo:.2f}, {hi:.2f}): "
+                    f"{cnt} halos, median log M = {med:.2f}"
+                )
+                print(msg)
+            edges.append([lo, hi])
+        medians.append(med)
+
+    return edges, medians
