@@ -16,11 +16,13 @@
 
 import sys
 
-import cmbolympics
+import h5py
 import numpy as np
+from scipy.stats import ks_2samp
+
+import cmbolympics
 from cmbolympics.utils import (build_mass_bins,
                                cartesian_icrs_to_galactic_spherical, fprint)
-from scipy.stats import ks_2samp
 
 try:
     import tomllib as _toml_loader  # Python 3.11+
@@ -117,6 +119,32 @@ def load_profiler(cfg):
     return profiler, radii_stack
 
 
+def save_results_hdf5(path, halos, halo_pvals, results):
+    """Persist selected halo properties and per-bin statistics to HDF5."""
+    with h5py.File(path, "w") as h5:
+        halo_group = h5.create_group("halos")
+        for key, values in halos.items():
+            halo_group.create_dataset(key, data=np.asarray(values))
+        halo_group.create_dataset("pval", data=np.asarray(halo_pvals))
+
+        if results:
+            pval_group = h5.create_group("halos_binned")
+            for idx, entry in enumerate(results):
+                bin_group = pval_group.create_group(f"bin_{idx:03d}")
+                bin_group.attrs["lo"] = entry["lo"]
+                bin_group.attrs["hi"] = (
+                    entry["hi"] if entry["hi"] is not None else np.nan
+                )
+                bin_group.attrs["median_log_mass"] = entry["median_log_mass"]
+                bin_group.attrs["count"] = entry["count"]
+                bin_group.attrs["ks_stat"] = entry["ks_stat"]
+                bin_group.attrs["ks_p"] = entry["ks_p"]
+                bin_group.create_dataset(
+                    "pval_data", data=np.asarray(entry["pval_data"]))
+                bin_group.create_dataset(
+                    "pval_rand", data=np.asarray(entry["pval_rand"]))
+
+
 def main():
     """Entry-point for the command-line script."""
     config_path = sys.argv[1]
@@ -167,7 +195,10 @@ def main():
         pool_samples = None
 
     results = []
-    for (lo, hi), median in zip(edges, medians):
+    halo_pval_data = np.full(halos["mass"].shape, np.nan, dtype=float)
+    halo_bin_index = np.full(halos["mass"].shape, -1, dtype=int)
+
+    for bin_idx, ((lo, hi), median) in enumerate(zip(edges, medians)):
         bin_mask = halos["log_mass"] >= lo
         if hi is not None:
             bin_mask &= halos["log_mass"] < hi
@@ -187,7 +218,10 @@ def main():
             rng=rng,
         )
 
-        fprint(f"Computed empirical p-values for {lo:.2f} < log M < {hi}.")
+        fprint(
+            "Computed empirical p-values for "
+            f"{lo:.2f} < log M < {hi if hi is not None else '∞'}."
+        )
 
         ks_stat, ks_p = ks_2samp(pval_data, pval_rand)
 
@@ -204,6 +238,10 @@ def main():
             random_pool_samples=pool_samples,
         )
         stacked_profile, stacked_err, rand_mean, rand_err = stack
+
+        halo_indices = np.nonzero(bin_mask)[0]
+        halo_pval_data[halo_indices] = pval_data
+        halo_bin_index[halo_indices] = bin_idx
 
         hi_str = "∞" if hi is None else f"{hi:.2f}"
         cnt = bin_mask.sum()
@@ -233,6 +271,21 @@ def main():
 
     if not results:
         fprint("No bins contained haloes after filtering")
+
+    output_path = analysis_cfg["output_hdf5"]
+    mass_order = np.argsort(-np.asarray(halos["mass"]))
+    halos_sorted = {
+        key: np.asarray(values)[mass_order]
+        for key, values in halos.items()
+    }
+    halo_pvals_sorted = halo_pval_data[mass_order]
+    save_results_hdf5(
+        output_path,
+        halos_sorted,
+        halo_pvals_sorted,
+        results,
+    )
+    fprint(f"Wrote outputs to {output_path}")
 
 
 if __name__ == "__main__":
