@@ -1,5 +1,6 @@
 get_venv.sh
 __pycache__/
+data/
 
 cmbolympics.egg-info/
 venv_cmbolympics/
