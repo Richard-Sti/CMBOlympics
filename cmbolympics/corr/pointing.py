@@ -215,8 +215,11 @@ class PointingEnclosedProfile:
 
     def stack_normalized_profiles(self, ell_deg, b_deg, theta_ref_arcmin,
                                   radii_norm, subtract_background=True,
-                                  n_boot=10000, seed=None,
-                                  return_individual=False):
+                                  n_boot=1000, seed=None,
+                                  return_individual=False,
+                                  random_profile_pool=None,
+                                  random_pool_radii=None,
+                                  random_pool_samples=1000):
         """
         Stack radial profiles normalised by each source's size.
 
@@ -241,6 +244,19 @@ class PointingEnclosedProfile:
         return_individual : bool, optional
             If True, also return the per-source profile array used in the
             stack. Default: False.
+        random_profile_pool : array_like or None, optional
+            Precomputed random profiles of shape (n_random, n_cols). When
+            provided, these profiles are resampled instead of calling
+            :meth:`get_random_profiles`. If ``random_pool_radii`` is None,
+            ``n_cols`` must match ``len(radii_norm)``; otherwise profiles are
+            interpolated onto the requested radii.
+        random_pool_radii : array_like or None, optional
+            Physical radii [arcmin] associated with the columns of
+            ``random_profile_pool``. Required when the pool was measured on
+            a different radius grid than ``radii_norm``.
+        random_pool_samples : int or None, optional
+            Number of random stacks to draw from the pool. Defaults to all
+            available rows when None.
 
         Returns
         -------
@@ -249,6 +265,12 @@ class PointingEnclosedProfile:
             NaNs are ignored.
         stacked_error : ndarray
             Bootstrap standard deviation.
+        random_profile : ndarray, optional
+            Mean stacked profile from random sky positions (included when
+            ``random_profile_pool`` is provided).
+        random_error : ndarray, optional
+            Standard deviation across random stacks (same availability as
+            ``random_profile``).
         individual_profiles : ndarray, optional
             Array of shape (n_sources, n_radii) with per-source profiles,
             returned when ``return_individual`` is True.
@@ -266,6 +288,41 @@ class PointingEnclosedProfile:
             raise ValueError(
                 "radii_norm must be a 1D array of dimensionless radii.")
 
+        pool = None
+        pool_radii = None
+        if random_profile_pool is not None:
+            pool = np.asarray(random_profile_pool, dtype=float)
+            if pool.ndim != 2:
+                raise ValueError("random_profile_pool must be a 2D array.")
+
+            if random_pool_radii is not None:
+                pool_radii = np.asarray(random_pool_radii, dtype=float)
+                if pool_radii.ndim != 1:
+                    raise ValueError("random_pool_radii must be 1D.")
+                if pool_radii.size != pool.shape[1]:
+                    raise ValueError(
+                        "random_pool_radii length must match pool "
+                        "column count.")
+                if not np.all(np.diff(pool_radii) >= 0):
+                    order = np.argsort(pool_radii)
+                    pool_radii = pool_radii[order]
+                    pool = pool[:, order]
+            elif pool.shape[1] != radii_norm.size:
+                raise ValueError(
+                    "random_profile_pool width must match len(radii_norm) "
+                    "when random_pool_radii is not provided."
+                )
+        else:
+            raise ValueError(
+                "random_profile_pool is required to compute random stacks."
+            )
+
+        if random_pool_samples is None:
+            random_samples_eff = pool.shape[0]
+        else:
+            if random_pool_samples <= 0:
+                raise ValueError("random_pool_samples must be positive.")
+            random_samples_eff = min(int(random_pool_samples), pool.shape[0])
         n_sources = ell_deg.size
         n_radii = radii_norm.size
 
@@ -285,7 +342,47 @@ class PointingEnclosedProfile:
         stacked, stacked_err = bootstrap_profile_mean(
             profiles, n_boot=n_boot, seed=seed)
 
+        random_mean = random_err = None
+        rng = np.random.default_rng(seed)
+        rand_means = np.full((random_samples_eff, n_radii), np.nan,
+                             dtype=float)
+        for s in trange(random_samples_eff,
+                        desc="Stacking random profiles",
+                        disable=random_samples_eff < 10):
+            idx = rng.choice(pool.shape[0], size=n_sources,
+                             replace=True)
+            selected = pool[idx]
+            if pool_radii is None:
+                rand_means[s] = np.nanmean(selected, axis=0)
+            else:
+                theta_draw = rng.choice(theta_ref_arcmin,
+                                        size=n_sources,
+                                        replace=True)
+                radii_random = theta_draw[:, None] * radii_norm[None, :]
+                interp_vals = np.empty((n_sources, n_radii), dtype=float)
+                for p in range(n_sources):
+                    prof = selected[p]
+                    interp_vals[p] = np.interp(
+                        radii_random[p],
+                        pool_radii,
+                        prof,
+                        left=prof[0],
+                        right=prof[-1],
+                    )
+                rand_means[s] = np.nanmean(interp_vals, axis=0)
+
+            valid_rows = ~np.isnan(rand_means).all(axis=1)
+            if np.any(valid_rows):
+                rand_subset = rand_means[valid_rows]
+                random_mean = np.nanmean(rand_subset, axis=0)
+                ddof_rand = 1 if rand_subset.shape[0] > 1 else 0
+                random_err = np.nanstd(rand_subset, axis=0, ddof=ddof_rand)
+            else:
+                random_mean = np.full(n_radii, np.nan, dtype=float)
+                random_err = np.full(n_radii, np.nan, dtype=float)
+
         outputs = [stacked, stacked_err]
+        outputs.extend([random_mean, random_err])
         if return_individual:
             outputs.append(profiles)
 
@@ -300,6 +397,8 @@ class PointingEnclosedProfile:
         ----------
         radii_arcmin : float or array_like
             Aperture radius/radii [arcmin] to measure at each random position.
+            Can be 1D (shared for all points) or 2D of shape
+            (n_points, n_radii) to provide per-point apertures.
         n_points : int
             Number of random positions to generate.
         abs_b_min : float or None, optional
@@ -316,7 +415,17 @@ class PointingEnclosedProfile:
             Radial profiles at random positions (excluding NaN profiles).
         """
         ell_deg, b_deg, __ = random_sky_positions(n_points, abs_b_min, seed)
-        radii_arcmin = np.asarray(radii_arcmin)
+        radii_arr = np.asarray(radii_arcmin, dtype=float)
+
+        if radii_arr.ndim == 1:
+            radii_per_point = np.tile(radii_arr, (n_points, 1))
+        elif radii_arr.ndim == 2:
+            if radii_arr.shape[0] != n_points:
+                raise ValueError(
+                    "For 2D radii_arcmin, shape[0] must equal n_points.")
+            radii_per_point = radii_arr
+        else:
+            raise ValueError("radii_arcmin must be 1D or 2D array-like.")
 
         with tempfile.NamedTemporaryFile(suffix=".mmap", delete=False) as tmp:
             mmap_path = tmp.name
@@ -335,7 +444,7 @@ class PointingEnclosedProfile:
                 results = []
                 for i in tqdm(range(n_points), desc="Measuring profiles"):
                     prof = temp_obj.get_profile(
-                        ell_deg[i], b_deg[i], radii_arcmin,
+                        ell_deg[i], b_deg[i], radii_per_point[i],
                         subtract_background=subtract_background
                     )
                     results.append(prof)
@@ -347,7 +456,7 @@ class PointingEnclosedProfile:
                         batch_size=self.batch_size
                     )(
                         delayed(temp_obj.get_profile)(
-                            ell_deg[i], b_deg[i], radii_arcmin,
+                            ell_deg[i], b_deg[i], radii_per_point[i],
                             subtract_background)
                         for i in range(n_points)
                     )
@@ -398,9 +507,10 @@ class PointingEnclosedProfile:
 
         pval = np.full(len(theta200), np.nan)
 
-        for i in range(len(theta200)):
-            k = np.argmin(np.abs(theta_rand - theta200[i]))
-            pval[i] = 1 - np.searchsorted(signal_rand[:, k], signal_source[i]) / nr  # noqa
+        for i, theta_val in enumerate(theta200):
+            k = np.argmin(np.abs(theta_rand - theta_val))
+            rank = np.searchsorted(signal_rand[:, k], signal_source[i])
+            pval[i] = 1 - rank / nr
 
         return pval
 
