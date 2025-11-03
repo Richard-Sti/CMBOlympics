@@ -125,7 +125,7 @@ def save_results_hdf5(path, halos, halo_pvals, results):
         halo_group = h5.create_group("halos")
         for key, values in halos.items():
             halo_group.create_dataset(key, data=np.asarray(values))
-        halo_group.create_dataset("pval", data=np.asarray(halo_pvals))
+        halo_group.create_dataset("pval_data", data=np.asarray(halo_pvals))
 
         if results:
             pval_group = h5.create_group("halos_binned")
@@ -139,10 +139,22 @@ def save_results_hdf5(path, halos, halo_pvals, results):
                 bin_group.attrs["count"] = entry["count"]
                 bin_group.attrs["ks_stat"] = entry["ks_stat"]
                 bin_group.attrs["ks_p"] = entry["ks_p"]
+
                 bin_group.create_dataset(
                     "pval_data", data=np.asarray(entry["pval_data"]))
                 bin_group.create_dataset(
                     "pval_rand", data=np.asarray(entry["pval_rand"]))
+                bin_group.create_dataset(
+                    "stacked_profile",
+                    data=np.asarray(entry["stacked_profile"]))
+                bin_group.create_dataset(
+                    "stacked_error", data=np.asarray(entry["stacked_error"]))
+                bin_group.create_dataset(
+                    "random_profile", data=np.asarray(entry["random_profile"]))
+                bin_group.create_dataset(
+                    "random_error", data=np.asarray(entry["random_error"]))
+                bin_group.create_dataset(
+                    "radii_norm", data=np.asarray(entry["radii_norm"]))
 
 
 def main():
@@ -248,9 +260,8 @@ def main():
         )
         stacked_profile, stacked_err, rand_mean, rand_err = stack
 
-        fprint(
-            f"[Bin {bin_idx}] Generated stacked profiles and summary statistics."
-        )
+        fprint(f"[Bin {bin_idx}] Generated stacked profiles "
+               "and summary statistics.")
 
         # Store per-halo diagnostics aligned with the original selection.
         halo_indices = np.nonzero(bin_mask)[0]
@@ -300,7 +311,7 @@ def main():
         halo_pvals_sorted,
         results,
     )
-    fprint(f"wrote outputs to {output_path}")
+    fprint(f"Wrote outputs to {output_path}")
 
 
 if __name__ == "__main__":
