@@ -27,6 +27,10 @@ from .halo import (                                                             
     list_simulations_hdf5,                                                      # noqa
     )                                                                           # noqa
 
+from .tsz_mass_bins import (                                                    # noqa
+    TSZMassBinResults,                                                          # noqa
+    )                                                                           # noqa
+
 from h5py import File
 
 
