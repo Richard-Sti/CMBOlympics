@@ -219,7 +219,7 @@ def main():
         )
 
         fprint(
-            "Computed empirical p-values for "
+            "computed empirical p-values for "
             f"{lo:.2f} < log M < {hi if hi is not None else '∞'}."
         )
 
@@ -285,7 +285,7 @@ def main():
         halo_pvals_sorted,
         results,
     )
-    fprint(f"Wrote outputs to {output_path}")
+    fprint(f"wrote outputs to {output_path}")
 
 
 if __name__ == "__main__":
