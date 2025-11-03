@@ -23,6 +23,8 @@ from .snapshot  import (                                                        
 
 from .halo import (                                                             # noqa
     FoFHaloReader,                                                              # noqa
+    SimulationHaloReader,                                                       # noqa
+    list_simulations_hdf5,                                                      # noqa
     )                                                                           # noqa
 
 from h5py import File

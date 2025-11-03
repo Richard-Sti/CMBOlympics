@@ -59,3 +59,69 @@ class FoFHaloReader:
                 x *= 1e10  # convert to Msun/h
 
         return x
+
+
+class SimulationHaloReader:
+    """
+    Reader for multi-realisation halo catalogues stored under HDF5 groups.
+
+    The file is expected to contain one group per simulation realisation,
+    with datasets such as ``Coordinates`` and ``Group_M_Crit200`` nested
+    underneath.
+
+    Parameters
+    ----------
+    fname : str or path-like
+        Path to the HDF5 catalogue.
+    nsim : str or int
+        Identifier of the simulation realisation (group name in the file).
+    """
+
+    def __init__(self, fname, nsim):
+        self.fname = fname
+        self.nsim = str(nsim)
+
+        with File(self.fname, "r") as f:
+            if self.nsim not in f:
+                raise KeyError(
+                    f"Simulation '{self.nsim}' not found in "
+                    f"'{self.fname}'. Available: {list(f.keys())}"
+                )
+            self._fields = tuple(sorted(f[self.nsim].keys()))
+
+    @property
+    def fields(self):
+        """Return the dataset names available for the simulation."""
+        return self._fields
+
+    def __contains__(self, name):
+        return name in self._fields
+
+    def __getitem__(self, name):
+        """Return a dataset for the selected simulation."""
+        if name not in self:
+            raise KeyError(
+                f"Field '{name}' not found for simulation "
+                f"'{self.nsim}'. Available: {self._fields}"
+            )
+
+        with File(self.fname, "r") as f:
+            return f[self.nsim][name][...]
+
+
+def list_simulations_hdf5(fname):
+    """
+    Return the available simulation identifiers stored in the catalogue.
+
+    Parameters
+    ----------
+    fname : str or path-like
+        Path to the HDF5 catalogue.
+
+    Returns
+    -------
+    tuple of int
+        Sorted tuple of group identifiers present in the file.
+    """
+    with File(fname, "r") as f:
+        return tuple(sorted(int(key) for key in f.keys()))
