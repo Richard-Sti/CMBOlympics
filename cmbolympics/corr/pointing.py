@@ -475,46 +475,6 @@ class PointingEnclosedProfile:
         print(f"Skipped {num_skipped} / {n_points} profiles due to NaNs.")
         return np.asarray(profiles, dtype=float)
 
-    @staticmethod
-    def get_pvalue(signal_source, theta200, theta_rand, signal_rand):
-        """
-        Get empirical p-values for source signals based on random pointing
-        signals.
-
-        Defined as the fraction of random signals greater than or equal to the
-        source signal at the closest matching aperture size.
-
-        Parameters
-        ----------
-        signal_source : array_like
-            Source signals to test.
-        theta200 : array_like
-            Aperture sizes for sources.
-        theta_rand : array_like
-            Aperture sizes for random sample.
-        signal_rand : ndarray, shape (n_random, n_apertures)
-            Random signals.
-
-        Returns
-        -------
-        pval : ndarray
-            P-values for each source.
-        """
-        assert theta_rand.ndim == 1 and signal_rand.ndim == 2
-        assert signal_rand.shape[1] == len(theta_rand)
-
-        signal_rand = np.sort(signal_rand, axis=0)
-        nr = len(signal_rand)
-
-        pval = np.full(len(theta200), np.nan)
-
-        for i, theta_val in enumerate(theta200):
-            k = np.argmin(np.abs(theta_rand - theta_val))
-            rank = np.searchsorted(signal_rand[:, k], signal_source[i])
-            pval[i] = 1 - rank / nr
-
-        return pval
-
 
 def empirical_pvalues_by_theta(theta_arcmin, signal, theta_rand, tsz_rand,
                                min_pool=200, random_pool_samples=None,
@@ -566,34 +526,7 @@ def empirical_pvalues_by_theta(theta_arcmin, signal, theta_rand, tsz_rand,
 
     theta_sample_count = max(1, int(random_theta_samples))
 
-    if tsz_rand.ndim == 1:
-        if theta_rand.shape != tsz_rand.shape:
-            raise ValueError("theta_rand and tsz_rand must have the same shape.")
-
-        order = np.argsort(theta_rand)
-        theta_sorted = theta_rand[order]
-        tsz_sorted = tsz_rand[order]
-
-        def _pool(theta):
-            width = 0.2
-            samples = np.empty(0, dtype=float)
-            max_width = 2.0
-            while samples.size < min_pool and width <= max_width:
-                lo = theta * (1.0 - width)
-                hi = theta * (1.0 + width)
-                left = np.searchsorted(theta_sorted, lo, side="left")
-                right = np.searchsorted(theta_sorted, hi, side="right")
-                samples = tsz_sorted[left:right]
-                width *= 1.5
-            if samples.size < min_pool:
-                samples = tsz_sorted
-            return np.sort(samples), None
-
-        if random_pool_samples is None or random_pool_samples >= len(tsz_rand):
-            selected_rows = np.arange(len(tsz_rand))
-        else:
-            selected_rows = rng.choice(len(tsz_rand), size=int(random_pool_samples), replace=False)
-    elif tsz_rand.ndim == 2:
+    if tsz_rand.ndim == 2:
         n_rand, n_theta = tsz_rand.shape
         if theta_rand.shape[0] != n_theta:
             raise ValueError(
@@ -607,9 +540,10 @@ def empirical_pvalues_by_theta(theta_arcmin, signal, theta_rand, tsz_rand,
         if random_pool_samples is None or random_pool_samples >= n_rand:
             selected_rows = np.arange(n_rand)
         else:
-            selected_rows = rng.choice(n_rand, size=int(random_pool_samples), replace=False)
+            count = int(random_pool_samples)
+            selected_rows = rng.choice(n_rand, size=count, replace=False)
     else:
-        raise ValueError("tsz_rand must be 1D or 2D.")
+        raise ValueError("tsz_rand must be 2D.")
 
     def _pvalue_from_pool(val, pool):
         rank = np.searchsorted(pool, val, side="left")
@@ -628,7 +562,8 @@ def empirical_pvalues_by_theta(theta_arcmin, signal, theta_rand, tsz_rand,
                       disable=len(selected_rows) < 20)
     for idx_pos in iterator:
         idx = selected_rows[idx_pos]
-        theta_samples = rng.choice(theta_arcmin, size=theta_sample_count, replace=True)
+        theta_samples = rng.choice(theta_arcmin, size=theta_sample_count,
+                                   replace=True)
         for theta_sel in theta_samples:
             pool, col = _pool(theta_sel)
             if tsz_rand.ndim == 1:
