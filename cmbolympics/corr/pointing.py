@@ -114,17 +114,14 @@ class PointingEnclosedProfile:
                 if not np.any(good_outer):
                     continue
 
-                vec_outer = np.array(hp.pix2vec(self.nside, idx_outer)).T
-                cosang = np.einsum("ij,j->i", vec_outer, v0)
-                cosang = np.clip(cosang, -1.0, 1.0)
-                theta_outer = np.arccos(cosang)
-
-                inner_mask = theta_outer <= r_rad
-                good_inner = good_outer & inner_mask
-                if not np.any(good_inner):
+                vec_outer = hp.pix2vec(self.nside, idx_outer)
+                cosang = np.clip(np.dot(v0, vec_outer), -1., 1.0)
+                cos_inner = np.cos(r_rad)
+                inner_mask = good_outer & (cosang >= cos_inner - 1e-12)
+                if not np.any(inner_mask):
                     continue
 
-                signal = np.mean(values_outer[good_inner])
+                signal = np.mean(values_outer[inner_mask])
 
                 annulus_mask = good_outer & (~inner_mask)
                 if np.any(annulus_mask):
