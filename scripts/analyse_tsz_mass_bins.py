@@ -199,6 +199,7 @@ def main():
     halo_bin_index = np.full(halos["mass"].shape, -1, dtype=int)
 
     for bin_idx, ((lo, hi), median) in enumerate(zip(edges, medians)):
+        # Flag haloes whose masses fall within the current bin.
         bin_mask = halos["log_mass"] >= lo
         if hi is not None:
             bin_mask &= halos["log_mass"] < hi
@@ -207,6 +208,12 @@ def main():
             fprint(f"No haloes in mass bin [{lo:.2f}, "
                    f"{'∞' if hi is None else f'{hi:.2f}'}). Skipping.")
             continue
+
+        fprint(
+            f"[Bin {bin_idx}] Selecting haloes for "
+            f"{lo:.2f} ≤ log M < {hi if hi is not None else '∞'}: "
+            f"{bin_mask.sum()} candidates."
+        )
 
         pval_data, pval_rand = cmbolympics.corr.empirical_pvalues_by_theta(
             halos["aperture"][bin_mask],
@@ -219,12 +226,14 @@ def main():
         )
 
         fprint(
-            "computed empirical p-values for "
-            f"{lo:.2f} < log M < {hi if hi is not None else '∞'}."
+            f"[Bin {bin_idx}] Computed empirical p-values for "
+            f"{lo:.2f} ≤ log M < {hi if hi is not None else '∞'}."
         )
 
+        # Compare the two empirical distributions using a KS test.
         ks_stat, ks_p = ks_2samp(pval_data, pval_rand)
 
+        # Stack profiles for the haloes belonging to this bin.
         stack = profiler.stack_normalized_profiles(
             halos["ell"][bin_mask],
             halos["b"][bin_mask],
@@ -239,6 +248,11 @@ def main():
         )
         stacked_profile, stacked_err, rand_mean, rand_err = stack
 
+        fprint(
+            f"[Bin {bin_idx}] Generated stacked profiles and summary statistics."
+        )
+
+        # Store per-halo diagnostics aligned with the original selection.
         halo_indices = np.nonzero(bin_mask)[0]
         halo_pval_data[halo_indices] = pval_data
         halo_bin_index[halo_indices] = bin_idx
@@ -273,6 +287,7 @@ def main():
         fprint("No bins contained haloes after filtering")
 
     output_path = analysis_cfg["output_hdf5"]
+    # Sort results so the largest haloes appear first in the output file.
     mass_order = np.argsort(-np.asarray(halos["mass"]))
     halos_sorted = {
         key: np.asarray(values)[mass_order]
