@@ -213,6 +213,84 @@ class PointingEnclosedProfile:
 
         return out
 
+    def stack_normalized_profiles(self, ell_deg, b_deg, theta_ref_arcmin,
+                                  radii_norm, subtract_background=True,
+                                  n_boot=10000, seed=None,
+                                  return_individual=False):
+        """
+        Stack radial profiles normalised by each source's size.
+
+        Parameters
+        ----------
+        ell_deg, b_deg : array_like
+            Galactic longitudes/latitudes [deg] of the sources.
+        theta_ref_arcmin : array_like
+            Reference angular scales per source (e.g. theta500) in
+            arcminutes.
+        radii_norm : array_like
+            Dimensionless radii where the profile is evaluated. The
+            physical aperture for each source is
+            ``radii_norm * theta_ref_arcmin``.
+        subtract_background : bool, optional
+            Forwarded to :meth:`get_profiles_per_source`. Default: True.
+        n_boot : int, optional
+            Number of bootstrap resamples for the stacked profile.
+            Default: 1000.
+        seed : int or None, optional
+            Seed for the bootstrap generator.
+        return_individual : bool, optional
+            If True, also return the per-source profile array used in the
+            stack. Default: False.
+
+        Returns
+        -------
+        stacked_profile : ndarray
+            Bootstrap mean profile across sources at each normalised radius.
+            NaNs are ignored.
+        stacked_error : ndarray
+            Bootstrap standard deviation.
+        individual_profiles : ndarray, optional
+            Array of shape (n_sources, n_radii) with per-source profiles,
+            returned when ``return_individual`` is True.
+        """
+        ell_deg = np.asarray(np.atleast_1d(ell_deg), dtype=float)
+        b_deg = np.asarray(np.atleast_1d(b_deg), dtype=float)
+        theta_ref_arcmin = np.asarray(
+            np.atleast_1d(theta_ref_arcmin), dtype=float)
+        radii_norm = np.asarray(np.atleast_1d(radii_norm), dtype=float)
+
+        assert ell_deg.shape == b_deg.shape == theta_ref_arcmin.shape, (
+            "ell_deg, b_deg, and theta_ref_arcmin must share the same shape.")
+
+        if radii_norm.ndim != 1:
+            raise ValueError(
+                "radii_norm must be a 1D array of dimensionless radii.")
+
+        n_sources = ell_deg.size
+        n_radii = radii_norm.size
+
+        radius_targets = theta_ref_arcmin[:, None] * radii_norm[None, :]
+        ell_tiled = np.repeat(ell_deg, n_radii)
+        b_tiled = np.repeat(b_deg, n_radii)
+        radii_flat = radius_targets.reshape(-1)
+
+        profiles_flat = self.get_profiles_per_source(
+            ell_tiled,
+            b_tiled,
+            radii_flat,
+            subtract_background=subtract_background,
+        )
+        profiles = profiles_flat.reshape(n_sources, n_radii)
+
+        stacked, stacked_err = bootstrap_profile_mean(
+            profiles, n_boot=n_boot, seed=seed)
+
+        outputs = [stacked, stacked_err]
+        if return_individual:
+            outputs.append(profiles)
+
+        return tuple(outputs)
+
     def get_random_profiles(self, radii_arcmin, n_points, abs_b_min=None,
                             seed=None, subtract_background=True):
         """
@@ -378,6 +456,57 @@ def random_sky_positions(n_points, abs_b_min=None, seed=None):
     ell_deg = np.rad2deg(gen.uniform(0.0, 2.0 * np.pi, size=n_points))
 
     return ell_deg, b_deg, gen
+
+
+###############################################################################
+#                          Bootstrap utilities                                #
+###############################################################################
+
+
+def bootstrap_profile_mean(profiles, n_boot=1000, seed=None):
+    """
+    Bootstrap the mean stacked profile and its uncertainty.
+
+    Parameters
+    ----------
+    profiles : array_like, shape (n_sources, n_radii)
+        Per-source profiles. NaNs are ignored when averaging.
+    n_boot : int, optional
+        Number of bootstrap resamples. Default: 1000.
+    seed : int or None, optional
+        Seed for the random number generator. Default: None.
+    Returns
+    -------
+    mean_profile : ndarray, shape (n_radii,)
+        Mean profile across all sources (NaNs ignored).
+    err_profile : ndarray, shape (n_radii,)
+        Standard deviation of the bootstrap mean profiles.
+    """
+    profiles = np.asarray(profiles, dtype=float)
+    if profiles.ndim != 2:
+        raise ValueError("profiles must be a 2D array.")
+    if n_boot <= 0:
+        raise ValueError("n_boot must be a positive integer.")
+
+    n_sources, n_radii = profiles.shape
+    rng = np.random.default_rng(seed)
+
+    boot_means = np.empty((n_boot, n_radii), dtype=float)
+    iterator = trange(
+        n_boot,
+        desc="Bootstrapping profiles",
+        disable=n_boot < 50,
+    )
+    for i in iterator:
+        draw = rng.integers(0, n_sources, size=n_sources)
+        sample = profiles[draw]
+        boot_means[i] = np.nanmean(sample, axis=0)
+
+    mean_profile = np.nanmean(profiles, axis=0)
+    ddof = 1 if n_boot > 1 else 0
+    err_profile = np.nanstd(boot_means, axis=0, ddof=ddof)
+
+    return mean_profile, err_profile
 
 
 ###############################################################################
