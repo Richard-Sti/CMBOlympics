@@ -21,8 +21,8 @@ import h5py
 import numpy as np
 from scipy.stats import ks_2samp
 
-import cmbolympics
-from cmbolympics.utils import (
+import cmbo
+from cmbo.utils import (
     build_mass_bins,
     cartesian_icrs_to_galactic_spherical,
     fprint,
@@ -57,7 +57,7 @@ def load_halo_catalogue(cfg, nsim):
     catalogue_cfg = cfg["halo_catalogues"][sim_key]
 
     if sim_key == "csiborg2":
-        reader = cmbolympics.io.SimulationHaloReader(
+        reader = cmbo.io.SimulationHaloReader(
             catalogue_cfg["fname"],
             nsim=nsim,
         )
@@ -116,12 +116,12 @@ def load_profiler(cfg):
     map_cfg = cfg["input_map"]
     analysis_cfg = cfg["analysis"]
 
-    y_map = cmbolympics.io.read_Planck_comptonSZ(map_cfg["signal_map"])
+    y_map = cmbo.io.read_Planck_comptonSZ(map_cfg["signal_map"])
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
     fprint(
         f"Loaded y-map {map_cfg['signal_map']}: mean={mu:.3e}, std={std:.3e}"
     )
-    y_map = cmbolympics.utils.smooth_map_gaussian(
+    y_map = cmbo.utils.smooth_map_gaussian(
         y_map,
         fwhm_arcmin=map_cfg["smooth_fwhm"],
     )
@@ -131,7 +131,7 @@ def load_profiler(cfg):
         f"mean={mu:.3e}, std={std:.3e}"
     )
 
-    profiler = cmbolympics.corr.PointingEnclosedProfile(
+    profiler = cmbo.corr.PointingEnclosedProfile(
         y_map,
         n_jobs=analysis_cfg["n_jobs"],
         fwhm_arcmin=map_cfg["smooth_fwhm"],
@@ -292,7 +292,7 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             f"{mask.sum()} candidates."
         )
 
-        pval_data, pval_rand = cmbolympics.corr.empirical_pvalues_by_theta(
+        pval_data, pval_rand = cmbo.corr.empirical_pvalues_by_theta(
             halos["aperture"][mask],
             signal[mask],
             theta_rand,
@@ -410,7 +410,7 @@ def determine_simulations(catalogue_cfg, requested):
     """Return the list of simulation identifiers to process."""
 
     if isinstance(requested, str) and requested.lower() == "all":
-        sims = cmbolympics.io.list_simulations_hdf5(catalogue_cfg["fname"])
+        sims = cmbo.io.list_simulations_hdf5(catalogue_cfg["fname"])
 
         fprint(f"Processing simulations {sims}.")
 
@@ -443,7 +443,7 @@ def main():
     cutout_pixels = analysis_cfg.get("cutout_pixels", 301)
     cutout_nbins = analysis_cfg.get("cutout_nbins", 128)
     cutout_halfsize = analysis_cfg.get("cutout_grid_halfsize")
-    cutout_extractor = cmbolympics.corr.Pointing2DCutout(
+    cutout_extractor = cmbo.corr.Pointing2DCutout(
         y_map,
         npix=cutout_pixels,
         nbins=cutout_nbins,
@@ -466,7 +466,7 @@ def main():
     ):
         cutout_params["random_samples"] = None
 
-    theta_rand, tsz_rand = cmbolympics.io.read_from_hdf5(
+    theta_rand, tsz_rand = cmbo.io.read_from_hdf5(
         map_cfg["random_pointing"],
         "theta_rand",
         "tsz_rand",

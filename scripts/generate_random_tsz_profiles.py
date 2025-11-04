@@ -5,8 +5,8 @@ import argparse
 
 import numpy as np
 
-import cmbolympics
-from cmbolympics.utils import fprint
+import cmbo
+from cmbo.utils import fprint
 
 
 def parse_args():
@@ -90,10 +90,10 @@ def main():
         else:
             output_path = base + '_RAND_POINTING.hdf5'
 
-    y_map = cmbolympics.io.read_Planck_comptonSZ(args.planck_map)
+    y_map = cmbo.io.read_Planck_comptonSZ(args.planck_map)
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
     fprint(f"Loaded map {args.planck_map}: mean={mu:.3e}, std={std:.3e}")
-    y_map = cmbolympics.utils.smooth_map_gaussian(
+    y_map = cmbo.utils.smooth_map_gaussian(
         y_map, fwhm_arcmin=args.fwhm_arcmin)
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
     fprint(f"Smoothed map: mean={mu:.3e}, std={std:.3e}")
@@ -104,7 +104,7 @@ def main():
         f"background from random profiles."
     )
 
-    profiler = cmbolympics.corr.PointingEnclosedProfile(
+    profiler = cmbo.corr.PointingEnclosedProfile(
         y_map, n_jobs=args.n_jobs, fwhm_arcmin=args.fwhm_arcmin)
 
     theta_rand = np.linspace(args.theta_min, args.theta_max, args.n_theta)
@@ -120,7 +120,7 @@ def main():
         f"Random profiles generated with {args.n_points} pointings "
         f"over {args.n_theta} apertures.")
 
-    cmbolympics.io.dump_to_hdf5(
+    cmbo.io.dump_to_hdf5(
         output_path,
         theta_rand=theta_rand,
         tsz_rand=tsz_rand,
