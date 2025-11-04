@@ -1,10 +1,8 @@
 """Utilities for identifying halo associations across realisations."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-
 import numpy as np
+from .coords import cartesian_icrs_to_galactic_spherical
 
 
 @dataclass
@@ -44,6 +42,69 @@ class HaloAssociation:
         if key not in self.keys():
             raise KeyError(key)
         return getattr(self, key)
+
+    def to_galactic_angular(self, center, coord_system="icrs"):
+        """
+        Convert positions to Galactic spherical coordinates (r, ell, b).
+
+        Parameters
+        ----------
+        center
+            Observer position in the same coordinate system as positions.
+            Array of shape (3,).
+        coord_system
+            Coordinate system of the positions. Currently only "icrs"
+            is supported.
+
+        Returns
+        -------
+        r : ndarray
+            Distances in same units as positions.
+        ell : ndarray
+            Galactic longitude in degrees.
+        b : ndarray
+            Galactic latitude in degrees.
+        """
+        if coord_system != "icrs":
+            raise ValueError(
+                f"coord_system='{coord_system}' not supported. "
+                "Currently only 'icrs' is available."
+            )
+
+        return cartesian_icrs_to_galactic_spherical(self.positions, center)
+
+    def centroid_to_galactic_angular(self, center, coord_system="icrs"):
+        """
+        Convert centroid to Galactic spherical coordinates (r, ell, b).
+
+        Parameters
+        ----------
+        center
+            Observer position in the same coordinate system as centroid.
+            Array of shape (3,).
+        coord_system
+            Coordinate system of the centroid. Currently only "icrs"
+            is supported.
+
+        Returns
+        -------
+        r : float
+            Distance in same units as centroid.
+        ell : float
+            Galactic longitude in degrees.
+        b : float
+            Galactic latitude in degrees.
+        """
+        if coord_system != "icrs":
+            raise ValueError(
+                f"coord_system='{coord_system}' not supported. "
+                "Currently only 'icrs' is available."
+            )
+
+        r, ell, b = cartesian_icrs_to_galactic_spherical(
+            self.centroid.reshape(1, 3), center
+        )
+        return float(r[0]), float(ell[0]), float(b[0])
 
 
 def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
