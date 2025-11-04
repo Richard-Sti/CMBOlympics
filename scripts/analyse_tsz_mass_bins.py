@@ -427,7 +427,10 @@ def determine_simulations(catalogue_cfg, requested):
 def main():
     """Entry-point for the command-line script."""
 
-    config_path = sys.argv[1]
+    if len(sys.argv) > 1:
+        config_path = sys.argv[1]
+    else:
+        config_path = Path(__file__).with_name("analyse_tsz_mass_bins.toml")
     cfg = load_config(config_path)
     fprint(f"Loaded config from {config_path}")
 
