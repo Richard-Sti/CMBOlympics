@@ -18,7 +18,10 @@ import astropy.units as u
 import numpy as np
 from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
                                  SkyCoord, SphericalRepresentation)
+from astropy.cosmology import FlatLambdaCDM
 from tqdm import trange
+
+_C_LIGHT_KMS = 299792.458
 
 
 def cartesian_to_r_theta_phi(x, y, z, center=[0.0, 0.0, 0.0]):
@@ -30,6 +33,36 @@ def cartesian_to_r_theta_phi(x, y, z, center=[0.0, 0.0, 0.0]):
     phi = np.mod(np.arctan2(y - y0, x - x0), 2.0 * np.pi)
 
     return r, theta, phi
+
+
+def radec_to_galactic(ra_deg, dec_deg):
+    """Convert equatorial coordinates to Galactic longitude and latitude."""
+    ra, dec = np.broadcast_arrays(np.asarray(ra_deg, dtype=float),
+                                  np.asarray(dec_deg, dtype=float))
+    coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs").galactic
+    ell = coord.l.to_value(u.deg)
+    b = coord.b.to_value(u.deg)
+    return ell, b
+
+
+def cz_to_comoving_distance(cz, h=1.0, Om0=0.3111):
+    """Convert CMB-frame velocity (km/s) to comoving distance (Mpc/h)."""
+    scalar_input = np.isscalar(cz)
+    cz_arr = np.array(cz, dtype=float, ndmin=1)
+    out = np.full_like(cz_arr, np.nan, dtype=float)
+
+    mask = np.isfinite(cz_arr)
+    if not np.any(mask):
+        return float(out[0]) if scalar_input else out
+
+    cosmo_obj = FlatLambdaCDM(H0=100.0 * h, Om0=Om0)
+    redshift = cz_arr[mask] / _C_LIGHT_KMS
+    distance = cosmo_obj.comoving_distance(redshift).value * cosmo_obj.h
+
+    out[mask] = distance
+    if scalar_input:
+        return float(out[0])
+    return out
 
 
 def cartesian_icrs_to_galactic_spherical(pos, center):
