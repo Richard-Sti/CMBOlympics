@@ -15,6 +15,7 @@
 """Analyse tSZ profiles in mass bins."""
 
 import sys
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -358,7 +359,13 @@ def main():
     if not results:
         fprint("No bins contained haloes after filtering")
 
-    output_path = analysis_cfg["output_hdf5"]
+    output_dir = analysis_cfg.get("output_folder", ".")
+    secondary_tag = analysis_cfg.get("output_tag", None)
+    sim_tag = analysis_cfg["which_simulation"]
+    stem = sim_tag if not secondary_tag else f"{sim_tag}_{secondary_tag}"
+    output_path = Path(output_dir).expanduser().resolve() / f"{stem}.hdf5"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Sort results so the largest haloes appear first in the output file.
     mass_order = np.argsort(-np.asarray(halos["mass"]))
     halos_sorted = {
