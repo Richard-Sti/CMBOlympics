@@ -156,6 +156,18 @@ def save_results_hdf5(path, halos, halo_pvals, results):
                 bin_group.create_dataset(
                     "radii_norm", data=np.asarray(entry["radii_norm"]))
 
+                if entry["cutout_mean"] is not None:
+                    bin_group.create_dataset(
+                        "cutout_mean", data=np.asarray(entry["cutout_mean"]))
+                if entry["cutout_extent"] is not None:
+                    bin_group.create_dataset(
+                        "cutout_extent",
+                        data=np.asarray(entry["cutout_extent"], dtype=float))
+                if entry["cutout_random_mean"] is not None:
+                    bin_group.create_dataset(
+                        "cutout_random_mean",
+                        data=np.asarray(entry["cutout_random_mean"]))
+
 
 def main():
     """Entry-point for the command-line script."""
@@ -182,6 +194,22 @@ def main():
     profiler, radii_stack = load_profiler(cfg)
     fprint("Initialised profile extractor.")
 
+    cutout_pixels = analysis_cfg.get("cutout_pixels", 301)
+    cutout_nbins = analysis_cfg.get("cutout_nbins", 256)
+    cutout_halfsize = analysis_cfg.get("cutout_grid_halfsize", None)
+    cutouter = cmbolympics.corr.Pointing2DCutout(
+        profiler.m,
+        npix=cutout_pixels,
+        nbins=cutout_nbins,
+        grid_halfsize=cutout_halfsize,
+    )
+    cutout_size_scale = analysis_cfg.get("cutout_size_scale", 5.0)
+    cutout_random_samples = analysis_cfg.get("cutout_random_samples")
+    cutout_random_abs_b_min = analysis_cfg.get("cutout_random_abs_b_min", 10.0)
+    cutout_random_seed = analysis_cfg.get(
+        "cutout_random_seed", analysis_cfg["seed"])
+    cutout_max_bins = analysis_cfg.get("cutout_max_bins", 2)
+
     theta_rand, tsz_rand = cmbolympics.io.read_from_hdf5(
         map_cfg["random_pointing"],
         "theta_rand",
@@ -205,6 +233,9 @@ def main():
     pool_samples = analysis_cfg["random_pool_samples"]
     if pool_samples is not None and pool_samples <= 0:
         pool_samples = None
+
+    if cutout_random_samples is not None and cutout_random_samples <= 0:
+        cutout_random_samples = None
 
     results = []
     halo_pval_data = np.full(halos["mass"].shape, np.nan, dtype=float)
@@ -263,6 +294,33 @@ def main():
         fprint(f"[Bin {bin_idx}] Generated stacked profiles "
                "and summary statistics.")
 
+        cutout_mean = None
+        cutout_extent = None
+        random_cutout_mean = None
+        if cutout_max_bins is None or bin_idx < cutout_max_bins:
+            cutout_sizes = cutout_size_scale * halos["theta"][bin_mask]
+            _, cutout_mean, cutout_extent = cutouter.stack_cutouts(
+                halos["ell"][bin_mask],
+                halos["b"][bin_mask],
+                cutout_sizes,
+                halos["theta"][bin_mask],
+            )
+            fprint(f"[Bin {bin_idx}] Computed 2D cutout stack "
+                   f"on a {cutout_nbins}x{cutout_nbins} grid.")
+
+            if cutout_random_samples:
+                seed = (cutout_random_seed + bin_idx
+                        if cutout_random_seed is not None else None)
+                _, random_cutout_mean, _ = cutouter.stack_random_cutouts(
+                    halos["theta"][bin_mask],
+                    n_stack=cutout_random_samples,
+                    size_factor=cutout_size_scale,
+                    abs_b_min=cutout_random_abs_b_min,
+                    seed=seed,
+                )
+                fprint(f"[Bin {bin_idx}] Computed random 2D cutout stack "
+                       f"with {cutout_random_samples} samples.")
+
         # Store per-halo diagnostics aligned with the original selection.
         halo_indices = np.nonzero(bin_mask)[0]
         halo_pval_data[halo_indices] = pval_data
@@ -291,6 +349,9 @@ def main():
                 "random_profile": rand_mean,
                 "random_error": rand_err,
                 "radii_norm": radii_stack,
+                "cutout_mean": cutout_mean,
+                "cutout_random_mean": random_cutout_mean,
+                "cutout_extent": cutout_extent,
             }
         )
 

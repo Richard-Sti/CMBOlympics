@@ -7,14 +7,14 @@ smooth_fwhm = 9.6
 r_min = 0.0
 r_max = 150.0
 b_min = 10.0
-mass_min = 1.0e12
+mass_min = 1e13
 mass_max = 1e16  # Set to a high value to ignore upper mass cut
 theta_min = 10.0
 theta_max = 6000 # Set to a high value to ignore upper theta cut
 
 [mass_bins]
 mass_step = 0.2
-top_counts = [10, 100, 200, 400, 800, ]
+top_counts = [10, 50, 100]
 verbose_bins = true
 
 [analysis]
@@ -24,8 +24,15 @@ aperture_scale = 2.0
 subtract_background = true
 
 stack_rmin = 0.1
-stack_rmax = 5.0
-stack_n = 100
+stack_rmax = 3.0
+stack_n = 501
+
+cutout_random_samples = 0
+cutout_max_bins = 3
+cutout_pixels = 301
+cutout_nbins = 256
+cutout_size_scale = 5
+cutout_random_abs_b_min = 10
 
 bootstrap = 10_000
 random_pool_samples = 1000
@@ -44,6 +51,6 @@ omega_m = 0.307
 
 [halo_catalogues.csiborg2]
 fname = "../data/csiborg2_fof.hdf5"
-nsim = 16717
+nsim = 17417
 box_size = 676.6
 omega_m = 0.3111
