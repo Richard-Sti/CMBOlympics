@@ -18,11 +18,18 @@ from .coords import (  # noqa: F401
     cartesian_icrs_to_galactic,
     cartesian_icrs_to_galactic_spherical,
     cartesian_to_r_theta_phi,
+    cz_to_comoving_distance,
+    radec_to_galactic,
 )
 from .associations import (  # noqa: F401
     HaloAssociation,
     identify_halo_associations,
 )
+from .cluster_matching import (  # noqa: F401
+    compute_matching_matrix,
+    greedy_global_matching,
+)
+from .pfeifer import MatchingProbability  # noqa: F401
 from .smoothing import smooth_map_gaussian  # noqa: F401
 
 from datetime import datetime
