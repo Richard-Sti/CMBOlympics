@@ -18,7 +18,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 
-from cmbolympics.utils import pvalue_to_sigma
+from cmbo.utils import pvalue_to_sigma
 
 
 def plot_mass_bin_pvalues(res, output_path=None, dpi=300):
