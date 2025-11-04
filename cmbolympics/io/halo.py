@@ -18,6 +18,7 @@ Provides access to Friends-of-Friends halo catalogues with optional axis
 flipping and consistent mass unit conversion.
 """
 
+import numpy as np
 from h5py import File
 
 from ..utils import fprint
@@ -125,3 +126,56 @@ def list_simulations_hdf5(fname):
     """
     with File(fname, "r") as f:
         return tuple(sorted(int(key) for key in f.keys()))
+
+
+def load_halo_positions_masses(fname, position_key, mass_key,
+                               nsim="all", r_max=400.0, mass_min=5.0e13):
+    """Return filtered halo positions and masses via `SimulationHaloReader`.
+
+    The function supports catalogues that follow the layout expected by
+    `SimulationHaloReader`, i.e. top-level groups keyed by simulation ID with
+    datasets such as coordinates and masses stored directly under each group.
+    """
+
+    if nsim == "all":
+        sim_ids = list_simulations_hdf5(fname)
+    else:
+        sim_ids = (nsim,)
+
+    positions_all = []
+    masses_all = []
+
+    for idx in range(len(sim_ids)):
+        sim_id = sim_ids[idx]
+        reader = SimulationHaloReader(fname, sim_id)
+
+        if position_key not in reader or mass_key not in reader:
+            raise KeyError(
+                f"Simulation {sim_id} missing '{position_key}' "
+                f"or '{mass_key}'. Available: {reader.fields}"
+            )
+
+        pos = np.asarray(reader[position_key], dtype=float)
+        mass = np.asarray(reader[mass_key], dtype=float)
+
+        if pos.ndim != 2 or pos.shape[1] != 3:
+            raise ValueError(
+                f"Positions for simulation {sim_id} must have shape (N, 3)."
+            )
+        if mass.ndim != 1 or mass.shape[0] != pos.shape[0]:
+            raise ValueError(
+                f"Masses for simulation {sim_id} must match positions."
+            )
+
+        box_size = np.max(pos, axis=0) - np.min(pos, axis=0)
+        centre = np.min(pos, axis=0) + box_size / 2.0
+        r = np.linalg.norm(pos - centre, axis=1)
+        mask = np.isfinite(r)
+        mask &= np.isfinite(mass)
+        mask &= r <= r_max
+        mask &= mass >= mass_min
+
+        positions_all.append(pos[mask])
+        masses_all.append(mass[mask])
+
+    return positions_all, masses_all
