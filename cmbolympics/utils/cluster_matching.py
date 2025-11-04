@@ -146,7 +146,7 @@ def greedy_global_matching(pval_matrix, dist_matrix, obs_clusters,
         if not np.isfinite(min_pval):
             break
 
-        matches[i] = (j, associations[j], min_pval, float(dist_matrix[i, j]))
+        matches[i] = (associations[j], min_pval, float(dist_matrix[i, j]))
 
         # Mark this cluster and association as used
         pval[i, :] = np.inf
