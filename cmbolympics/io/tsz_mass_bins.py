@@ -15,7 +15,7 @@
 """Loader utilities for tSZ mass-bin analysis outputs."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 
 import h5py
 import numpy as np
@@ -44,19 +44,16 @@ class BinResult:
     cutout_extent: Optional[np.ndarray] = None
 
     @property
-    def has_profiles(self) -> bool:
+    def has_profiles(self):
         return self.stacked_profile is not None
 
     def __getitem__(self, key):
-        """Allow dict-like access to attributes."""
         return getattr(self, key)
 
     def keys(self):
-        """Return the available attribute names."""
         return list(self.__dict__.keys())
 
     def as_dict(self):
-        """Return a shallow copy of the underlying data."""
         return self.__dict__.copy()
 
 
@@ -69,40 +66,164 @@ class HaloResults:
             setattr(self, key, value)
 
     def keys(self):
-        """Return dataset names stored for haloes."""
         return list(self._data.keys())
 
     def as_dict(self):
-        """Return halo arrays as a plain dictionary."""
         return dict(self._data)
 
     def __getitem__(self, item):
         return self._data[item]
 
 
+@dataclass
+class SimulationResult:
+    """Results for a single simulation realisation."""
+
+    name: str
+    halos: HaloResults
+    bins: list[BinResult]
+
+    def bin_keys(self):
+        if not self.bins:
+            return []
+        return sorted(self.bins[0].keys())
+
+    def as_dict(self):
+        return {
+            "halos": self.halos.as_dict(),
+            "bins": [bin_res.as_dict() for bin_res in self.bins],
+        }
+
+
 class TSZMassBinResults:
     """Load and expose data stored by ``analyse_tsz_mass_bins.py``."""
 
-    def __init__(self, path, include_profiles=True):
+    def __init__(self, path, include_profiles=True, simulation=None):
         self.path = path
         self.include_profiles = include_profiles
-        self.halos = {}
-        self.bins = []
+        self._simulations: Dict[str, SimulationResult] = {}
         self._load()
 
+        if simulation is not None:
+            if simulation not in self._simulations:
+                available = list(self._simulations)
+                msg = (
+                    "Simulation '{name}' not found. Available: "
+                    "{available}".format(
+                        name=simulation,
+                        available=available,
+                    )
+                )
+                raise KeyError(msg)
+            self._default = simulation
+        else:
+            self._default = next(iter(self._simulations), None)
+
+    # ------------------------------------------------------------------
+    # Mapping-style helpers
+    # ------------------------------------------------------------------
+    def __getitem__(self, key):
+        return self._simulations[key]
+
+    def __iter__(self):
+        return iter(self._simulations)
+
+    def __len__(self):  # pragma: no cover - trivial
+        return len(self._simulations)
+
+    def keys(self):
+        return list(self._simulations.keys())
+
+    def items(self):
+        return list(self._simulations.items())
+
+    def values(self):
+        return list(self._simulations.values())
+
+    def iter_simulations(self):
+        """Yield ``(name, SimulationResult)`` pairs."""
+
+        for name in sorted(self._simulations):
+            yield name, self._simulations[name]
+
+    @property
+    def simulation_count(self):
+        """Number of simulations loaded."""
+
+        return len(self._simulations)
+
+    # ------------------------------------------------------------------
+    # Convenience accessors
+    # ------------------------------------------------------------------
+    @property
+    def default_simulation(self):
+        return self._default
+
+    @property
+    def halos(self):
+        if len(self._simulations) != 1 and self._default is None:
+            msg = (
+                "Multiple simulations loaded; use results['sim_id']."
+            )
+            raise ValueError(msg)
+        key = self._default or next(iter(self._simulations))
+        return self._simulations[key].halos
+
+    @property
+    def bins(self):
+        if len(self._simulations) != 1 and self._default is None:
+            msg = (
+                "Multiple simulations loaded; use results['sim_id']."
+            )
+            raise ValueError(msg)
+        key = self._default or next(iter(self._simulations))
+        return self._simulations[key].bins
+
+    def bin_keys(self, simulation=None):
+        if simulation is None:
+            if len(self._simulations) != 1 and self._default is None:
+                msg = (
+                    "Multiple simulations available; pass a simulation name."
+                )
+                raise ValueError(msg)
+            simulation = self._default or next(iter(self._simulations))
+        return self._simulations[simulation].bin_keys()
+
+    def as_dict(self):
+        return {name: sim.as_dict() for name, sim in self._simulations.items()}
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
     def _load(self):
         with h5py.File(self.path, "r") as h5:
-            halo_group = h5["halos"]
-            halo_data = {key: halo_group[key][...]
-                         for key in halo_group.keys()}
-            self.halos = HaloResults(halo_data)
+            if "halos" in h5:  # legacy layout without simulation grouping
+                self._simulations["default"] = self._parse_simulation(
+                    h5,
+                    "default",
+                )
+                return
 
-            bin_group = h5["halos_binned"]
-            bins: list[BinResult] = []
-            for name in sorted(bin_group.keys()):
-                subgrp = bin_group[name]
+            for name in sorted(h5.keys()):
+                self._simulations[name] = self._parse_simulation(
+                    h5[name],
+                    name,
+                )
+
+    def _parse_simulation(self, group, name):
+        if "halos" not in group:
+            raise KeyError(f"Group '{name}' missing 'halos' dataset")
+
+        halo_group = group["halos"]
+        halo_data = {key: halo_group[key][...] for key in halo_group.keys()}
+        halos = HaloResults(halo_data)
+
+        bins: list[BinResult] = []
+        if "halos_binned" in group:
+            for bin_name in sorted(group["halos_binned"].keys()):
+                subgrp = group["halos_binned"][bin_name]
                 entry_kwargs = dict(
-                    name=name,
+                    name=bin_name,
                     lo=float(subgrp.attrs["lo"]),
                     hi=self._normalise_hi(subgrp.attrs["hi"]),
                     log_median_mass=float(subgrp.attrs["median_log_mass"]),
@@ -112,7 +233,7 @@ class TSZMassBinResults:
                     pval_data=subgrp["pval_data"][...],
                     pval_rand=subgrp["pval_rand"][...],
                 )
-                if self.include_profiles:
+                if self.include_profiles and "stacked_profile" in subgrp:
                     entry_kwargs.update(
                         stacked_profile=subgrp["stacked_profile"][...],
                         stacked_error=subgrp["stacked_error"][...],
@@ -123,11 +244,16 @@ class TSZMassBinResults:
                 if "cutout_mean" in subgrp:
                     entry_kwargs["cutout_mean"] = subgrp["cutout_mean"][...]
                 if "cutout_random_mean" in subgrp:
-                    entry_kwargs["cutout_random_mean"] = subgrp["cutout_random_mean"][...]
+                    entry_kwargs["cutout_random_mean"] = subgrp[
+                        "cutout_random_mean"
+                    ][...]
                 if "cutout_extent" in subgrp:
-                    entry_kwargs["cutout_extent"] = subgrp["cutout_extent"][...]
+                    entry_kwargs["cutout_extent"] = subgrp[
+                        "cutout_extent"
+                    ][...]
                 bins.append(BinResult(**entry_kwargs))
-            self.bins = bins
+
+        return SimulationResult(name=name, halos=halos, bins=bins)
 
     @staticmethod
     def _normalise_hi(value):
@@ -139,17 +265,3 @@ class TSZMassBinResults:
         except TypeError:
             pass
         return value
-
-    def as_dict(self):
-        """Return the loaded content as a simple dictionary."""
-        return {
-            "halos": self.halos.as_dict(),
-            "bins": [bin_result.__dict__.copy() for bin_result in self.bins],
-        }
-
-    def bin_keys(self):
-        """Return the attribute keys present for a representative mass bin."""
-        if not self.bins:
-            return []
-        sample = self.bins[0]
-        return sorted(list(sample.__dict__.keys()))
