@@ -15,7 +15,7 @@
 
 __version__ = "0.1.0"
 
-from cmbolympics import (                                                       # noqa
+from cmbo import (                                                              # noqa
     corr,                                                                       # noqa
     io,                                                                         # noqa
     projection,                                                                 # noqa

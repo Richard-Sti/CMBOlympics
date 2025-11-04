@@ -1,6 +1,6 @@
 """Utilities for identifying halo associations across realisations."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 from .coords import cartesian_icrs_to_galactic_spherical
 
@@ -16,9 +16,10 @@ class HaloAssociation:
     realisations: np.ndarray
     member_indices: np.ndarray
     fraction_present: float
+    optional_data: dict = field(default=None)
 
     def keys(self):
-        return [
+        keys = [
             "label",
             "centroid",
             "positions",
@@ -26,9 +27,12 @@ class HaloAssociation:
             "realisations",
             "member_indices",
         ]
+        if self.optional_data:
+            keys.extend(self.optional_data.keys())
+        return keys
 
     def as_dict(self):
-        return {
+        d = {
             "label": self.label,
             "centroid": self.centroid,
             "positions": self.positions,
@@ -37,8 +41,13 @@ class HaloAssociation:
             "member_indices": self.member_indices,
             "fraction_present": self.fraction_present,
         }
+        if self.optional_data:
+            d.update(self.optional_data)
+        return d
 
     def __getitem__(self, key):
+        if self.optional_data and key in self.optional_data:
+            return self.optional_data[key]
         if key not in self.keys():
             raise KeyError(key)
         return getattr(self, key)
@@ -108,7 +117,7 @@ class HaloAssociation:
 
 
 def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
-                               mass_sigma=0.3):
+                               mass_sigma=0.3, optional_data=None):
     """
     Cluster haloes from multiple realisations into physical associations.
 
@@ -127,6 +136,10 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
     mass_sigma
         Maximum allowed absolute deviation (in dex) from the association mean
         log-mass before a halo is rejected as an outlier.
+    optional_data
+        Dictionary mapping key names to sequences of arrays (one per
+        realisation), matched to ``positions``. These will be filtered and
+        stored in the associations.
 
     Returns
     -------
@@ -148,6 +161,23 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
                 "Mass array must have shape (N,) matching positions."
             )
 
+    # Process optional data
+    opt_dict = {}
+    if optional_data:
+        for key, data_list in optional_data.items():
+            if len(data_list) != len(positions):
+                raise ValueError(
+                    f"Optional key '{key}' must have same length as "
+                    "positions."
+                )
+            arrays = [np.asarray(arr, dtype=float) for arr in data_list]
+            for arr, pos in zip(arrays, pos_arrays):
+                if arr.shape[0] != pos.shape[0]:
+                    raise ValueError(
+                        f"Optional key '{key}' arrays must match positions."
+                    )
+            opt_dict[key] = arrays
+
     counts = [pos.shape[0] for pos in pos_arrays]
     if not counts or sum(counts) == 0:
         return []
@@ -161,6 +191,11 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
     all_positions = np.vstack(pos_arrays)
     all_masses = np.concatenate(mass_arrays)
 
+    # Concatenate optional data
+    all_opt = {}
+    for key, arrays in opt_dict.items():
+        all_opt[key] = np.concatenate(arrays)
+
     finite_mask = np.isfinite(all_masses).astype(bool)
     finite_mask &= np.all(np.isfinite(all_positions), axis=1)
     if not np.any(finite_mask):
@@ -170,6 +205,8 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
     all_masses = all_masses[finite_mask]
     real_ids = real_ids[finite_mask]
     halo_ids = halo_ids[finite_mask]
+    for key in all_opt:
+        all_opt[key] = all_opt[key][finite_mask]
 
     try:
         from sklearn.cluster import DBSCAN
@@ -192,6 +229,8 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         cluster_mass = all_masses[cluster_indices]
         cluster_real = real_ids[cluster_indices]
         cluster_local = halo_ids[cluster_indices]
+        cluster_opt = {key: all_opt[key][cluster_indices]
+                       for key in all_opt}
 
         centroid = cluster_pos.mean(axis=0)
         keep = []
@@ -212,6 +251,8 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         cluster_mass = cluster_mass[keep]
         cluster_real = cluster_real[keep]
         cluster_local = cluster_local[keep]
+        for key in cluster_opt:
+            cluster_opt[key] = cluster_opt[key][keep]
 
         if cluster_pos.size == 0:
             continue
@@ -228,6 +269,8 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         cluster_mass = cluster_mass[mass_mask]
         cluster_real = cluster_real[mass_mask]
         cluster_local = cluster_local[mass_mask]
+        for key in cluster_opt:
+            cluster_opt[key] = cluster_opt[key][mass_mask]
 
         if cluster_pos.shape[0] < min_samples:
             continue
@@ -245,6 +288,7 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
                 realisations=cluster_real,
                 member_indices=member_indices,
                 fraction_present=fraction_present,
+                optional_data=cluster_opt if cluster_opt else None,
             )
         )
 

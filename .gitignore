@@ -3,6 +3,9 @@ __pycache__/
 data/
 
 cmbolympics.egg-info/
+cmbo.egg-info/
 venv_cmbolympics/
+venv_cmbo/
 AGENTS.md
 CLAUDE.md
+GEMINI.md

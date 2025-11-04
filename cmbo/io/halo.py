@@ -129,12 +129,29 @@ def list_simulations_hdf5(fname):
 
 
 def load_halo_positions_masses(fname, position_key, mass_key,
-                               nsim="all", r_max=400.0, mass_min=5.0e13):
+                               nsim="all", r_max=400.0, mass_min=5.0e13,
+                               optional_keys=None):
     """Return filtered halo positions and masses via `SimulationHaloReader`.
 
     The function supports catalogues that follow the layout expected by
     `SimulationHaloReader`, i.e. top-level groups keyed by simulation ID with
     datasets such as coordinates and masses stored directly under each group.
+
+    Parameters
+    ----------
+    optional_keys : list of str, optional
+        Additional keys to load from the catalogue alongside positions and
+        masses. These will be filtered with the same mask and returned.
+
+    Returns
+    -------
+    positions_all : list of ndarray
+        Filtered halo positions for each simulation.
+    masses_all : list of ndarray
+        Filtered halo masses for each simulation.
+    optional_data : dict of lists, optional
+        If optional_keys is provided, returns a dictionary mapping each key
+        to a list of arrays (one per simulation).
     """
 
     if nsim == "all":
@@ -144,6 +161,7 @@ def load_halo_positions_masses(fname, position_key, mass_key,
 
     positions_all = []
     masses_all = []
+    optional_data = {key: [] for key in (optional_keys or [])}
 
     for idx in range(len(sim_ids)):
         sim_id = sim_ids[idx]
@@ -167,6 +185,22 @@ def load_halo_positions_masses(fname, position_key, mass_key,
                 f"Masses for simulation {sim_id} must match positions."
             )
 
+        # Load optional keys
+        opt_arrays = {}
+        for key in (optional_keys or []):
+            if key not in reader:
+                raise KeyError(
+                    f"Simulation {sim_id} missing optional key '{key}'. "
+                    f"Available: {reader.fields}"
+                )
+            arr = np.asarray(reader[key], dtype=float)
+            if arr.shape[0] != pos.shape[0]:
+                raise ValueError(
+                    f"Optional key '{key}' for simulation {sim_id} "
+                    f"must match positions."
+                )
+            opt_arrays[key] = arr
+
         box_size = np.max(pos, axis=0) - np.min(pos, axis=0)
         centre = np.min(pos, axis=0) + box_size / 2.0
         r = np.linalg.norm(pos - centre, axis=1)
@@ -177,5 +211,9 @@ def load_halo_positions_masses(fname, position_key, mass_key,
 
         positions_all.append(pos[mask])
         masses_all.append(mass[mask])
+        for key in optional_data:
+            optional_data[key].append(opt_arrays[key][mask])
 
+    if optional_keys:
+        return positions_all, masses_all, optional_data
     return positions_all, masses_all
