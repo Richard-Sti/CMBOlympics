@@ -28,6 +28,12 @@ from .halo import (  # noqa
     load_halo_positions_masses,  # noqa
 )
 
+from .obs_clusters import (  # noqa
+    ObservedCluster,
+    ObservedClusterCatalogue,
+    load_observed_clusters,
+)
+
 from .tsz_mass_bins import (  # noqa
     TSZMassBinResults,  # noqa
 )
