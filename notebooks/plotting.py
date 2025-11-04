@@ -443,7 +443,7 @@ def plot_cutout_maps(
                     continue
                 img = cutouts[sim_idx, j_bin]
 
-            scale = np.nanpercentile(np.abs(img), 99.99)
+            scale = np.nanpercentile(np.abs(img), 99.0)
             if not np.isfinite(scale) or scale == 0:
                 scale = np.nanmax(np.abs(img))
             if not np.isfinite(scale) or scale == 0:
