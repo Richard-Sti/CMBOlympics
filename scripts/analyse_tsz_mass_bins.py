@@ -411,7 +411,6 @@ def determine_simulations(catalogue_cfg, requested):
 
     if isinstance(requested, str) and requested.lower() == "all":
         sims = cmbolympics.io.list_simulations_hdf5(catalogue_cfg["fname"])
-        sims = sims[:2]
 
         fprint(f"Processing simulations {sims}.")
 
