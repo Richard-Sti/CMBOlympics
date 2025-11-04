@@ -19,6 +19,10 @@ from .coords import (  # noqa: F401
     cartesian_icrs_to_galactic_spherical,
     cartesian_to_r_theta_phi,
 )
+from .associations import (  # noqa: F401
+    HaloAssociation,
+    identify_halo_associations,
+)
 from .smoothing import smooth_map_gaussian  # noqa: F401
 
 from datetime import datetime

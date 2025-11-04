@@ -13,23 +13,24 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-from .cmb import (                                                              # noqa
-    read_Planck_comptonSZ,                                                      # noqa
-    )                                                                           # noqa
+from .cmb import (  # noqa
+    read_Planck_comptonSZ,  # noqa
+)
 
-from .snapshot  import (                                                        # noqa
-    Gadget4Reader,                                                              # noqa
-    )
+from .snapshot import (  # noqa
+    Gadget4Reader,  # noqa
+)
 
-from .halo import (                                                             # noqa
-    FoFHaloReader,                                                              # noqa
-    SimulationHaloReader,                                                       # noqa
-    list_simulations_hdf5,                                                      # noqa
-    )                                                                           # noqa
+from .halo import (  # noqa
+    FoFHaloReader,  # noqa
+    SimulationHaloReader,  # noqa
+    list_simulations_hdf5,  # noqa
+    load_halo_positions_masses,  # noqa
+)
 
-from .tsz_mass_bins import (                                                    # noqa
-    TSZMassBinResults,                                                          # noqa
-    )                                                                           # noqa
+from .tsz_mass_bins import (  # noqa
+    TSZMassBinResults,  # noqa
+)
 
 from h5py import File
 
