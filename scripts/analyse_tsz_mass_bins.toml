@@ -54,6 +54,6 @@ omega_m = 0.307
 
 [halo_catalogues.csiborg2]
 fname = "../data/csiborg2_fof.hdf5"
-nsim = 17417
+nsim = "all"
 box_size = 676.6
 omega_m = 0.3111

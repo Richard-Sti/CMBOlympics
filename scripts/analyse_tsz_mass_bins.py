@@ -14,23 +14,26 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Analyse tSZ profiles in mass bins."""
 
-import sys
 from pathlib import Path
+import sys
 
 import h5py
 import numpy as np
 from scipy.stats import ks_2samp
 
 import cmbolympics
-from cmbolympics.utils import (build_mass_bins,
-                               cartesian_icrs_to_galactic_spherical, fprint)
+from cmbolympics.utils import (
+    build_mass_bins,
+    cartesian_icrs_to_galactic_spherical,
+    fprint,
+)
 
 try:
     import tomllib as _toml_loader  # Python 3.11+
-except ModuleNotFoundError:
+except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
     try:
         import tomli as _toml_loader  # type: ignore
-    except ModuleNotFoundError as exc:
+    except ModuleNotFoundError as exc:  # pragma: no cover
         raise SystemExit(
             "tomli is required to read the configuration file "
             "(install with 'pip install tomli')."
@@ -41,38 +44,59 @@ tomli = _toml_loader
 
 def load_config(path):
     """Return the raw configuration dictionary loaded from a TOML file."""
+
     with open(path, "rb") as fh:
         return tomli.load(fh)
 
 
-def load_halo_catalogue(cfg):
-    """Load halo phase-space information and apply radial/angle/mass cuts."""
-    analysis_cfg = cfg["analysis"]
-    which_simulation = analysis_cfg["which_simulation"]
-    catalogue_cfg = cfg["halo_catalogues"][which_simulation]
+def load_halo_catalogue(cfg, nsim):
+    """Load halo phase-space information and apply selection cuts."""
 
-    if which_simulation == "csiborg2":
+    analysis_cfg = cfg["analysis"]
+    sim_key = analysis_cfg["which_simulation"]
+    catalogue_cfg = cfg["halo_catalogues"][sim_key]
+
+    if sim_key == "csiborg2":
         reader = cmbolympics.io.SimulationHaloReader(
             catalogue_cfg["fname"],
-            nsim=catalogue_cfg["nsim"],
+            nsim=nsim,
         )
-        center = np.full(3, catalogue_cfg["box_size"] / 2.0, dtype=float)
-        fprint(f"Using centre at {center} Mpc/h for {which_simulation}.")
+        centre = np.full(3, catalogue_cfg["box_size"] / 2.0, dtype=float)
+        fprint(
+            f"Using centre at {centre} Mpc/h for {sim_key} "
+            f"(simulation {nsim})."
+            )
         pos = reader["Coordinates"]
         mass = reader["Group_M_Crit200"]
-        rad = reader["Group_R_Crit200"]
-        r, ell, b = cartesian_icrs_to_galactic_spherical(pos, center)
+        r200 = reader["Group_R_Crit200"]
+        r, ell, b = cartesian_icrs_to_galactic_spherical(pos, centre)
     else:
-        raise ValueError(f"Unknown simulation '{which_simulation}'")
+        raise ValueError(f"Unknown simulation '{sim_key}'")
 
-    theta_arcmin = np.rad2deg(np.arctan(rad / r)) * 60
+    theta_arcmin = np.rad2deg(np.arctan(r200 / r)) * 60
     cuts = cfg["halo_cuts"]
+
     mask = np.isfinite(mass)
-    mask &= (r >= cuts["r_min"]) & (r <= cuts["r_max"])
+    mask &= mass > 0
+    mask &= np.isfinite(r)
+    mask &= r >= cuts["r_min"]
+    r_max = cuts.get("r_max")
+    if r_max is not None:
+        mask &= r <= r_max
     mask &= np.abs(b) >= cuts["b_min"]
     mask &= theta_arcmin >= cuts["theta_min"]
-    mask &= theta_arcmin <= cuts["theta_max"]
-    mask &= (mass >= cuts["mass_min"]) & (mass <= cuts["mass_max"])
+    theta_max = cuts.get("theta_max")
+    if theta_max is not None:
+        mask &= theta_arcmin <= theta_max
+    mask &= mass >= cuts["mass_min"]
+    mass_max = cuts.get("mass_max")
+    if mass_max is not None:
+        mask &= mass <= mass_max
+
+    if not np.any(mask):
+        raise ValueError(
+            f"No haloes passed the selection cuts for simulation {nsim}."
+        )
 
     selected = int(np.sum(mask))
     fprint(f"Selected {selected} haloes after applying cuts from {mass.size}.")
@@ -87,14 +111,16 @@ def load_halo_catalogue(cfg):
 
 
 def load_profiler(cfg):
-    """Initialise the profile extractor and radial sampling grid."""
+    """Initialise the profile extractor, sampling radii, and y-map."""
+
     map_cfg = cfg["input_map"]
     analysis_cfg = cfg["analysis"]
 
     y_map = cmbolympics.io.read_Planck_comptonSZ(map_cfg["signal_map"])
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
     fprint(
-        f"Loaded y-map {map_cfg['signal_map']}: mean={mu:.3e}, std={std:.3e}")
+        f"Loaded y-map {map_cfg['signal_map']}: mean={mu:.3e}, std={std:.3e}"
+    )
     y_map = cmbolympics.utils.smooth_map_gaussian(
         y_map,
         fwhm_arcmin=map_cfg["smooth_fwhm"],
@@ -117,71 +143,98 @@ def load_profiler(cfg):
         analysis_cfg["stack_n"],
     )
 
-    return profiler, radii_stack
+    return profiler, radii_stack, y_map
 
 
-def save_results_hdf5(path, halos, halo_pvals, results):
-    """Persist selected halo properties and per-bin statistics to HDF5."""
+def save_results_hdf5(path, simulations):
+    """Persist analysis outputs for one or more simulations to HDF5."""
+
     with h5py.File(path, "w") as h5:
-        halo_group = h5.create_group("halos")
-        for key, values in halos.items():
-            halo_group.create_dataset(key, data=np.asarray(values))
-        halo_group.create_dataset("pval_data", data=np.asarray(halo_pvals))
+        for sim_name, data in simulations.items():
+            sim_group = h5.create_group(str(sim_name))
 
-        if results:
-            pval_group = h5.create_group("halos_binned")
-            for idx, entry in enumerate(results):
-                bin_group = pval_group.create_group(f"bin_{idx:03d}")
-                bin_group.attrs["lo"] = entry["lo"]
-                bin_group.attrs["hi"] = (
+            halo_group = sim_group.create_group("halos")
+            for key, values in data["halos"].items():
+                halo_group.create_dataset(key, data=np.asarray(values))
+            halo_group.create_dataset(
+                "pval_data", data=np.asarray(data["halo_pvals"]))
+            if data.get("halo_bins") is not None:
+                halo_group.create_dataset(
+                    "bin_index", data=np.asarray(data["halo_bins"]))
+            if data.get("original_index") is not None:
+                halo_group.create_dataset(
+                    "original_index", data=np.asarray(data["original_index"]))
+
+            bin_results = data.get("results") or []
+            if not bin_results:
+                continue
+
+            bin_group = sim_group.create_group("halos_binned")
+            for idx, entry in enumerate(bin_results):
+                grp = bin_group.create_group(f"bin_{idx:03d}")
+                grp.attrs["lo"] = entry["lo"]
+                grp.attrs["hi"] = (
                     entry["hi"] if entry["hi"] is not None else np.nan
                 )
-                bin_group.attrs["median_log_mass"] = entry["median_log_mass"]
-                bin_group.attrs["count"] = entry["count"]
-                bin_group.attrs["ks_stat"] = entry["ks_stat"]
-                bin_group.attrs["ks_p"] = entry["ks_p"]
+                grp.attrs["median_log_mass"] = entry["median_log_mass"]
+                grp.attrs["count"] = entry["count"]
+                grp.attrs["ks_stat"] = entry["ks_stat"]
+                grp.attrs["ks_p"] = entry["ks_p"]
 
-                bin_group.create_dataset(
-                    "pval_data", data=np.asarray(entry["pval_data"]))
-                bin_group.create_dataset(
-                    "pval_rand", data=np.asarray(entry["pval_rand"]))
-                bin_group.create_dataset(
+                grp.create_dataset(
+                    "pval_data",
+                    data=np.asarray(entry["pval_data"]),
+                )
+                grp.create_dataset(
+                    "pval_rand",
+                    data=np.asarray(entry["pval_rand"]),
+                )
+                grp.create_dataset(
                     "stacked_profile",
-                    data=np.asarray(entry["stacked_profile"]))
-                bin_group.create_dataset(
-                    "stacked_error", data=np.asarray(entry["stacked_error"]))
-                bin_group.create_dataset(
-                    "random_profile", data=np.asarray(entry["random_profile"]))
-                bin_group.create_dataset(
-                    "random_error", data=np.asarray(entry["random_error"]))
-                bin_group.create_dataset(
-                    "radii_norm", data=np.asarray(entry["radii_norm"]))
+                    data=np.asarray(entry["stacked_profile"]),
+                )
+                grp.create_dataset(
+                    "stacked_error",
+                    data=np.asarray(entry["stacked_error"]),
+                )
+                grp.create_dataset(
+                    "random_profile",
+                    data=np.asarray(entry["random_profile"]),
+                )
+                grp.create_dataset(
+                    "random_error",
+                    data=np.asarray(entry["random_error"]),
+                )
+                grp.create_dataset(
+                    "radii_norm",
+                    data=np.asarray(entry["radii_norm"]),
+                )
 
                 if entry["cutout_mean"] is not None:
-                    bin_group.create_dataset(
-                        "cutout_mean", data=np.asarray(entry["cutout_mean"]))
+                    grp.create_dataset(
+                        "cutout_mean",
+                        data=np.asarray(entry["cutout_mean"]),
+                    )
                 if entry["cutout_extent"] is not None:
-                    bin_group.create_dataset(
+                    grp.create_dataset(
                         "cutout_extent",
-                        data=np.asarray(entry["cutout_extent"], dtype=float))
+                        data=np.asarray(entry["cutout_extent"], dtype=float),
+                    )
                 if entry["cutout_random_mean"] is not None:
-                    bin_group.create_dataset(
+                    grp.create_dataset(
                         "cutout_random_mean",
-                        data=np.asarray(entry["cutout_random_mean"]))
+                        data=np.asarray(entry["cutout_random_mean"]),
+                    )
 
 
-def main():
-    """Entry-point for the command-line script."""
-    config_path = sys.argv[1]
-    cfg = load_config(config_path)
-    fprint(f"Loaded config from {config_path}")
+def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
+                       tsz_rand, cutout_extractor, cutout_params, sim_index):
+    """Run the full analysis pipeline for a single simulation ID."""
 
-    halos = load_halo_catalogue(cfg)
     analysis_cfg = cfg["analysis"]
     mass_cfg = cfg["mass_bins"]
-    map_cfg = cfg["input_map"]
 
-    # Compute aperture size and log-mass.
+    halos = load_halo_catalogue(cfg, sim_id)
     halos["aperture"] = analysis_cfg["aperture_scale"] * halos["theta"]
     halos["log_mass"] = np.log10(halos["mass"])
 
@@ -192,38 +245,12 @@ def main():
         verbose=mass_cfg["verbose_bins"],
     )
 
-    profiler, radii_stack = load_profiler(cfg)
-    fprint("Initialised profile extractor.")
+    rng_seed = analysis_cfg["seed"]
+    if rng_seed is not None:
+        rng_seed += sim_index
+    rng = np.random.default_rng(rng_seed)
 
-    cutout_pixels = analysis_cfg.get("cutout_pixels", 301)
-    cutout_nbins = analysis_cfg.get("cutout_nbins", 256)
-    cutout_halfsize = analysis_cfg.get("cutout_grid_halfsize", None)
-    cutouter = cmbolympics.corr.Pointing2DCutout(
-        profiler.m,
-        npix=cutout_pixels,
-        nbins=cutout_nbins,
-        grid_halfsize=cutout_halfsize,
-    )
-    cutout_size_scale = analysis_cfg.get("cutout_size_scale", 5.0)
-    cutout_random_samples = analysis_cfg.get("cutout_random_samples")
-    cutout_random_abs_b_min = analysis_cfg.get("cutout_random_abs_b_min", 10.0)
-    cutout_random_seed = analysis_cfg.get(
-        "cutout_random_seed", analysis_cfg["seed"])
-    cutout_max_bins = analysis_cfg.get("cutout_max_bins", 2)
-
-    theta_rand, tsz_rand = cmbolympics.io.read_from_hdf5(
-        map_cfg["random_pointing"],
-        "theta_rand",
-        "tsz_rand",
-    )
-    fprint(
-        f"Loaded random pointing pool from {map_cfg['random_pointing']} "
-        f"with shape {tsz_rand.shape}."
-    )
-
-    rng = np.random.default_rng(analysis_cfg["seed"])
     subtract_bg = analysis_cfg["subtract_background"]
-
     signal = profiler.get_profiles_per_source(
         halos["ell"],
         halos["b"],
@@ -235,33 +262,39 @@ def main():
     if pool_samples is not None and pool_samples <= 0:
         pool_samples = None
 
-    if cutout_random_samples is not None and cutout_random_samples <= 0:
-        cutout_random_samples = None
+    size_scale = cutout_params["size_scale"]
+    random_samples = cutout_params["random_samples"]
+    random_abs_b_min = cutout_params["random_abs_b_min"]
+    base_cutout_seed = cutout_params["random_seed"]
+    if base_cutout_seed is not None:
+        base_cutout_seed += sim_index
+    max_cutout_bins = cutout_params["max_bins"]
 
     results = []
     halo_pval_data = np.full(halos["mass"].shape, np.nan, dtype=float)
     halo_bin_index = np.full(halos["mass"].shape, -1, dtype=int)
 
     for bin_idx, ((lo, hi), median) in enumerate(zip(edges, medians)):
-        # Flag haloes whose masses fall within the current bin.
-        bin_mask = halos["log_mass"] >= lo
+        mask = halos["log_mass"] >= lo
         if hi is not None:
-            bin_mask &= halos["log_mass"] < hi
+            mask &= halos["log_mass"] < hi
 
-        if not np.any(bin_mask):
-            fprint(f"No haloes in mass bin [{lo:.2f}, "
-                   f"{'∞' if hi is None else f'{hi:.2f}'}). Skipping.")
+        if not np.any(mask):
+            fprint(
+                f"[Sim {sim_id}] No haloes in mass bin"
+                f" [{lo:.2f}, {'∞' if hi is None else f'{hi:.2f}'}). Skipping."
+            )
             continue
 
         fprint(
-            f"[Bin {bin_idx}] Selecting haloes for "
+            f"[Sim {sim_id}] [Bin {bin_idx}] Selecting haloes for "
             f"{lo:.2f} ≤ log M < {hi if hi is not None else '∞'}: "
-            f"{bin_mask.sum()} candidates."
+            f"{mask.sum()} candidates."
         )
 
         pval_data, pval_rand = cmbolympics.corr.empirical_pvalues_by_theta(
-            halos["aperture"][bin_mask],
-            signal[bin_mask],
+            halos["aperture"][mask],
+            signal[mask],
             theta_rand,
             tsz_rand,
             random_pool_samples=pool_samples,
@@ -270,18 +303,16 @@ def main():
         )
 
         fprint(
-            f"[Bin {bin_idx}] Computed empirical p-values for "
-            f"{lo:.2f} ≤ log M < {hi if hi is not None else '∞'}."
+            f"[Sim {sim_id}] [Bin {bin_idx}] Computed empirical p-values "
+            f"for {lo:.2f} ≤ log M < {hi if hi is not None else '∞'}."
         )
 
-        # Compare the two empirical distributions using a KS test.
         ks_stat, ks_p = ks_2samp(pval_data, pval_rand)
 
-        # Stack profiles for the haloes belonging to this bin.
         stack = profiler.stack_normalized_profiles(
-            halos["ell"][bin_mask],
-            halos["b"][bin_mask],
-            halos["aperture"][bin_mask],
+            halos["ell"][mask],
+            halos["b"][mask],
+            halos["aperture"][mask],
             radii_stack,
             subtract_background=subtract_bg,
             n_boot=analysis_cfg["bootstrap"],
@@ -292,55 +323,59 @@ def main():
         )
         stacked_profile, stacked_err, rand_mean, rand_err = stack
 
-        fprint(f"[Bin {bin_idx}] Generated stacked profiles "
-               "and summary statistics.")
+        fprint(
+            f"[Sim {sim_id}] [Bin {bin_idx}] Generated stacked profiles "
+            "and summary statistics."
+        )
 
         cutout_mean = None
+        cutout_random_mean = None
         cutout_extent = None
-        random_cutout_mean = None
-        if cutout_max_bins is None or bin_idx < cutout_max_bins:
-            cutout_sizes = cutout_size_scale * halos["theta"][bin_mask]
-            _, cutout_mean, cutout_extent = cutouter.stack_cutouts(
-                halos["ell"][bin_mask],
-                halos["b"][bin_mask],
+        if max_cutout_bins is None or bin_idx < max_cutout_bins:
+            cutout_sizes = size_scale * halos["theta"][mask]
+            _, cutout_mean, cutout_extent = cutout_extractor.stack_cutouts(
+                halos["ell"][mask],
+                halos["b"][mask],
                 cutout_sizes,
-                halos["theta"][bin_mask],
+                halos["theta"][mask],
             )
-            fprint(f"[Bin {bin_idx}] Computed 2D cutout stack "
-                   f"on a {cutout_nbins}x{cutout_nbins} grid.")
+            fprint(
+                f"[Sim {sim_id}] [Bin {bin_idx}] Computed 2D cutout stack "
+                f"on a {cutout_extractor.nbins}x{cutout_extractor.nbins} grid."
+            )
 
-            if cutout_random_samples:
-                seed = (cutout_random_seed + bin_idx
-                        if cutout_random_seed is not None else None)
-                _, random_cutout_mean, _ = cutouter.stack_random_cutouts(
-                    halos["theta"][bin_mask],
-                    n_stack=cutout_random_samples,
-                    size_factor=cutout_size_scale,
-                    abs_b_min=cutout_random_abs_b_min,
-                    seed=seed,
+            if random_samples:
+                rand_seed = (base_cutout_seed + bin_idx
+                             if base_cutout_seed is not None else None)
+                _, cutout_random_mean, _ = \
+                    cutout_extractor.stack_random_cutouts(
+                        halos["theta"][mask],
+                        n_stack=random_samples,
+                        size_factor=size_scale,
+                        abs_b_min=random_abs_b_min,
+                        seed=rand_seed,
+                    )
+                fprint(
+                    f"[Sim {sim_id}] [Bin {bin_idx}] Computed random 2D "
+                    f"cutout stack with {random_samples} samples."
                 )
-                fprint(f"[Bin {bin_idx}] Computed random 2D cutout stack "
-                       f"with {cutout_random_samples} samples.")
 
-        # Store per-halo diagnostics aligned with the original selection.
-        halo_indices = np.nonzero(bin_mask)[0]
-        halo_pval_data[halo_indices] = pval_data
-        halo_bin_index[halo_indices] = bin_idx
+        indices = np.nonzero(mask)[0]
+        halo_pval_data[indices] = pval_data
+        halo_bin_index[indices] = bin_idx
 
         hi_str = "∞" if hi is None else f"{hi:.2f}"
-        cnt = bin_mask.sum()
-        msg = (
-            f"log M ∈ [{lo:.2f}, {hi_str}): N={cnt}, "
+        fprint(
+            f"[Sim {sim_id}] log M ∈ [{lo:.2f}, {hi_str}): N={mask.sum()}, "
             f"median log M={median:.2f}, KS p-value={ks_p:.3e}"
         )
-        fprint(msg)
 
         results.append(
             {
                 "lo": lo,
                 "hi": hi,
                 "median_log_mass": median,
-                "count": cnt,
+                "count": mask.sum(),
                 "ks_stat": ks_stat,
                 "ks_p": ks_p,
                 "pval_data": pval_data,
@@ -351,34 +386,124 @@ def main():
                 "random_error": rand_err,
                 "radii_norm": radii_stack,
                 "cutout_mean": cutout_mean,
-                "cutout_random_mean": random_cutout_mean,
+                "cutout_random_mean": cutout_random_mean,
                 "cutout_extent": cutout_extent,
             }
         )
 
-    if not results:
-        fprint("No bins contained haloes after filtering")
-
-    output_dir = analysis_cfg.get("output_folder", ".")
-    secondary_tag = analysis_cfg.get("output_tag", None)
-    sim_tag = analysis_cfg["which_simulation"]
-    stem = sim_tag if not secondary_tag else f"{sim_tag}_{secondary_tag}"
-    output_path = Path(output_dir).expanduser().resolve() / f"{stem}.hdf5"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Sort results so the largest haloes appear first in the output file.
     mass_order = np.argsort(-np.asarray(halos["mass"]))
     halos_sorted = {
         key: np.asarray(values)[mass_order]
         for key, values in halos.items()
     }
-    halo_pvals_sorted = halo_pval_data[mass_order]
-    save_results_hdf5(
-        output_path,
-        halos_sorted,
-        halo_pvals_sorted,
-        results,
+
+    return {
+        "halos": halos_sorted,
+        "halo_pvals": halo_pval_data[mass_order],
+        "halo_bins": halo_bin_index[mass_order],
+        "original_index": mass_order,
+        "results": results,
+    }
+
+
+def determine_simulations(catalogue_cfg, requested):
+    """Return the list of simulation identifiers to process."""
+
+    if isinstance(requested, str) and requested.lower() == "all":
+        sims = cmbolympics.io.list_simulations_hdf5(catalogue_cfg["fname"])
+        sims = sims[:2]
+
+        fprint(f"Processing simulations {sims}.")
+
+        return [str(sim) for sim in sims]
+
+    if requested is None:
+        raise ValueError(
+            "nsim must be provided in halo_catalogues when not using 'all'."
+        )
+
+    return [str(requested)]
+
+
+def main():
+    """Entry-point for the command-line script."""
+
+    config_path = sys.argv[1]
+    cfg = load_config(config_path)
+    fprint(f"Loaded config from {config_path}")
+
+    analysis_cfg = cfg["analysis"]
+    map_cfg = cfg["input_map"]
+
+    profiler, radii_stack, y_map = load_profiler(cfg)
+    fprint("Initialised profile extractor.")
+
+    cutout_pixels = analysis_cfg.get("cutout_pixels", 301)
+    cutout_nbins = analysis_cfg.get("cutout_nbins", 128)
+    cutout_halfsize = analysis_cfg.get("cutout_grid_halfsize")
+    cutout_extractor = cmbolympics.corr.Pointing2DCutout(
+        y_map,
+        npix=cutout_pixels,
+        nbins=cutout_nbins,
+        grid_halfsize=cutout_halfsize,
     )
+
+    cutout_params = {
+        "size_scale": analysis_cfg.get("cutout_size_scale", 5.0),
+        "random_samples": analysis_cfg.get("cutout_random_samples"),
+        "random_abs_b_min": analysis_cfg.get("cutout_random_abs_b_min", 10.0),
+        "random_seed": analysis_cfg.get(
+            "cutout_random_seed",
+            analysis_cfg["seed"],
+        ),
+        "max_bins": analysis_cfg.get("cutout_max_bins", 2),
+    }
+    if (
+        cutout_params["random_samples"] is not None
+        and cutout_params["random_samples"] <= 0
+    ):
+        cutout_params["random_samples"] = None
+
+    theta_rand, tsz_rand = cmbolympics.io.read_from_hdf5(
+        map_cfg["random_pointing"],
+        "theta_rand",
+        "tsz_rand",
+    )
+    fprint(
+        f"Loaded random pointing pool from {map_cfg['random_pointing']} "
+        f"with shape {tsz_rand.shape}."
+    )
+
+    sim_key = analysis_cfg["which_simulation"]
+    catalogue_cfg = cfg["halo_catalogues"][sim_key]
+    sim_ids = determine_simulations(catalogue_cfg, catalogue_cfg.get("nsim"))
+
+    results_by_sim = {}
+    for idx, sim_id in enumerate(sim_ids):
+        fprint(f"Processing simulation {sim_id}")
+        results_by_sim[sim_id] = process_simulation(
+            cfg,
+            sim_id,
+            profiler,
+            radii_stack,
+            theta_rand,
+            tsz_rand,
+            cutout_extractor,
+            cutout_params,
+            idx,
+        )
+
+    if not results_by_sim:
+        fprint("No simulations produced results; aborting save.")
+        return
+
+    output_dir = Path(analysis_cfg.get("output_folder", ".")).expanduser()
+    secondary_tag = analysis_cfg.get("output_tag")
+    stem = sim_key if not secondary_tag else f"{sim_key}_{secondary_tag}"
+    output_path = (output_dir / f"{stem}.hdf5").resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    save_results_hdf5(output_path, results_by_sim)
     fprint(f"Wrote outputs to {output_path}")
 
 
