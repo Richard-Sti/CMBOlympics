@@ -30,10 +30,7 @@ class BinResult:
     hi: Optional[float]
     log_median_mass: float
     count: int
-    ks_stat: float
-    ks_p: float
     pval_data: np.ndarray
-    pval_rand: np.ndarray
     stacked_profile: Optional[np.ndarray] = None
     stacked_error: Optional[np.ndarray] = None
     random_profile: Optional[np.ndarray] = None
@@ -228,10 +225,7 @@ class TSZMassBinResults:
                     hi=self._normalise_hi(subgrp.attrs["hi"]),
                     log_median_mass=float(subgrp.attrs["median_log_mass"]),
                     count=int(subgrp.attrs["count"]),
-                    ks_stat=float(subgrp.attrs["ks_stat"]),
-                    ks_p=float(subgrp.attrs["ks_p"]),
                     pval_data=subgrp["pval_data"][...],
-                    pval_rand=subgrp["pval_rand"][...],
                 )
                 if self.include_profiles and "stacked_profile" in subgrp:
                     entry_kwargs.update(

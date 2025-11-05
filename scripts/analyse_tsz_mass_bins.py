@@ -19,7 +19,6 @@ import sys
 
 import h5py
 import numpy as np
-from scipy.stats import ks_2samp
 
 import cmbo
 from cmbo.utils import (
@@ -178,16 +177,10 @@ def save_results_hdf5(path, simulations):
                 )
                 grp.attrs["median_log_mass"] = entry["median_log_mass"]
                 grp.attrs["count"] = entry["count"]
-                grp.attrs["ks_stat"] = entry["ks_stat"]
-                grp.attrs["ks_p"] = entry["ks_p"]
 
                 grp.create_dataset(
                     "pval_data",
                     data=np.asarray(entry["pval_data"]),
-                )
-                grp.create_dataset(
-                    "pval_rand",
-                    data=np.asarray(entry["pval_rand"]),
                 )
                 grp.create_dataset(
                     "stacked_profile",
@@ -292,22 +285,17 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             f"{mask.sum()} candidates."
         )
 
-        pval_data, pval_rand = cmbo.corr.empirical_pvalues_by_theta(
+        pval_data = profiler.signal_to_pvalue(
             halos["aperture"][mask],
             signal[mask],
             theta_rand,
             tsz_rand,
-            random_pool_samples=pool_samples,
-            random_theta_samples=analysis_cfg["random_theta_samples"],
-            rng=rng,
         )
 
         fprint(
             f"[Sim {sim_id}] [Bin {bin_idx}] Computed empirical p-values "
             f"for {lo:.2f} ≤ log M < {hi if hi is not None else '∞'}."
         )
-
-        ks_stat, ks_p = ks_2samp(pval_data, pval_rand)
 
         stack = profiler.stack_normalized_profiles(
             halos["ell"][mask],
@@ -367,7 +355,7 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         hi_str = "∞" if hi is None else f"{hi:.2f}"
         fprint(
             f"[Sim {sim_id}] log M ∈ [{lo:.2f}, {hi_str}): N={mask.sum()}, "
-            f"median log M={median:.2f}, KS p-value={ks_p:.3e}"
+            f"median log M={median:.2f}"
         )
 
         results.append(
@@ -376,10 +364,7 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
                 "hi": hi,
                 "median_log_mass": median,
                 "count": mask.sum(),
-                "ks_stat": ks_stat,
-                "ks_p": ks_p,
                 "pval_data": pval_data,
-                "pval_rand": pval_rand,
                 "stacked_profile": stacked_profile,
                 "stacked_error": stacked_err,
                 "random_profile": rand_mean,
