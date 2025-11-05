@@ -202,6 +202,16 @@ def save_results_hdf5(path, simulations):
                     "radii_norm",
                     data=np.asarray(entry["radii_norm"]),
                 )
+                if entry.get("individual_profiles") is not None:
+                    grp.create_dataset(
+                        "individual_profiles",
+                        data=np.asarray(entry["individual_profiles"]),
+                    )
+                if entry.get("random_profiles") is not None:
+                    grp.create_dataset(
+                        "random_profiles",
+                        data=np.asarray(entry["random_profiles"]),
+                    )
 
                 if entry["cutout_mean"] is not None:
                     grp.create_dataset(
@@ -237,11 +247,6 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         top_counts=mass_cfg["top_counts"],
         verbose=mass_cfg["verbose_bins"],
     )
-
-    rng_seed = analysis_cfg["seed"]
-    if rng_seed is not None:
-        rng_seed += sim_index
-    rng = np.random.default_rng(rng_seed)
 
     subtract_bg = analysis_cfg["subtract_background"]
     signal = profiler.get_profiles_per_source(
@@ -297,6 +302,9 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             f"for {lo:.2f} ≤ log M < {hi if hi is not None else '∞'}."
         )
 
+        return_individual = analysis_cfg.get("return_individual_profiles", True)
+        return_random = analysis_cfg.get("return_random_profiles", True)
+
         stack = profiler.stack_normalized_profiles(
             halos["ell"][mask],
             halos["b"][mask],
@@ -308,8 +316,19 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             random_profile_pool=tsz_rand,
             random_pool_radii=theta_rand,
             random_pool_samples=pool_samples,
+            return_individual=return_individual,
+            return_random_profiles=return_random,
         )
-        stacked_profile, stacked_err, rand_mean, rand_err = stack
+        stack_out = stack
+        stacked_profile, stacked_err, rand_mean, rand_err = stack_out[:4]
+        individual = None
+        random_profiles = None
+        idx = 4
+        if return_individual:
+            individual = stack_out[idx]
+            idx += 1
+        if return_random:
+            random_profiles = stack_out[idx]
 
         fprint(
             f"[Sim {sim_id}] [Bin {bin_idx}] Generated stacked profiles "
@@ -370,6 +389,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
                 "random_profile": rand_mean,
                 "random_error": rand_err,
                 "radii_norm": radii_stack,
+                "individual_profiles": individual,
+                "random_profiles": random_profiles,
                 "cutout_mean": cutout_mean,
                 "cutout_random_mean": cutout_random_mean,
                 "cutout_extent": cutout_extent,
@@ -398,6 +419,7 @@ def determine_simulations(catalogue_cfg, requested):
         sims = cmbo.io.list_simulations_hdf5(catalogue_cfg["fname"])
 
         fprint(f"Processing simulations {sims}.")
+        sims = sims[:2]
 
         return [str(sim) for sim in sims]
 
