@@ -36,4 +36,8 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 ```
 
-Installing in editable mode pulls the dependencies declared in `setup.py`. For a full list of dependencies, please refer to the `setup.py` file.
+Installing in editable mode pulls the dependencies declared in `setup.py`. Alternatively, you can install the dependencies directly from `requirements.txt` using:
+
+```bash
+pip install -r requirements.txt
+```

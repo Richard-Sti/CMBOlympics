@@ -1,0 +1,13 @@
+numpy
+healpy
+matplotlib
+scipy
+h5py
+tomli
+tomli_w
+scienceplots
+tqdm
+scikit-learn
+astropy
+cmasher
+colossus
