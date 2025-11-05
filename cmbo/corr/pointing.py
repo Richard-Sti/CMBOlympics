@@ -475,6 +475,64 @@ class PointingEnclosedProfile:
         print(f"Skipped {num_skipped} / {n_points} profiles due to NaNs.")
         return np.asarray(profiles, dtype=float)
 
+    def signal_to_pvalue(self, theta_arcmin, signal, theta_rand, tsz_rand):
+        """
+        Convert signal values to empirical p-values using random pointings.
+
+        For each signal, finds the corresponding theta in the random pool
+        and computes the empirical p-value based on the rank of the signal
+        in the sorted random pool.
+
+        Parameters
+        ----------
+        theta_arcmin : array_like
+            Angular sizes for the data measurements in arcminutes.
+        signal : array_like
+            Measured signal per source. Must match theta_arcmin in shape.
+        theta_rand : array_like
+            Angular sizes for the random pointings.
+        tsz_rand : array_like
+            Signal measurements for the random pointings. Shape must be
+            (n_random, n_theta) where n_theta = len(theta_rand).
+
+        Returns
+        -------
+        pval : ndarray
+            Empirical p-values for each signal measurement.
+        """
+        theta_arcmin = np.asarray(theta_arcmin, dtype=float)
+        signal = np.asarray(signal, dtype=float)
+        theta_rand = np.asarray(theta_rand, dtype=float)
+        tsz_rand = np.asarray(tsz_rand, dtype=float)
+
+        if theta_arcmin.shape != signal.shape:
+            raise ValueError(
+                "theta_arcmin and signal must have the same shape."
+            )
+
+        if tsz_rand.ndim != 2:
+            raise ValueError("tsz_rand must be 2D.")
+
+        n_rand, n_theta = tsz_rand.shape
+        if theta_rand.shape[0] != n_theta:
+            raise ValueError(
+                "theta_rand length must equal tsz_rand second dimension."
+            )
+
+        def _pvalue_from_pool(val, pool):
+            rank = np.searchsorted(pool, val, side="left")
+            return 1.0 - rank / pool.size
+
+        n_data = signal.size
+        pval = np.empty(n_data, dtype=float)
+
+        for i, (theta, sig) in enumerate(zip(theta_arcmin, signal)):
+            j = int(np.argmin(np.abs(theta_rand - theta)))
+            pool = np.sort(tsz_rand[:, j])
+            pval[i] = _pvalue_from_pool(sig, pool)
+
+        return pval
+
 
 def empirical_pvalues_by_theta(theta_arcmin, signal, theta_rand, tsz_rand,
                                random_pool_samples=None,
