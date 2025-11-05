@@ -202,7 +202,7 @@ class PointingEnclosedProfile:
                 from contextlib import nullcontext
                 ctx = tqdm_joblib(tqdm(total=n, desc="Measuring profiles",
                                        disable=not verbose)) \
-                    if 'tqdm_joblib' in globals() and verbose else nullcontext()
+                    if 'tqdm_joblib' in globals() and verbose else nullcontext()  # noqa
 
                 with ctx:
                     res = Parallel(n_jobs=self.n_jobs, prefer=self.prefer,
@@ -480,7 +480,7 @@ class PointingEnclosedProfile:
         print(f"Skipped {num_skipped} / {n_points} profiles due to NaNs.")
         return np.asarray(profiles, dtype=float)
 
-    def signal_to_pvalue(self, theta_arcmin, signal, theta_rand, tsz_rand):
+    def signal_to_pvalue(self, theta_arcmin, signal, theta_rand, map_rand):
         """
         Convert signal values to empirical p-values using random pointings.
 
@@ -496,7 +496,7 @@ class PointingEnclosedProfile:
             Measured signal per source. Must match theta_arcmin in shape.
         theta_rand : array_like
             Angular sizes for the random pointings.
-        tsz_rand : array_like
+        map_rand : array_like
             Signal measurements for the random pointings. Shape must be
             (n_random, n_theta) where n_theta = len(theta_rand).
 
@@ -508,20 +508,20 @@ class PointingEnclosedProfile:
         theta_arcmin = np.asarray(theta_arcmin, dtype=float)
         signal = np.asarray(signal, dtype=float)
         theta_rand = np.asarray(theta_rand, dtype=float)
-        tsz_rand = np.asarray(tsz_rand, dtype=float)
+        map_rand = np.asarray(map_rand, dtype=float)
 
         if theta_arcmin.shape != signal.shape:
             raise ValueError(
                 "theta_arcmin and signal must have the same shape."
             )
 
-        if tsz_rand.ndim != 2:
-            raise ValueError("tsz_rand must be 2D.")
+        if map_rand.ndim != 2:
+            raise ValueError("map_rand must be 2D.")
 
-        n_rand, n_theta = tsz_rand.shape
+        n_rand, n_theta = map_rand.shape
         if theta_rand.shape[0] != n_theta:
             raise ValueError(
-                "theta_rand length must equal tsz_rand second dimension."
+                "theta_rand length must equal map_rand second dimension."
             )
 
         def _pvalue_from_pool(val, pool):
@@ -533,7 +533,7 @@ class PointingEnclosedProfile:
 
         for i, (theta, sig) in enumerate(zip(theta_arcmin, signal)):
             j = int(np.argmin(np.abs(theta_rand - theta)))
-            pool = np.sort(tsz_rand[:, j])
+            pool = np.sort(map_rand[:, j])
             pval[i] = _pvalue_from_pool(sig, pool)
 
         return pval

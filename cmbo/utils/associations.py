@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import numpy as np
+from tqdm import tqdm
 from .coords import cartesian_icrs_to_galactic_spherical
 
 
@@ -17,6 +18,16 @@ class HaloAssociation:
     member_indices: np.ndarray
     fraction_present: float
     optional_data: dict = field(default=None)
+
+    # Map signal fields (populated by compute_map_signals)
+    median_galactic: tuple = field(default=None)  # (r, ell, b)
+    median_theta200: float = field(default=None)
+    median_signal: float = field(default=None)
+    median_pval: float = field(default=None)
+    halo_galactic: tuple = field(default=None)  # (r, ell, b) arrays
+    halo_theta200: np.ndarray = field(default=None)
+    halo_signals: np.ndarray = field(default=None)
+    halo_pvals: np.ndarray = field(default=None)
 
     def keys(self):
         keys = [
@@ -114,6 +125,121 @@ class HaloAssociation:
             self.centroid.reshape(1, 3), center
         )
         return float(r[0]), float(ell[0]), float(b[0])
+
+    def compute_map_signals(self, profiler, obs_pos, theta_rand, map_rand,
+                            r_key="Group_R_Crit200", coord_system="icrs"):
+        """
+        Compute and store map signals and p-values for this association.
+
+        Computes signals at both the median position and for each individual
+        halo. Results are stored directly in the association object.
+
+        Parameters
+        ----------
+        profiler
+            PointingEnclosedProfile instance for measuring map signals.
+        obs_pos
+            Observer position (3D array) in same coordinate system as
+            association positions.
+        theta_rand
+            Angular sizes for random pointings (arcmin).
+        map_rand
+            Map signals for random pointings, shape (n_random, n_theta).
+        r_key
+            Key in optional_data for halo radii (e.g., 'Group_R_Crit200').
+        coord_system
+            Coordinate system of positions. Currently only "icrs".
+        """
+        if coord_system != "icrs":
+            raise ValueError(
+                f"coord_system='{coord_system}' not supported. "
+                "Currently only 'icrs' is available."
+            )
+
+        if r_key not in self.optional_data:
+            raise KeyError(
+                f"Association {self.label} missing '{r_key}' in "
+                "optional_data."
+            )
+
+        # Get galactic coordinates for all haloes
+        r, ell, b = self.to_galactic_angular(obs_pos, coord_system)
+        radii = self.optional_data[r_key]
+
+        # Compute aperture sizes
+        theta200 = np.rad2deg(np.arctan(radii / r)) * 60
+
+        # Compute median position and aperture
+        median_r = float(np.median(r))
+        median_ell = float(np.median(ell))
+        median_b = float(np.median(b))
+        median_theta200 = float(np.median(theta200))
+
+        # Measure signal at median position
+        median_signal = float(profiler.get_profile(
+            median_ell, median_b, median_theta200
+        ))
+
+        # Compute p-value for median
+        median_pval = float(profiler.signal_to_pvalue(
+            np.array([median_theta200]),
+            np.array([median_signal]),
+            theta_rand,
+            map_rand
+        )[0])
+
+        # Measure signals for all haloes (disable progress bar)
+        halo_signals = profiler.get_profiles_per_source(
+            ell, b, theta200, verbose=False
+        )
+
+        # Compute p-values for all haloes
+        halo_pvals = profiler.signal_to_pvalue(
+            theta200, halo_signals, theta_rand, map_rand
+        )
+
+        # Store results
+        self.median_galactic = (median_r, median_ell, median_b)
+        self.median_theta200 = median_theta200
+        self.median_signal = median_signal
+        self.median_pval = median_pval
+        self.halo_galactic = (r, ell, b)
+        self.halo_theta200 = theta200
+        self.halo_signals = halo_signals
+        self.halo_pvals = halo_pvals
+
+
+def compute_association_signals(associations, profiler, obs_pos,
+                                theta_rand, map_rand,
+                                r_key="Group_R_Crit200",
+                                coord_system="icrs"):
+    """
+    Compute map signals for all associations in a list.
+
+    Calls compute_map_signals() on each association, storing results
+    directly in the association objects.
+
+    Parameters
+    ----------
+    associations
+        List of HaloAssociation objects.
+    profiler
+        PointingEnclosedProfile instance for measuring map signals.
+    obs_pos
+        Observer position (3D array).
+    theta_rand
+        Angular sizes for random pointings (arcmin).
+    map_rand
+        Map signals for random pointings, shape (n_random, n_theta).
+    r_key
+        Key in optional_data for halo radii.
+    coord_system
+        Coordinate system of positions. Currently only "icrs".
+    """
+    for assoc in tqdm(associations, desc="Computing association signals"):
+        assoc.compute_map_signals(
+            profiler, obs_pos, theta_rand, map_rand, r_key, coord_system
+        )
 
 
 def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,

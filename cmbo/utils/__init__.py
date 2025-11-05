@@ -24,7 +24,7 @@ from .coords import (  # noqa: F401
 from .associations import (  # noqa: F401
     HaloAssociation,
     identify_halo_associations,
-    compute_association_tsz_signals,
+    compute_association_signals,
 )
 from .cluster_matching import (  # noqa: F401
     compute_matching_matrix,
