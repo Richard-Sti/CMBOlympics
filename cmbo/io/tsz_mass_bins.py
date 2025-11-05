@@ -36,6 +36,8 @@ class BinResult:
     random_profile: Optional[np.ndarray] = None
     random_error: Optional[np.ndarray] = None
     radii_norm: Optional[np.ndarray] = None
+    individual_profiles: Optional[np.ndarray] = None
+    random_profiles: Optional[np.ndarray] = None
     cutout_mean: Optional[np.ndarray] = None
     cutout_random_mean: Optional[np.ndarray] = None
     cutout_extent: Optional[np.ndarray] = None
@@ -235,6 +237,14 @@ class TSZMassBinResults:
                         random_error=subgrp["random_error"][...],
                         radii_norm=subgrp["radii_norm"][...],
                     )
+                if self.include_profiles and "individual_profiles" in subgrp:
+                    entry_kwargs["individual_profiles"] = subgrp[
+                        "individual_profiles"
+                    ][...]
+                if self.include_profiles and "random_profiles" in subgrp:
+                    entry_kwargs["random_profiles"] = subgrp[
+                        "random_profiles"
+                    ][...]
                 if "cutout_mean" in subgrp:
                     entry_kwargs["cutout_mean"] = subgrp["cutout_mean"][...]
                 if "cutout_random_mean" in subgrp:
