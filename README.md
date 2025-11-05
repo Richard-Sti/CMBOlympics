@@ -20,12 +20,20 @@ The purpose of stacking 1D profiles is to detect the average tSZ signal as a fun
 
 - **Stacking:** Before stacking 1D profiles, they are typically normalized by the angular size of their respective halo (e.g., `theta200`) to allow for a consistent co-addition. The `cmbo.corr.pointing.stack_normalized_profiles` function handles this process.
 
-- **Stacked Significance:** To test the significance of the average tSZ signal from a population of haloes, stacking multiple profiles significantly enhances the signal-to-noise ratio. The significance of this stacked signal is then determined by comparing the stacked halo profile against a stacked profile derived from random sky locations. The signal-to-noise ratio (SNR) is calculated at each radial bin using the formula: `SNR = (stacked_halo_profile - mean_random_profile) / sqrt(halo_profile_error**2 + random_profile_error**2)`. Errors for both halo and random profiles are typically estimated using bootstrap resampling (`cmbo.corr.pointing.bootstrap_profile_mean`).
+- **Stacked Significance:** The significance of the stacked tSZ profile is determined by comparing it to a large number of stacked profiles generated from random sky locations. Crucially, each random stacked profile is constructed from the same number of random pointings as there are halos in the corresponding mass bin. This process is repeated many times to build a distribution of random stacks. Two primary methods are used in `scripts/analyse_tsz_mass_bins.py`:
+    -   **Empirical p-value:** The stacked halo profile is compared against the distribution of random stacked profiles at each radial bin. The p-value is the fraction of random stacks that have a signal greater than or equal to the halo stack. This is then converted to a significance level (σ).
+    -   **t-distribution Fit:** As an alternative to the empirical p-value, a Student's t-distribution can be fitted to the distribution of random stacked profiles at each radial bin. The p-value is then calculated from the cumulative distribution function (CDF) of this fitted t-distribution for the observed stacked halo signal. The empirical p-value is generally considered more robust.
 
 
 ### 2D Cutouts
 
-In development.
+The toolkit also provides functionality to extract and stack 2D cutouts (small images) centered on halo locations from the HEALPix maps. This is handled by the `cmbo.corr.pointing.Pointing2DCutout` class.
+
+- **Extraction:** A square, flat-sky cutout is extracted from the full-sky HEALPix map for each halo. The size of the cutout is typically a multiple of the halo's angular size (e.g., 5 times `theta200`).
+
+- **Normalization and Re-binning:** To allow for meaningful comparison and stacking, each 2D cutout is normalized by its halo's characteristic size (`theta200`). The cutout is re-binned onto a standardized grid where the coordinates are expressed in units of `theta200`. This ensures that halos of different apparent sizes are aligned and can be co-added.
+
+- **Stacking:** The normalized cutouts for a population of halos (e.g., within a mass bin) are then stacked by taking the mean pixel value at each position in the normalized grid. This produces an average 2D image of the tSZ signal for that halo population, significantly enhancing the signal-to-noise ratio. A corresponding stack from random sky locations can also be generated for comparison.
 
 ## Installation
 
