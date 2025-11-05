@@ -1,11 +1,28 @@
-# CMBO
+# Cosmic Microwave Background Olympics
 
-Toolkit for analysing cosmological “digital twin” simulations and CMB observations. CMBO is built to measure the thermal Sunyaev–Zel’dovich (tSZ) signal at the locations of haloes drawn from constrained realisations, letting you compare simulated expectations with Planck-like maps.
+Toolkit for analysing cosmological “digital twin” simulations and CMB observations. CMBO is built to measure the thermal Sunyaev–Zel’dovich (tSZ) signal at the locations of haloes drawn from the digital twins.
 
-## Key Capabilities
-- FoF halo and Gadget-4 snapshot readers for quickly loading catalogue properties and particle data (`cmbo.io`).
-- HEALPix pointing utilities that extract background-subtracted radial profiles and 2D cutouts to test the tSZ signal around simulated haloes (`cmbo.corr.pointing`).
-- Projection helpers for turning 3D halo or particle fields into mock CMB observables (`cmbo.projection`).
+## Capabilities
+
+### 1D Aperture Profiles & Background Subtraction
+
+The primary analysis method involves extracting 1D profiles of the tSZ signal around the locations of simulated haloes.
+
+- **Aperture Signal:** The signal is calculated as the **mean tSZ value of all pixels within a circular aperture** of a given radius. This is an "enclosed" profile, as implemented in the `cmbo.corr.PointingEnclosedProfile` class.
+
+- **Background Subtraction:** To isolate the halo's signal, a local background is estimated and subtracted. This is done by calculating the mean signal in a concentric annulus surrounding the main aperture (e.g., from 1.0 to 1.5 times the aperture radius) and subtracting this value. This feature is controlled by the `subtract_background` parameter in the profile extraction functions.
+
+### Stacking and Significance Testing
+
+To enhance the signal-to-noise ratio, especially for faint signals, profiles from multiple haloes are stacked (averaged) together. 
+
+- **Stacking:** Before stacking, profiles are typically normalized by the angular size of their respective halo (e.g., `theta200`) to allow for a consistent co-addition. The `cmbo.corr.pointing.stack_normalized_profiles` function handles this process.
+
+- **Significance:** The statistical significance of the stacked signal is determined by comparing it against a null hypothesis generated from random pointings on the sky. A signal-to-noise ratio (SNR) is calculated by subtracting the mean of the random stacked profiles from the mean of the halo stacked profiles and dividing by the combined uncertainty. Errors are typically estimated using bootstrap resampling.
+
+### 2D Cutouts
+
+For morphological studies, the toolkit can also extract 2D cutouts (small maps) centered on each halo. This allows for the study of the average 2D shape and structure of the tSZ signal. The `cmbo.corr.pointing.stack_cutouts` function can be used to create average 2D maps from many individual halo cutouts.
 
 ## Installation
 
