@@ -205,12 +205,14 @@ def save_results_hdf5(path, simulations):
                 if entry.get("individual_profiles") is not None:
                     grp.create_dataset(
                         "individual_profiles",
-                        data=np.asarray(entry["individual_profiles"]),
+                        data=np.asarray(entry["individual_profiles"],
+                                        dtype=np.float32),
                     )
                 if entry.get("random_profiles") is not None:
                     grp.create_dataset(
                         "random_profiles",
-                        data=np.asarray(entry["random_profiles"]),
+                        data=np.asarray(entry["random_profiles"],
+                                        dtype=np.float32),
                     )
 
                 if entry["cutout_mean"] is not None:
@@ -256,10 +258,6 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         subtract_background=subtract_bg,
     )
 
-    pool_samples = analysis_cfg["random_pool_samples"]
-    if pool_samples is not None and pool_samples <= 0:
-        pool_samples = None
-
     size_scale = cutout_params["size_scale"]
     random_samples = cutout_params["random_samples"]
     random_abs_b_min = cutout_params["random_abs_b_min"]
@@ -272,6 +270,7 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
     halo_pval_data = np.full(halos["mass"].shape, np.nan, dtype=float)
     halo_bin_index = np.full(halos["mass"].shape, -1, dtype=int)
 
+    n_bins = len(edges)
     for bin_idx, ((lo, hi), median) in enumerate(zip(edges, medians)):
         mask = halos["log_mass"] >= lo
         if hi is not None:
@@ -285,9 +284,9 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             continue
 
         fprint(
-            f"[Sim {sim_id}] [Bin {bin_idx}] Selecting haloes for "
-            f"{lo:.2f} ≤ log M < {hi if hi is not None else '∞'}: "
-            f"{mask.sum()} candidates."
+            f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] "
+            f"Selecting haloes for {lo:.2f} ≤ log M < "
+            f"{hi if hi is not None else '∞'}: {mask.sum()} candidates."
         )
 
         pval_data = profiler.signal_to_pvalue(
@@ -298,12 +297,33 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         )
 
         fprint(
-            f"[Sim {sim_id}] [Bin {bin_idx}] Computed empirical p-values "
-            f"for {lo:.2f} ≤ log M < {hi if hi is not None else '∞'}."
+            f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] "
+            f"Computed empirical p-values for {lo:.2f} ≤ log M < "
+            f"{hi if hi is not None else '∞'}."
         )
 
-        return_individual = analysis_cfg.get("return_individual_profiles", True)
+        return_individual = analysis_cfg.get(
+            "return_individual_profiles", True)
         return_random = analysis_cfg.get("return_random_profiles", True)
+
+        # Set the number of random samples based on the bin index
+        high_sample_bins = analysis_cfg.get("high_sample_bins", 0)
+        if bin_idx < high_sample_bins:
+            pool_samples = analysis_cfg.get("random_pool_samples_high")
+        else:
+            pool_samples = analysis_cfg.get("random_pool_samples_low")
+
+        if pool_samples is not None and pool_samples <= 0:
+            pool_samples = None
+
+        # Add warning if requested pool_samples is larger than available
+        if pool_samples is not None and pool_samples > tsz_rand.shape[0]:
+            fprint(
+                f"WARNING: Requested random_pool_samples ({pool_samples}) "
+                f"is larger than available random pointings ({tsz_rand.shape[0]}). "
+                "Using available random pointings as pool_samples."
+            )
+            pool_samples = tsz_rand.shape[0]
 
         stack = profiler.stack_normalized_profiles(
             halos["ell"][mask],
@@ -331,8 +351,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             random_profiles = stack_out[idx]
 
         fprint(
-            f"[Sim {sim_id}] [Bin {bin_idx}] Generated stacked profiles "
-            "and summary statistics."
+            f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] Generated stacked "
+            "profiles and summary statistics."
         )
 
         cutout_mean = None
@@ -347,8 +367,9 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
                 halos["theta"][mask],
             )
             fprint(
-                f"[Sim {sim_id}] [Bin {bin_idx}] Computed 2D cutout stack "
-                f"on a {cutout_extractor.nbins}x{cutout_extractor.nbins} grid."
+                f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] "
+                f"Computed 2D cutout stack on a "
+                f"{cutout_extractor.nbins}x{cutout_extractor.nbins} grid."
             )
 
             if random_samples:
@@ -363,8 +384,9 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
                         seed=rand_seed,
                     )
                 fprint(
-                    f"[Sim {sim_id}] [Bin {bin_idx}] Computed random 2D "
-                    f"cutout stack with {random_samples} samples."
+                    f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] "
+                    f"Computed random 2D cutout stack with {random_samples} "
+                    f"samples."
                 )
 
         indices = np.nonzero(mask)[0]
@@ -373,8 +395,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
 
         hi_str = "∞" if hi is None else f"{hi:.2f}"
         fprint(
-            f"[Sim {sim_id}] log M ∈ [{lo:.2f}, {hi_str}): N={mask.sum()}, "
-            f"median log M={median:.2f}"
+            f"[Sim {sim_id}] log M ∈ [{lo:.2f}, {hi_str}): "
+            f"N={mask.sum()}, median log M={median:.2f}"
         )
 
         results.append(
@@ -419,7 +441,7 @@ def determine_simulations(catalogue_cfg, requested):
         sims = cmbo.io.list_simulations_hdf5(catalogue_cfg["fname"])
 
         fprint(f"Processing simulations {sims}.")
-        sims = sims[:2]
+        sims = sims[:1]
 
         return [str(sim) for sim in sims]
 
