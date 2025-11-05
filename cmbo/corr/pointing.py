@@ -145,7 +145,7 @@ class PointingEnclosedProfile:
         return out
 
     def get_profiles_per_source(self, ell_deg, b_deg, radii_arcmin,
-                                subtract_background=True):
+                                subtract_background=True, verbose=True):
         """
         Mean enclosed profile around multiple pointings.
 
@@ -160,6 +160,8 @@ class PointingEnclosedProfile:
         subtract_background : bool, optional
             If True, subtract the mean value from an annular aperture to
             remove large-scale foreground contamination. Default: True.
+        verbose : bool, optional
+            If True, show progress bar. Default: True.
 
         Returns
         -------
@@ -189,15 +191,18 @@ class PointingEnclosedProfile:
             )
 
             if self.n_jobs == 1:
-                for i in tqdm(range(n), desc="Measuring profiles"):
+                iterator = tqdm(range(n), desc="Measuring profiles",
+                                disable=not verbose)
+                for i in iterator:
                     out[i] = temp_obj.get_profile(
                         ell_deg[i], b_deg[i], radii_arcmin[i],
                         subtract_background=subtract_background
                     )
             else:
                 from contextlib import nullcontext
-                ctx = tqdm_joblib(tqdm(total=n, desc="Measuring profiles")) \
-                    if 'tqdm_joblib' in globals() else nullcontext()
+                ctx = tqdm_joblib(tqdm(total=n, desc="Measuring profiles",
+                                       disable=not verbose)) \
+                    if 'tqdm_joblib' in globals() and verbose else nullcontext()
 
                 with ctx:
                     res = Parallel(n_jobs=self.n_jobs, prefer=self.prefer,
