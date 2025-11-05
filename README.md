@@ -1,6 +1,6 @@
 # Cosmic Microwave Background Olympics
 
-Toolkit for analysing cosmological “digital twin” simulations and CMB observations. CMBO is built to measure the thermal Sunyaev–Zel’dovich (tSZ) signal at the locations of haloes drawn from the digital twins.
+Toolkit for analysing cosmological “digital twin” simulations and Cosmic Microwave Background (CMB) observations. CMBO is built to measure the thermal Sunyaev–Zel’dovich (tSZ) signal at the locations of haloes drawn from the digital twins.
 
 ## Capabilities
 
@@ -16,24 +16,24 @@ The primary analysis method involves extracting 1D profiles of the tSZ signal ar
 
 ### Stacking and Significance Testing
 
-To enhance the signal-to-noise ratio, especially for faint signals, profiles from multiple haloes are stacked (averaged) together. 
+The purpose of stacking 1D profiles is to detect the average tSZ signal as a function of halo mass. By assessing the significance of this stacked signal, we can determine how well halos of a given mass are correlated with the tSZ signal in the CMB map.
 
-- **Stacking:** Before stacking, profiles are typically normalized by the angular size of their respective halo (e.g., `theta200`) to allow for a consistent co-addition. The `cmbo.corr.pointing.stack_normalized_profiles` function handles this process.
+- **Stacking:** Before stacking 1D profiles, they are typically normalized by the angular size of their respective halo (e.g., `theta200`) to allow for a consistent co-addition. The `cmbo.corr.pointing.stack_normalized_profiles` function handles this process.
 
-- **Stacked Significance:** While individual haloes can have their significance assessed (see "Per-Halo Significance" above), stacking multiple profiles significantly enhances the signal-to-noise ratio of the average signal. The significance of this stacked signal is then determined by comparing the stacked halo profile against a stacked profile derived from random sky locations. The signal-to-noise ratio (SNR) is calculated at each radial bin using the formula: `SNR = (stacked_halo_profile - mean_random_profile) / sqrt(halo_profile_error**2 + random_profile_error**2)`. Errors for both halo and random profiles are typically estimated using bootstrap resampling (`cmbo.corr.pointing.bootstrap_profile_mean`).
+- **Stacked Significance:** To test the significance of the average tSZ signal from a population of haloes, stacking multiple profiles significantly enhances the signal-to-noise ratio. The significance of this stacked signal is then determined by comparing the stacked halo profile against a stacked profile derived from random sky locations. The signal-to-noise ratio (SNR) is calculated at each radial bin using the formula: `SNR = (stacked_halo_profile - mean_random_profile) / sqrt(halo_profile_error**2 + random_profile_error**2)`. Errors for both halo and random profiles are typically estimated using bootstrap resampling (`cmbo.corr.pointing.bootstrap_profile_mean`).
 
 
 ### 2D Cutouts
 
-For morphological studies, the toolkit can also extract 2D cutouts (small maps) centered on each halo. This allows for the study of the average 2D shape and structure of the tSZ signal. The `cmbo.corr.pointing.stack_cutouts` function can be used to create average 2D maps from many individual halo cutouts.
+In development.
 
 ## Installation
 
 ```bash
 python -m venv cmbo-env
 source cmbo-env/bin/activate
-pip install --upgrade pip
-pip install -e .
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
-Installing in editable mode pulls the dependencies declared in `setup.py`, including NumPy, h5py, healpy, joblib, and tqdm.
+Installing in editable mode pulls the dependencies declared in `setup.py`. For a full list of dependencies, please refer to the `setup.py` file.

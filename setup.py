@@ -50,6 +50,10 @@ setup(
         "tomli_w",
         "scienceplots",
         "tqdm",
+        "scikit-learn",
+        "astropy",
+        "cmasher",
+        "colossus"
     ],
     include_package_data=True,
     zip_safe=False,
