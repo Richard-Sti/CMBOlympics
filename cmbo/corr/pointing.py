@@ -206,7 +206,7 @@ class PointingEnclosedProfile:
 
                 with ctx:
                     res = Parallel(n_jobs=self.n_jobs, prefer=self.prefer,
-                                   batch_size=self.batch_size)(
+                                   batch_size=self.batch_size, timeout=300)(
                         delayed(temp_obj.get_profile)(
                             ell_deg[i], b_deg[i], radii_arcmin[i],
                             subtract_background)
@@ -223,6 +223,7 @@ class PointingEnclosedProfile:
                                   radii_norm, subtract_background=True,
                                   n_boot=1000, seed=None,
                                   return_individual=False,
+                                  return_random_profiles=False,
                                   random_profile_pool=None,
                                   random_pool_radii=None,
                                   random_pool_samples=1000):
@@ -250,6 +251,9 @@ class PointingEnclosedProfile:
         return_individual : bool, optional
             If True, also return the per-source profile array used in the
             stack. Default: False.
+        return_random_profiles : bool, optional
+            If True, also return the individual random profile stacks.
+            Default: False.
         random_profile_pool : array_like or None, optional
             Precomputed random profiles of shape (n_random, n_cols). When
             provided, these profiles are resampled instead of calling
@@ -280,6 +284,10 @@ class PointingEnclosedProfile:
         individual_profiles : ndarray, optional
             Array of shape (n_sources, n_radii) with per-source profiles,
             returned when ``return_individual`` is True.
+        random_profiles : ndarray, optional
+            Array of shape (n_random_stacks, n_sources, n_radii) with
+            unstacked random profiles, returned when
+            ``return_random_profiles`` is True.
         """
         ell_deg = np.asarray(np.atleast_1d(ell_deg), dtype=float)
         b_deg = np.asarray(np.atleast_1d(b_deg), dtype=float)
@@ -352,6 +360,10 @@ class PointingEnclosedProfile:
         rng = np.random.default_rng(seed)
         rand_means = np.full((random_samples_eff, n_radii), np.nan,
                              dtype=float)
+        rand_profiles = np.full((random_samples_eff, n_sources, n_radii),
+                                np.nan, dtype=float) \
+            if return_random_profiles else None
+
         for s in trange(random_samples_eff,
                         desc="Stacking random profiles",
                         disable=random_samples_eff < 10):
@@ -359,6 +371,8 @@ class PointingEnclosedProfile:
                              replace=True)
             selected = pool[idx]
             if pool_radii is None:
+                if return_random_profiles:
+                    rand_profiles[s] = selected
                 rand_means[s] = np.nanmean(selected, axis=0)
             else:
                 theta_draw = rng.choice(theta_ref_arcmin,
@@ -375,6 +389,8 @@ class PointingEnclosedProfile:
                         left=prof[0],
                         right=prof[-1],
                     )
+                if return_random_profiles:
+                    rand_profiles[s] = interp_vals
                 rand_means[s] = np.nanmean(interp_vals, axis=0)
 
         valid_rows = ~np.isnan(rand_means).all(axis=1)
@@ -391,6 +407,8 @@ class PointingEnclosedProfile:
         outputs.extend([random_mean, random_err])
         if return_individual:
             outputs.append(profiles)
+        if return_random_profiles:
+            outputs.append(rand_profiles)
 
         return tuple(outputs)
 
@@ -459,7 +477,7 @@ class PointingEnclosedProfile:
                                       desc="Measuring profiles")):
                     results = Parallel(
                         n_jobs=self.n_jobs, prefer=self.prefer,
-                        batch_size=self.batch_size
+                        batch_size=self.batch_size, timeout=300
                     )(
                         delayed(temp_obj.get_profile)(
                             ell_deg[i], b_deg[i], radii_per_point[i],
