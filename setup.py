@@ -16,14 +16,14 @@
 from setuptools import setup, find_packages
 
 # Read version from package
-with open("cmbolympics/__init__.py") as f:
+with open("cmbo/__init__.py") as f:
     for line in f:
         if line.startswith("__version__"):
             version = line.split("=")[1].strip().strip('"').strip("'")
             break
 
 setup(
-    name="cmbolympics",
+    name="cmbo",
     version=version,
     author="Richard Stiskalek",
     author_email="richard.stiskalek@protonmail.com",
@@ -31,7 +31,7 @@ setup(
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/richard-sti/CMBOlympics",
-    packages=find_packages(include=["cmbolympics", "cmbolympics.*"]),
+    packages=find_packages(include=["cmbo", "cmbo.*"]),
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
@@ -50,6 +50,10 @@ setup(
         "tomli_w",
         "scienceplots",
         "tqdm",
+        "scikit-learn",
+        "astropy",
+        "cmasher",
+        "colossus"
     ],
     include_package_data=True,
     zip_safe=False,

@@ -1,5 +1,11 @@
 get_venv.sh
 __pycache__/
+data/
+results/
 
-cmbolympics.egg-info/
-venv_cmbolympics/
+cmbo.egg-info/
+venv_cmbo/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.DS_Store
