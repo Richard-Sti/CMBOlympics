@@ -1,53 +1,72 @@
+# Configuration for the tSZ mass bin analysis script.
+
+# --- Input Maps ---
+# Paths to the HEALPix maps for the tSZ signal and random pointings.
 [input_map]
 signal_map = "../data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
 random_pointing = "../data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
+# FWHM in arcminutes for smoothing the input map.
 smooth_fwhm = 9.6
 
+# --- Halo Selection Cuts ---
+# Criteria for filtering halos from the catalogue before analysis.
 [halo_cuts]
-r_min = 0.0
-r_max = 150.0
-b_min = 10.0
-mass_min = 1e14
-mass_max = 1e16  # Set to a high value to ignore upper mass cut
-theta_min = 10.0
-theta_max = 6000 # Set to a high value to ignore upper theta cut
+r_min = 0.0       # Minimum comoving distance [Mpc/h]
+r_max = 150.0     # Maximum comoving distance [Mpc/h]
+b_min = 10.0      # Minimum Galactic latitude (absolute value) [degrees]
+mass_min = 1e14   # Minimum halo mass (M_200c) [M_sun/h]
+mass_max = 1e16   # Maximum halo mass (M_200c) [M_sun/h]
+theta_min = 10.0  # Minimum angular size (theta_200) [arcmin]
+theta_max = 6000  # Maximum angular size (theta_200) [arcmin]
 
+# --- Mass Binning ---
+# Parameters for dividing the selected halos into mass bins.
 [mass_bins]
-mass_step = 0.2
-top_counts = [10, 50, 100]
-verbose_bins = true
+mass_step = 0.2   # Width of mass bins in log10(M_sun/h)
+top_counts = [10, 50, 100] # Special high-mass bins containing the top N halos
+verbose_bins = true # Print details about the created mass bins
 
+# --- Analysis Parameters ---
+# Settings for the main analysis pipeline.
 [analysis]
-which_simulation = "csiborg2"
-output_folder = "../results/"
-# output_tag =
+which_simulation = "csiborg2" # Key for the halo catalogue to use (see below)
+output_folder = "../results/" # Folder to save the HDF5 output file
+# output_tag = ""             # Optional tag to append to the output filename
 
+# Aperture and profile settings
+aperture_scale = 2.0      # Aperture size for per-halo p-value, as a multiple of theta_200
+subtract_background = true # Whether to subtract a local background for 1D profiles
 
-aperture_scale = 2.0
-subtract_background = true
+# Stacked profile settings
+stack_rmin = 0.1  # Minimum radius for stacked profiles (in units of theta_200)
+stack_rmax = 3.0  # Maximum radius for stacked profiles (in units of theta_200)
+stack_n = 501     # Number of radial bins for stacked profiles
 
-stack_rmin = 0.1
-stack_rmax = 3.0
-stack_n = 501
+# 2D cutout settings
+cutout_random_samples = 0    # Number of random cutouts to stack for comparison (0 to disable)
+cutout_max_bins = 3          # Only generate cutouts for the first N mass bins
+cutout_pixels = 301          # Number of pixels per side for each 2D cutout
+cutout_nbins = 256           # Number of bins for the normalized 2D cutout grid
+cutout_size_scale = 5        # Cutout size as a multiple of theta_200
+cutout_random_abs_b_min = 10 # Minimum Galactic latitude for random cutouts
 
-cutout_random_samples = 0
-cutout_max_bins = 3
-cutout_pixels = 301
-cutout_nbins = 256
-cutout_size_scale = 5
-cutout_random_abs_b_min = 10
+# Stacking and significance settings
+bootstrap = 10_000           # Number of bootstrap resamples for error estimation
+high_sample_bins = 3         # Number of high-mass bins to use more random samples for
+random_pool_samples_high = 10000 # Number of random stacks for high-mass bins
+random_pool_samples_low = 1000   # Number of random stacks for low-mass bins
+t_fit_nth_sample = 10        # Down-sampling factor for t-distribution fitting (1 for full)
 
-bootstrap = 10_000
-high_sample_bins = 3
-random_pool_samples_high = 10000
-random_pool_samples_low = 1000
+# General settings
+seed = 42   # Random seed for reproducibility
+n_jobs = 4  # Number of parallel jobs to use
 
-seed = 42
-n_jobs = 4
+# Output data control
+return_individual_profiles = false # Save all individual 1D profiles to the output file
+return_random_profiles = false     # Save all individual random 1D profiles to the output file
 
-return_individual_profiles = true
-return_random_profiles = true
-
+# --- Halo Catalogues ---
+# Definitions of available halo catalogues. The key is used in `analysis.which_simulation`.
 [halo_catalogues]
 
 [halo_catalogues.csiborg1]
@@ -57,6 +76,6 @@ omega_m = 0.307
 
 [halo_catalogues.csiborg2]
 fname = "../data/csiborg2_fof.hdf5"
-nsim = "all"
+nsim = "all" # Which simulation number to process ("all" or a specific integer)
 box_size = 676.6
 omega_m = 0.3111

@@ -25,7 +25,10 @@ from cmbo.utils import (
     build_mass_bins,
     cartesian_icrs_to_galactic_spherical,
     fprint,
+    pvalue_to_sigma,
 )
+from scipy.stats import norm, t
+from tqdm import tqdm
 
 try:
     import tomllib as _toml_loader  # Python 3.11+
@@ -215,6 +218,29 @@ def save_results_hdf5(path, simulations):
                                         dtype=np.float32),
                     )
 
+                if entry.get("p_value_profile") is not None:
+                    grp.create_dataset(
+                        "p_value_profile",
+                        data=np.asarray(entry["p_value_profile"]),
+                    )
+
+                if entry.get("sigma_profile") is not None:
+                    grp.create_dataset(
+                        "sigma_profile",
+                        data=np.asarray(entry["sigma_profile"]),
+                    )
+
+                if entry.get("t_fit_p_value") is not None:
+                    grp.create_dataset(
+                        "t_fit_p_value",
+                        data=np.asarray(entry["t_fit_p_value"]),
+                    )
+                if entry.get("t_fit_sigma") is not None:
+                    grp.create_dataset(
+                        "t_fit_sigma",
+                        data=np.asarray(entry["t_fit_sigma"]),
+                    )
+
                 if entry["cutout_mean"] is not None:
                     grp.create_dataset(
                         "cutout_mean",
@@ -320,8 +346,9 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         if pool_samples is not None and pool_samples > tsz_rand.shape[0]:
             fprint(
                 f"WARNING: Requested random_pool_samples ({pool_samples}) "
-                f"is larger than available random pointings ({tsz_rand.shape[0]}). "
-                "Using available random pointings as pool_samples."
+                "is larger than available random pointings "
+                f"({tsz_rand.shape[0]}). Using available random pointings as "
+                "pool_samples."
             )
             pool_samples = tsz_rand.shape[0]
 
@@ -349,6 +376,56 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             idx += 1
         if return_random:
             random_profiles = stack_out[idx]
+
+        # Calculate p-value profile from the stacks
+        p_value_profile = None
+        sigma_profile = None
+        t_fit_p_value = None
+        t_fit_sigma = None
+        if individual is not None and random_profiles is not None:
+            data_stack = np.nanmean(individual, axis=0)
+            random_stacks = np.nanmean(random_profiles, axis=1)
+            n_random_stacks = random_stacks.shape[0]
+            if n_random_stacks > 0:
+                p_value_profile = (
+                    np.sum(random_stacks >= data_stack, axis=0)
+                    / n_random_stacks
+                )
+                sigma_profile = pvalue_to_sigma(p_value_profile)
+
+                t_fit_p_value = np.full_like(data_stack, np.nan)
+                t_fit_sigma = np.full_like(data_stack, np.nan)
+                t_fit_nth = analysis_cfg.get("t_fit_nth_sample", 1)
+                radii_sub = np.arange(0, data_stack.shape[0], t_fit_nth)
+                for k in tqdm(
+                    radii_sub,
+                    desc="Fitting t-distribution",
+                ):
+                    x = random_stacks[:, k]
+                    mean_signal_k = float(data_stack[k])
+
+                    # Fit Student's-t
+                    df, loc, scale = t.fit(x)
+
+                    # One-sided p-value under fitted t
+                    p_t = 1.0 - t.cdf(mean_signal_k, df, loc, scale)
+                    z_t = norm.isf(p_t)  # convert to one-sided Gaussian σ
+
+                    t_fit_p_value[k] = p_t
+                    t_fit_sigma[k] = z_t
+
+                if t_fit_nth > 1:
+                    radii_full = np.arange(data_stack.shape[0])
+                    t_fit_p_value = np.interp(
+                        radii_full,
+                        radii_sub,
+                        t_fit_p_value[radii_sub],
+                    )
+                    t_fit_sigma = np.interp(
+                        radii_full,
+                        radii_sub,
+                        t_fit_sigma[radii_sub],
+                    )
 
         fprint(
             f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] Generated stacked "
@@ -413,6 +490,10 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
                 "radii_norm": radii_stack,
                 "individual_profiles": individual,
                 "random_profiles": random_profiles,
+                "p_value_profile": p_value_profile,
+                "sigma_profile": sigma_profile,
+                "t_fit_p_value": t_fit_p_value,
+                "t_fit_sigma": t_fit_sigma,
                 "cutout_mean": cutout_mean,
                 "cutout_random_mean": cutout_random_mean,
                 "cutout_extent": cutout_extent,
@@ -441,7 +522,7 @@ def determine_simulations(catalogue_cfg, requested):
         sims = cmbo.io.list_simulations_hdf5(catalogue_cfg["fname"])
 
         fprint(f"Processing simulations {sims}.")
-        sims = sims[:1]
+        sims = sims[:2]
 
         return [str(sim) for sim in sims]
 

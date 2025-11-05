@@ -41,6 +41,10 @@ class BinResult:
     cutout_mean: Optional[np.ndarray] = None
     cutout_random_mean: Optional[np.ndarray] = None
     cutout_extent: Optional[np.ndarray] = None
+    p_value_profile: Optional[np.ndarray] = None
+    sigma_profile: Optional[np.ndarray] = None
+    t_fit_p_value: Optional[np.ndarray] = None
+    t_fit_sigma: Optional[np.ndarray] = None
 
     @property
     def has_profiles(self):
@@ -254,6 +258,22 @@ class TSZMassBinResults:
                 if "cutout_extent" in subgrp:
                     entry_kwargs["cutout_extent"] = subgrp[
                         "cutout_extent"
+                    ][...]
+                if "p_value_profile" in subgrp:
+                    entry_kwargs["p_value_profile"] = subgrp[
+                        "p_value_profile"
+                    ][...]
+                if "sigma_profile" in subgrp:
+                    entry_kwargs["sigma_profile"] = subgrp[
+                        "sigma_profile"
+                    ][...]
+                if "t_fit_p_value" in subgrp:
+                    entry_kwargs["t_fit_p_value"] = subgrp[
+                        "t_fit_p_value"
+                    ][...]
+                if "t_fit_sigma" in subgrp:
+                    entry_kwargs["t_fit_sigma"] = subgrp[
+                        "t_fit_sigma"
                     ][...]
                 bins.append(BinResult(**entry_kwargs))
 
