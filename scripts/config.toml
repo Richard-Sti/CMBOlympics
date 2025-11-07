@@ -1,12 +1,36 @@
 # Configuration for the tSZ mass bin analysis script.
 
+# --- Paths ---
+# Base directory used to resolve relative paths in this config.
+[paths]
+root = "/Users/rstiskalek/Projects/CMBOlympics"
+
 # --- Input Maps ---
 # Paths to the HEALPix maps for the tSZ signal and random pointings.
 [input_map]
-signal_map = "../data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
-random_pointing = "../data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
+signal_map = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
+random_pointing = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
 # FWHM in arcminutes for smoothing the input map.
 smooth_fwhm = 9.6
+
+# --- Random Profile Generation Defaults ---
+# Default parameters for generate_random_tsz_profiles.py. These control the
+# sampling scheme for the random pointing pool. The Planck map path and the
+# output HDF5 are taken from [input_map].
+[random_profiles]
+# Signal aperture radii configuration (arcmin).
+theta_min = 1.0
+theta_max = 601.0
+n_theta = 501
+# Background annulus radii (arcmin); match signal limits if unchanged.
+theta_background_min = 1.0
+theta_background_max = 601.0
+# Random pointing sampling controls.
+n_points = 10000
+abs_b_min = 10.0
+fwhm_arcmin = 9.6
+seed = 42
+n_jobs = -1
 
 # --- Halo Selection Cuts ---
 # Criteria for filtering halos from the catalogue before analysis.
@@ -30,7 +54,7 @@ verbose_bins = true # Print details about the created mass bins
 # Settings for the main analysis pipeline.
 [analysis]
 which_simulation = "csiborg1" # Key for the halo catalogue to use (see below)
-output_folder = "../results/" # Folder to save the HDF5 output file
+output_folder = "results" # Folder to save the HDF5 output file
 # output_tag = ""             # Optional tag to append to the output filename
 
 # Aperture and profile settings
@@ -70,7 +94,7 @@ return_random_profiles = false     # Save all individual random 1D profiles to t
 [halo_catalogues]
 
 [halo_catalogues.csiborg1]
-fname = "../data/csiborg1_fof.hdf5"
+fname = "data/csiborg1_fof.hdf5"
 nsim = 7540
 box_size = 677.7
 omega_m = 0.307
@@ -79,7 +103,7 @@ mass_key = "M200c"
 radius_key = "R200c"
 
 [halo_catalogues.csiborg2]
-fname = "../data/csiborg2_fof.hdf5"
+fname = "data/csiborg2_fof.hdf5"
 nsim = 16417 # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
 mass_key = "Group_M_Crit200"
