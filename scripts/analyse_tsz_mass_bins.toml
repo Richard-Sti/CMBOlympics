@@ -34,8 +34,8 @@ output_folder = "../results/" # Folder to save the HDF5 output file
 # output_tag = ""             # Optional tag to append to the output filename
 
 # Aperture and profile settings
-aperture_scale = 2.0      # Aperture size for per-halo p-value, as a multiple of theta_200
-subtract_background = true # Whether to subtract a local background for 1D profiles
+aperture_scale = 1.0      # Aperture size for per-halo p-value, as a multiple of theta_200
+background_radius_norm = 1.5  # Normalized radius for background measurement (applies to both per-halo and stacked profiles)
 
 # Stacked profile settings
 stack_rmin = 0.1  # Minimum radius for stacked profiles (in units of theta_200)
@@ -76,6 +76,6 @@ omega_m = 0.307
 
 [halo_catalogues.csiborg2]
 fname = "../data/csiborg2_fof.hdf5"
-nsim = "all" # Which simulation number to process ("all" or a specific integer)
+nsim = 16417 # Which simulation number to process ("all" or a specific integer)
 box_size = 676.6
 omega_m = 0.3111
