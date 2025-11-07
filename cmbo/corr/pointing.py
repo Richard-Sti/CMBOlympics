@@ -22,6 +22,7 @@ import healpy as hp
 import joblib
 import numpy as np
 from joblib import Parallel, delayed
+from scipy.interpolate import interp1d
 from tqdm import trange
 from tqdm.auto import tqdm
 
@@ -789,6 +790,20 @@ class PointingEnclosedProfile:
             rank = np.searchsorted(pool, val, side="left")
             return 1.0 - rank / pool.size
 
+        # Build 2D interpolators once
+        # Interpolate along theta axis (axis=1) for all random profiles
+        interp_signal = interp1d(
+            theta_rand, map_rand, kind='linear', axis=1,
+            bounds_error=False, fill_value='extrapolate'
+        )
+
+        if subtract_background:
+            interp_background = interp1d(
+                theta_rand_background, map_rand_background,
+                kind='linear', axis=1,
+                bounds_error=False, fill_value='extrapolate'
+            )
+
         n_data = signal.size
         pval = np.empty(n_data, dtype=float)
 
@@ -796,31 +811,17 @@ class PointingEnclosedProfile:
             for i, (r_sig, r_bg, sig) in enumerate(
                     zip(theta_arcmin, radii_background_arcmin,
                         signal_for_pval)):
-                # Interpolate each random profile at the requested radii
-                n_random = map_rand.shape[0]
-                rand_signal = np.empty(n_random, dtype=float)
-                rand_background = np.empty(n_random, dtype=float)
-
-                for j in range(n_random):
-                    rand_signal[j] = np.interp(
-                        r_sig, theta_rand, map_rand[j, :])
-                    rand_background[j] = np.interp(
-                        r_bg, theta_rand_background, map_rand_background[j, :])
-
+                # Interpolate all random profiles at once
+                rand_signal = interp_signal(r_sig)
+                rand_background = interp_background(r_bg)
                 rand_combined = rand_signal - rand_background
                 pool = np.sort(rand_combined)
                 pval[i] = _pvalue_from_pool(sig, pool)
         else:
             for i, (r_sig, sig) in enumerate(
                     zip(theta_arcmin, signal_for_pval)):
-                # Interpolate each random profile at the requested radius
-                n_random = map_rand.shape[0]
-                rand_signal = np.empty(n_random, dtype=float)
-
-                for j in range(n_random):
-                    rand_signal[j] = np.interp(
-                        r_sig, theta_rand, map_rand[j, :])
-
+                # Interpolate all random profiles at once
+                rand_signal = interp_signal(r_sig)
                 pool = np.sort(rand_signal)
                 pval[i] = _pvalue_from_pool(sig, pool)
 
