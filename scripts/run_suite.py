@@ -44,6 +44,53 @@ except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
 tomli = _toml_loader
 
 
+def _resolve_root_path(cfg):
+    """Return the absolute root directory for resolving relative paths."""
+
+    paths_cfg = cfg.get("paths", {})
+    root_value = paths_cfg.get("root")
+    if root_value is None:
+        return Path(__file__).resolve().parents[1]
+
+    root_path = Path(root_value).expanduser()
+    if not root_path.is_absolute():
+        root_path = (Path(__file__).resolve().parent / root_path).resolve()
+    return root_path
+
+
+def _resolve_with_root(root_path, value):
+    """Resolve a file path relative to the configured root directory."""
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = root_path / path
+    return str(path)
+
+
+def apply_root_to_config_paths(cfg):
+    """Resolve all known file paths in the config using the root directory."""
+
+    root_path = _resolve_root_path(cfg)
+
+    map_cfg = cfg.get("input_map", {})
+    for key in ("signal_map", "random_pointing"):
+        if key in map_cfg:
+            map_cfg[key] = _resolve_with_root(root_path, map_cfg[key])
+
+    analysis_cfg = cfg.get("analysis", {})
+    if "output_folder" in analysis_cfg:
+        analysis_cfg["output_folder"] = _resolve_with_root(
+            root_path, analysis_cfg["output_folder"]
+        )
+
+    for catalogue in cfg.get("halo_catalogues", {}).values():
+        if "fname" in catalogue:
+            catalogue["fname"] = _resolve_with_root(
+                root_path, catalogue["fname"])
+
+    return root_path
+
+
 def load_config(path):
     """Return the raw configuration dictionary loaded from a TOML file."""
 
@@ -58,22 +105,19 @@ def load_halo_catalogue(cfg, nsim):
     sim_key = analysis_cfg["which_simulation"]
     catalogue_cfg = cfg["halo_catalogues"][sim_key]
 
-    if sim_key == "csiborg2":
-        reader = cmbo.io.SimulationHaloReader(
-            catalogue_cfg["fname"],
-            nsim=nsim,
-        )
-        centre = np.full(3, catalogue_cfg["box_size"] / 2.0, dtype=float)
-        fprint(
-            f"Using centre at {centre} Mpc/h for {sim_key} "
-            f"(simulation {nsim})."
-            )
-        pos = reader["Coordinates"]
-        mass = reader["Group_M_Crit200"]
-        r200 = reader["Group_R_Crit200"]
-        r, ell, b = cartesian_icrs_to_galactic_spherical(pos, centre)
-    else:
-        raise ValueError(f"Unknown simulation '{sim_key}'")
+    reader = cmbo.io.SimulationHaloReader(
+        catalogue_cfg["fname"],
+        nsim=nsim,
+    )
+    centre = np.full(3, catalogue_cfg["box_size"] / 2.0, dtype=float)
+    fprint(
+        f"Using centre at {centre} Mpc/h for {sim_key} "
+        f"(simulation {nsim})."
+    )
+    pos = reader[catalogue_cfg["position_key"]]
+    mass = reader[catalogue_cfg["mass_key"]]
+    r200 = reader[catalogue_cfg["radius_key"]]
+    r, ell, b = cartesian_icrs_to_galactic_spherical(pos, centre)
 
     theta_arcmin = np.rad2deg(np.arctan(r200 / r)) * 60
     cuts = cfg["halo_cuts"]
@@ -414,9 +458,10 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             mask &= halos["log_mass"] < hi
 
         if not np.any(mask):
+            hi_str = "∞" if hi is None else f"{hi:.2f}"
             fprint(
                 f"[Sim {sim_id}] No haloes in mass bin"
-                f" [{lo:.2f}, {'∞' if hi is None else f'{hi:.2f}'}). Skipping."
+                f" [{lo:.2f}, {hi_str}). Skipping."
             )
             continue
 
@@ -467,7 +512,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             pool_samples = None
 
         # Add warning if requested pool_samples is larger than available
-        if pool_samples is not None and pool_samples > tsz_rand_signal.shape[0]:
+        if (pool_samples is not None
+                and pool_samples > tsz_rand_signal.shape[0]):
             fprint(
                 f"WARNING: Requested random_pool_samples ({pool_samples}) "
                 "is larger than available random pointings "
@@ -548,7 +594,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             t_fit_sigma = None
 
         # Calculate p-value profile from the stacks (with background)
-        if individual_with_bg is not None and random_profiles_with_bg is not None:
+        if (individual_with_bg is not None
+                and random_profiles_with_bg is not None):
             data_stack_bg = np.nanmean(individual_with_bg, axis=0)
             random_stacks_bg = np.nanmean(random_profiles_with_bg, axis=1)
             (p_value_profile_with_bg, sigma_profile_with_bg,
@@ -685,9 +732,10 @@ def main():
     if len(sys.argv) > 1:
         config_path = sys.argv[1]
     else:
-        config_path = Path(__file__).with_name("analyse_tsz_mass_bins.toml")
+        config_path = Path(__file__).with_name("config.toml")
     cfg = load_config(config_path)
-    fprint(f"Loaded config from {config_path}")
+    root_path = apply_root_to_config_paths(cfg)
+    fprint(f"Loaded config from {config_path} with root {root_path}")
 
     analysis_cfg = cfg["analysis"]
     map_cfg = cfg["input_map"]
