@@ -101,7 +101,8 @@ def load_config_sections(config_path):
         )
 
     map_cfg = dict(map_cfg)
-    map_cfg["signal_map"] = _resolve_with_root(root_path, map_cfg["signal_map"])
+    map_cfg["signal_map"] = _resolve_with_root(
+        root_path, map_cfg["signal_map"])
     map_cfg["random_pointing"] = _resolve_with_root(
         root_path, map_cfg["random_pointing"]
     )
