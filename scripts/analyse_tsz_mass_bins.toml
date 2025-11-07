@@ -29,13 +29,13 @@ verbose_bins = true # Print details about the created mass bins
 # --- Analysis Parameters ---
 # Settings for the main analysis pipeline.
 [analysis]
-which_simulation = "csiborg2" # Key for the halo catalogue to use (see below)
+which_simulation = "csiborg1" # Key for the halo catalogue to use (see below)
 output_folder = "../results/" # Folder to save the HDF5 output file
 # output_tag = ""             # Optional tag to append to the output filename
 
 # Aperture and profile settings
-aperture_scale = 1.0      # Aperture size for per-halo p-value, as a multiple of theta_200
-background_radius_norm = 1.5  # Normalized radius for background measurement (applies to both per-halo and stacked profiles)
+aperture_scale = 1.0            # Aperture size for per-halo p-value, as a multiple of theta_200
+background_radius_norm = 1.25   # Normalized radius for background measurement (applies to both per-halo and stacked profiles)
 
 # Stacked profile settings
 stack_rmin = 0.1  # Minimum radius for stacked profiles (in units of theta_200)
@@ -71,11 +71,18 @@ return_random_profiles = false     # Save all individual random 1D profiles to t
 
 [halo_catalogues.csiborg1]
 fname = "../data/csiborg1_fof.hdf5"
+nsim = 7540
 box_size = 677.7
 omega_m = 0.307
+position_key = "Position"
+mass_key = "M200c"
+radius_key = "R200c"
 
 [halo_catalogues.csiborg2]
 fname = "../data/csiborg2_fof.hdf5"
 nsim = 16417 # Which simulation number to process ("all" or a specific integer)
+position_key = "Coordinates"
+mass_key = "Group_M_Crit200"
+radius_key = "Group_R_Crit200"
 box_size = 676.6
 omega_m = 0.3111
