@@ -23,7 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
         ) from exc
 
 tomli = _toml_loader
-CONFIG_PATH = Path(__file__).with_name("analyse_tsz_mass_bins.toml")
+CONFIG_PATH = Path(__file__).with_name("config.toml")
 
 
 def _resolve_root_path(cfg):
@@ -63,6 +63,12 @@ def load_config_sections(config_path):
         raise SystemExit(
             f"'random_profiles' section missing from {config_path}."
         ) from exc
+    try:
+        runtime_cfg = cfg["runtime"]
+    except KeyError as exc:
+        raise SystemExit(
+            f"'runtime' section missing from {config_path}."
+        ) from exc
 
     map_required = ("signal_map", "random_pointing")
     missing_map = [key for key in map_required if key not in map_cfg]
@@ -80,7 +86,6 @@ def load_config_sections(config_path):
         "abs_b_min",
         "fwhm_arcmin",
         "seed",
-        "n_jobs",
     ]
     missing_rand = [key for key in rand_required if key not in rand_cfg]
     if missing_rand:
@@ -90,28 +95,22 @@ def load_config_sections(config_path):
             f"{config_path}."
         )
 
+    if "n_jobs" not in runtime_cfg:
+        raise SystemExit(
+            f"'runtime.n_jobs' missing from {config_path}."
+        )
+
     map_cfg = dict(map_cfg)
     map_cfg["signal_map"] = _resolve_with_root(root_path, map_cfg["signal_map"])
     map_cfg["random_pointing"] = _resolve_with_root(
         root_path, map_cfg["random_pointing"]
     )
 
-    analysis_cfg = cfg.get("analysis", {})
-    if "output_folder" in analysis_cfg:
-        analysis_cfg["output_folder"] = _resolve_with_root(
-            root_path, analysis_cfg["output_folder"]
-        )
-
-    catalogues = cfg.get("halo_catalogues", {})
-    for catalogue in catalogues.values():
-        if "fname" in catalogue:
-            catalogue["fname"] = _resolve_with_root(root_path, catalogue["fname"])
-
-    return map_cfg, rand_cfg
+    return map_cfg, rand_cfg, runtime_cfg
 
 
 def main():
-    map_cfg, rand_cfg = load_config_sections(CONFIG_PATH)
+    map_cfg, rand_cfg, runtime_cfg = load_config_sections(CONFIG_PATH)
 
     planck_map = map_cfg["signal_map"]
     output_path = map_cfg["random_pointing"]
@@ -124,7 +123,7 @@ def main():
     abs_b_min = rand_cfg["abs_b_min"]
     fwhm_arcmin = rand_cfg["fwhm_arcmin"]
     seed = rand_cfg["seed"]
-    n_jobs = rand_cfg["n_jobs"]
+    n_jobs = runtime_cfg["n_jobs"]
 
     if theta_bg_min is None:
         theta_bg_min = theta_min

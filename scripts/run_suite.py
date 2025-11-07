@@ -734,10 +734,22 @@ def main():
     else:
         config_path = Path(__file__).with_name("config.toml")
     cfg = load_config(config_path)
+    try:
+        runtime_cfg = cfg["runtime"]
+    except KeyError as exc:
+        raise SystemExit(
+            f"'runtime' section missing from {config_path}."
+        ) from exc
+    if "n_jobs" not in runtime_cfg:
+        raise SystemExit(
+            f"'runtime.n_jobs' missing from {config_path}."
+        )
+
     root_path = apply_root_to_config_paths(cfg)
     fprint(f"Loaded config from {config_path} with root {root_path}")
 
     analysis_cfg = cfg["analysis"]
+    analysis_cfg["n_jobs"] = runtime_cfg["n_jobs"]
     map_cfg = cfg["input_map"]
 
     profiler, radii_stack, y_map = load_profiler(cfg)
