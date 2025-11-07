@@ -38,8 +38,8 @@ The toolkit also provides functionality to extract and stack 2D cutouts (small i
 ## Installation
 
 ```bash
-python -m venv cmbo-env
-source cmbo-env/bin/activate
+python -m venv venv_cmob
+source venv_cmob/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e .
 ```
