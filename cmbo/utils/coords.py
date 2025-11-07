@@ -45,6 +45,16 @@ def radec_to_galactic(ra_deg, dec_deg):
     return ell, b
 
 
+def galactic_to_radec(l_deg, b_deg):
+    """Convert Galactic longitude and latitude to equatorial coordinates."""
+    ell, b = np.broadcast_arrays(np.asarray(l_deg, dtype=float),
+                                 np.asarray(b_deg, dtype=float))
+    coord = SkyCoord(l=ell * u.deg, b=b * u.deg, frame="galactic").icrs
+    ra = coord.ra.to_value(u.deg)
+    dec = coord.dec.to_value(u.deg)
+    return ra, dec
+
+
 def cz_to_comoving_distance(cz, h=1.0, Om0=0.3111):
     """Convert CMB-frame velocity (km/s) to comoving distance (Mpc/h)."""
     scalar_input = np.isscalar(cz)

@@ -41,19 +41,9 @@ setup(
     ],
     python_requires=">=3.10",
     install_requires=[
-        "numpy",
-        "healpy",
-        "matplotlib",
-        "scipy",
-        "h5py",
-        "tomli",
-        "tomli_w",
-        "scienceplots",
-        "tqdm",
-        "scikit-learn",
-        "astropy",
-        "cmasher",
-        "colossus"
+        str(r)
+        for r in open("requirements.txt", "r").readlines()
+        if not r.startswith("#") and not r.strip() == ""
     ],
     include_package_data=True,
     zip_safe=False,

@@ -60,7 +60,8 @@ def tangent_offsets_arcmin(ell_deg, b_deg, ellc_deg, bc_deg):
 
 
 def plot_cluster_cutout(cutout, extent, ell, b, ellc, bc,
-                        output_path=None, dpi=450, cmap=None):
+                        output_path=None, dpi=450, cmap=None,
+                        cbar_label=r"$y$"):
     """
     Plot a cluster cutout with halo positions overlaid.
 
@@ -84,6 +85,8 @@ def plot_cluster_cutout(cutout, extent, ell, b, ellc, bc,
         Figure DPI used when saving, default is 450.
     cmap : str, optional
         Colormap name, default is cmasher.fusion_r.
+    cbar_label : str, optional
+        Label for the colorbar, default is "$y$" (Compton-y parameter).
 
     Returns
     -------
@@ -98,7 +101,7 @@ def plot_cluster_cutout(cutout, extent, ell, b, ellc, bc,
     with plt.style.context("science"):
         fig, ax = plt.subplots(figsize=(6, 5))
 
-        ax.imshow(
+        im = ax.imshow(
             cutout,
             origin="lower",
             extent=extent,
@@ -119,6 +122,8 @@ def plot_cluster_cutout(cutout, extent, ell, b, ellc, bc,
         ax.set_xlabel(r"$\xi\,[\mathrm{arcmin}]$")
         ax.set_ylabel(r"$\eta\,[\mathrm{arcmin}]$")
 
+        cbar = fig.colorbar(im, ax=ax, pad=0.02)
+        cbar.set_label(cbar_label)
         fig.tight_layout()
 
     if output_path is not None:
