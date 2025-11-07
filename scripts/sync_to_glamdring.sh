@@ -11,7 +11,7 @@ DEST_PATH="/mnt/extraspace/rstiskalek/CMBOlympics"
 SSH_KEY="$HOME/.ssh/glamdring"
 
 usage() {
-    echo "Usage: $0 [results|data]"
+    echo "Usage: $0 [results|data] [--delete]"
     exit 1
 }
 
@@ -33,16 +33,33 @@ sync_dir() {
     ensure_remote_dir "$subdir"
     echo "[INFO] Pushing '${subdir}' to glamdring -> ${DEST_PATH}/${subdir}/"
     rsync -avh --progress -e "ssh -i $SSH_KEY" \
+        "${rsync_delete_flag[@]}" \
         "${local_path}/" \
         "$DEST_USER@$DEST_HOST:${DEST_PATH}/${subdir}/"
 }
 
-# ---- parse argument ----
-if [[ $# -ne 1 ]]; then
+# ---- parse arguments ----
+if [[ $# -lt 1 || $# -gt 2 ]]; then
     usage
 fi
 
-case "$1" in
+DELETE_FLAG=0
+TARGET="$1"
+if [[ $# -eq 2 ]]; then
+    if [[ "$2" == "--delete" ]]; then
+        DELETE_FLAG=1
+    else
+        usage
+    fi
+fi
+
+rsync_delete_flag=()
+if [[ $DELETE_FLAG -eq 1 ]]; then
+    rsync_delete_flag=(--delete)
+    echo "[INFO] Remote files absent locally will be deleted."
+fi
+
+case "$TARGET" in
     results)
         sync_dir "results"
         ;;
