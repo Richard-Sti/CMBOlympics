@@ -20,6 +20,7 @@ from .coords import (  # noqa: F401
     cartesian_to_r_theta_phi,
     cz_to_comoving_distance,
     radec_to_galactic,
+    galactic_to_radec,
 )
 from .associations import (  # noqa: F401
     HaloAssociation,
