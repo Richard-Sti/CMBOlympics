@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-memory=4
+memory=7
 queue="berg"
 env="/mnt/users/rstiskalek/CMBOlympics/venv_cmob/bin/python"
 default_nthreads=16
@@ -60,7 +60,7 @@ if [[ $on_login -eq 1 ]]; then
     echo "$python_cmd"
     eval "$python_cmd"
 else
-    submit_cmd="addqueue -s openmpi -q $queue -n $nthreads -m $memory $python_cmd"
+    submit_cmd="addqueue -s -q $queue -n $nthreads -m $memory $python_cmd"
     echo "Submitting:"
     echo "$submit_cmd"
     echo

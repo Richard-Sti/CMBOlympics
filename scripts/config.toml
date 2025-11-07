@@ -3,12 +3,13 @@
 # --- Paths ---
 # Base directory used to resolve relative paths in this config.
 [paths]
-root = "/Users/rstiskalek/Projects/CMBOlympics"
+# root = "/Users/rstiskalek/Projects/CMBOlympics"
+root = "/mnt/extraspace/rstiskalek/CMBOlympics"
 
 # --- Runtime ---
 # Global parallelism controls placed near the top for quick access.
 [runtime]
-n_jobs = 4
+n_jobs = 28
 
 # --- Input Maps ---
 # Paths to the HEALPix maps for the tSZ signal and random pointings.
@@ -26,12 +27,12 @@ smooth_fwhm = 9.6
 # Signal aperture radii configuration (arcmin).
 theta_min = 1.0
 theta_max = 601.0
-n_theta = 501
+n_theta = 1001
 # Background annulus radii (arcmin); match signal limits if unchanged.
 theta_background_min = 1.0
 theta_background_max = 601.0
 # Random pointing sampling controls.
-n_points = 10000
+n_points = 100_000
 abs_b_min = 10.0
 fwhm_arcmin = 9.6
 seed = 42
