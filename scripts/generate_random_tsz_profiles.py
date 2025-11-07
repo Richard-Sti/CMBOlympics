@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Generate random tSZ profiles from the Planck NILC Compton-y map."""
+"""
+Generate random tSZ signal and background profiles from the Planck NILC
+Compton-y map.
+"""
 
 import argparse
 
@@ -11,7 +14,8 @@ from cmbo.utils import fprint
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Generate random tSZ profiles and dump them to HDF5."
+        description=("Generate random tSZ signal and background profiles "
+                     "and dump them to HDF5.")
     )
     parser.add_argument(
         "--planck-map",
@@ -21,7 +25,8 @@ def parse_args():
     parser.add_argument(
         "--output",
         default=None,
-        help="HDF5 file where (theta_rand, tsz_rand) will be stored.",
+        help=("HDF5 file where (theta_rand, tsz_rand_signal, "
+              "tsz_rand_background) will be stored."),
     )
     parser.add_argument(
         "--theta-min",
@@ -40,6 +45,18 @@ def parse_args():
         type=int,
         default=501,
         help="Number of aperture radii to sample (default: 501).",
+    )
+    parser.add_argument(
+        "--theta-background-min",
+        type=float,
+        default=None,
+        help="Minimum background radius in arcmin (default: theta-min).",
+    )
+    parser.add_argument(
+        "--theta-background-max",
+        type=float,
+        default=None,
+        help="Maximum background radius in arcmin (default: theta-max).",
     )
     parser.add_argument(
         "--n-points",
@@ -71,11 +88,6 @@ def parse_args():
         default=-1,
         help="Number of parallel jobs for profile measurement (default: -1).",
     )
-    parser.add_argument(
-        "--no-background-subtraction",
-        action="store_true",
-        help="Disable background subtraction (default: subtract).",
-        )
     return parser.parse_args()
 
 
@@ -98,21 +110,25 @@ def main():
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
     fprint(f"Smoothed map: mean={mu:.3e}, std={std:.3e}")
 
-    subtract_background = not args.no_background_subtraction
-    fprint(
-        f"{'Subtracting' if subtract_background else 'Not subtracting'} "
-        f"background from random profiles."
-    )
-
     profiler = cmbo.corr.PointingEnclosedProfile(
         y_map, n_jobs=args.n_jobs, fwhm_arcmin=args.fwhm_arcmin)
 
     theta_rand = np.linspace(args.theta_min, args.theta_max, args.n_theta)
-    tsz_rand = profiler.get_random_profiles(
+
+    theta_bg_min = (args.theta_background_min if args.theta_background_min
+                    is not None else args.theta_min)
+    theta_bg_max = (args.theta_background_max if args.theta_background_max
+                    is not None else args.theta_max)
+    theta_rand_bg = np.linspace(theta_bg_min, theta_bg_max, args.n_theta)
+
+    fprint(f"Signal radii: [{args.theta_min}, {args.theta_max}] arcmin")
+    fprint(f"Background radii: [{theta_bg_min}, {theta_bg_max}] arcmin")
+
+    tsz_rand_signal, tsz_rand_background = profiler.get_random_profiles(
         theta_rand,
         n_points=args.n_points,
         abs_b_min=args.abs_b_min,
-        subtract_background=subtract_background,
+        radii_background_arcmin=theta_rand_bg,
         seed=args.seed,
     )
 
@@ -123,7 +139,9 @@ def main():
     cmbo.io.dump_to_hdf5(
         output_path,
         theta_rand=theta_rand,
-        tsz_rand=tsz_rand,
+        tsz_rand_signal=tsz_rand_signal,
+        theta_rand_bg=theta_rand_bg,
+        tsz_rand_background=tsz_rand_background,
     )
     fprint(f"Wrote random profiles to {output_path}")
 
