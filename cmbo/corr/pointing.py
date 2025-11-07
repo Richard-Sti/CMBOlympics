@@ -22,7 +22,6 @@ import healpy as hp
 import joblib
 import numpy as np
 from joblib import Parallel, delayed
-from scipy.optimize import minimize
 from tqdm import trange
 from tqdm.auto import tqdm
 
@@ -662,142 +661,6 @@ def bootstrap_profile_mean(profiles, n_boot=1000, seed=None):
 
 
 ###############################################################################
-#                       Gaussian peak fitting helper                          #
-###############################################################################
-
-
-def fit_gaussian_offset(cutout, size_arcmin, mask=None, truncate_sigma=2.0):
-    """
-    Fit a 2D Gaussian to a cutout and return the centroid offset.
-
-    Parameters
-    ----------
-    cutout : ndarray, shape (N, N)
-        2D map cutout centred on the nominal halo position. NaNs are treated
-        as invalid pixels.
-    size_arcmin : float
-        Full width of the cutout in arcminutes.
-    mask : ndarray or None, optional
-        Boolean mask with the same shape as ``cutout``. Pixels where ``mask``
-        is False are ignored. Default: None.
-    truncate_sigma : float or None, optional
-        When greater than zero, only pixels within ``truncate_sigma`` times
-        the Gaussian width (evaluated with the current parameters) contribute
-        to the objective. Default: 2.0.
-
-    Returns
-    -------
-    dict
-        Dictionary containing the fitted parameters and offsets. Keys
-        include ``success``, ``x0_arcmin``, ``y0_arcmin``, ``r_arcmin``,
-        ``amp``, ``sigma_x_arcmin``, ``sigma_y_arcmin`` and ``offset``. The
-        raw optimiser output is stored under ``optimizer``. When the fit
-        fails, ``success`` is False and ``error`` stores the exception
-        string.
-    """
-    data = np.asarray(cutout, dtype=float)
-    if data.ndim != 2 or data.shape[0] != data.shape[1]:
-        raise ValueError("cutout must be a square 2D array.")
-
-    if mask is not None:
-        mask = np.asarray(mask, dtype=bool)
-        if mask.shape != data.shape:
-            raise ValueError("mask must have the same shape as cutout.")
-        data = np.where(mask, data, np.nan)
-
-    valid = np.isfinite(data)
-    if valid.sum() < 6:
-        raise ValueError("Not enough valid pixels to fit a Gaussian.")
-
-    npix = data.shape[0]
-    pixel_size = float(size_arcmin) / npix
-    axis = (np.arange(npix) - (npix - 1) / 2.0) * pixel_size
-    xv, yv = np.meshgrid(axis, axis, indexing="xy")
-
-    x_valid = xv[valid]
-    y_valid = yv[valid]
-    z_valid = data[valid]
-
-    baseline = np.nanmedian(z_valid)
-    amp0 = z_valid.max() - baseline
-    if not np.isfinite(amp0) or np.abs(amp0) < np.finfo(float).eps:
-        amp0 = np.nanmax(z_valid)
-
-    max_index = np.nanargmax(data)
-    iy, ix = divmod(max_index, npix)
-    x0_init = axis[ix]
-    y0_init = axis[iy]
-    sigma_guess = max(pixel_size * 2.0, size_arcmin / 10.0)
-
-    sigma_min = pixel_size / 4.0
-    sigma_max = size_arcmin
-
-    def objective(params):
-        amp, x0, y0, log_sig_x, log_sig_y, offset = params
-        sig_x = np.exp(log_sig_x)
-        sig_y = np.exp(log_sig_y)
-        if not (sigma_min <= sig_x <= sigma_max):
-            return np.inf
-        if not (sigma_min <= sig_y <= sigma_max):
-            return np.inf
-
-        model = offset + amp * np.exp(
-            -0.5
-            * (((x_valid - x0) / sig_x) ** 2 + ((y_valid - y0) / sig_y) ** 2)
-        )
-
-        if truncate_sigma is not None and truncate_sigma > 0:
-            r2 = (
-                ((x_valid - x0) / sig_x) ** 2
-                + ((y_valid - y0) / sig_y) ** 2
-            )
-            use = r2 <= truncate_sigma**2
-            if use.sum() < 6:
-                return np.inf
-            resid = z_valid[use] - model[use]
-        else:
-            resid = z_valid - model
-
-        return np.sum(resid**2)
-
-    p0 = np.array([
-        amp0,
-        x0_init,
-        y0_init,
-        np.log(sigma_guess),
-        np.log(sigma_guess),
-        baseline,
-    ])
-
-    res = minimize(
-        objective,
-        p0,
-        method="Nelder-Mead",
-        options={"maxiter": 4000, "xatol": 1e-4, "fatol": 1e-4},
-    )
-
-    if not res.success:
-        return {"success": False, "error": res.message}
-
-    amp, x0, y0, log_sig_x, log_sig_y, offset = res.x
-    sig_x = float(np.exp(log_sig_x))
-    sig_y = float(np.exp(log_sig_y))
-
-    result = {
-        "success": True,
-        "amp": float(amp),
-        "x0_arcmin": float(x0),
-        "y0_arcmin": float(y0),
-        "r_arcmin": float(np.hypot(x0, y0)),
-        "sigma_x_arcmin": sig_x,
-        "sigma_y_arcmin": sig_y,
-        "offset": float(offset),
-        "optimizer": res,
-    }
-    return result
-
-
-###############################################################################
 #              Class for 2D cutouts from (scalar) HEALPix maps                #
 ###############################################################################
 
@@ -810,6 +673,9 @@ class Pointing2DCutout:
     ----------
     m : array_like
         HEALPix map (Galactic), RING by default unless nest=True.
+    fwhm_arcmin : float
+        FWHM of the map smoothing [arcmin]. Used as the default
+        final search radius in find_center().
     npix : int, optional
         Pixels per side for cutouts (odd keeps center on pixel).
         Default: 301.
@@ -820,13 +686,14 @@ class Pointing2DCutout:
     nbins : int, optional
         Number of bins for normalized grid. Default: 128.
     grid_halfsize : float or None, optional
-        Half-size of normalized grid in theta200 units. If None, auto-sized.
-        Default: None.
+        Half-size of normalized grid in theta200 units. If None,
+        auto-sized. Default: None.
     """
 
-    def __init__(self, m, npix=301, nest=False, mask=None, nbins=128,
-                 grid_halfsize=None):
+    def __init__(self, m, fwhm_arcmin, npix=301, nest=False, mask=None,
+                 nbins=128, grid_halfsize=None):
         self.m = m
+        self.fwhm_arcmin = fwhm_arcmin
         self.npix = npix
         self.nest = nest
         self.mask = mask
@@ -1076,3 +943,190 @@ class Pointing2DCutout:
         # Use stack_cutouts with random positions
         return self.stack_cutouts(ell_deg, b_deg, size_arcmin,
                                   theta200_resampled)
+
+    def find_center(self, ell_init, b_init, size_arcmin=240.0,
+                    initial_radius_arcmin=None, final_radius_arcmin=None,
+                    shrink_factor=0.9, max_iterations=1000, verbose=True):
+        """
+        Find signal center using two-stage shrinking aperture method.
+
+        Stage 1: Starting from an initial guess, computes the center
+        of mass within a circular aperture, recenters on that position,
+        shrinks the aperture, and repeats until the aperture radius
+        falls below a threshold.
+
+        Stage 2: Finds the pixel with maximum signal within the final
+        aperture and recenters on that peak position.
+
+        Parameters
+        ----------
+        ell_init : float
+            Initial guess for Galactic longitude [deg].
+        b_init : float
+            Initial guess for Galactic latitude [deg].
+        size_arcmin : float, optional
+            Size of cutout for searching [arcmin]. Default: 240.0.
+        initial_radius_arcmin : float or None, optional
+            Initial search aperture radius [arcmin]. If None, defaults
+            to size_arcmin / sqrt(2) to cover entire cutout including
+            corners. Default: None.
+        final_radius_arcmin : float or None, optional
+            Final aperture radius [arcmin]. Iteration stops when the
+            search radius falls below this threshold. If None, uses
+            the FWHM of the map. Default: None.
+        shrink_factor : float, optional
+            Factor by which to shrink the aperture each iteration.
+            Must be between 0 and 1. Default: 0.9.
+        max_iterations : int, optional
+            Maximum number of iterations. Default: 1000.
+        verbose : bool, optional
+            If True, print iteration progress. Default: True.
+
+        Returns
+        -------
+        ell_refined : float
+            Refined Galactic longitude [deg].
+        b_refined : float
+            Refined Galactic latitude [deg].
+        result : dict
+            Dictionary with keys:
+            - 'converged': bool, whether iteration converged
+            - 'n_iterations': int, number of iterations performed
+            - 'final_radius_arcmin': float, final search radius
+        cutout_centered : ndarray
+            Centered cutout at final position.
+        extent : tuple
+            Extent for imshow: (xmin, xmax, ymin, ymax) in arcmin.
+        """
+        if not isinstance(ell_init,
+                          (int, float, np.integer, np.floating)):
+            raise TypeError("ell_init must be a scalar, not an array")
+        if not isinstance(b_init,
+                          (int, float, np.integer, np.floating)):
+            raise TypeError("b_init must be a scalar, not an array")
+        if not 0 < shrink_factor < 1:
+            raise ValueError("shrink_factor must be between 0 and 1")
+
+        # Default: search entire cutout including corners
+        if initial_radius_arcmin is None:
+            initial_radius_arcmin = size_arcmin / np.sqrt(2)
+
+        # Default: converge to map FWHM
+        if final_radius_arcmin is None:
+            final_radius_arcmin = self.fwhm_arcmin
+
+        ell_deg = float(ell_init)
+        b_deg = float(b_init)
+        search_radius = float(initial_radius_arcmin)
+
+        converged = False
+
+        for iteration in range(max_iterations):
+            cutout, extent = self.get_cutout_2d(
+                ell_deg, b_deg, size_arcmin)
+
+            npix = cutout.shape[0]
+            pixel_size = size_arcmin / npix
+
+            # Create radial distance map from center
+            axis = (np.arange(npix) - (npix - 1) / 2.0) * pixel_size
+            xg, yg = np.meshgrid(axis, axis, indexing='xy')
+            r_map = np.hypot(xg, yg)
+
+            # Mask pixels outside search radius
+            aperture_mask = r_map <= search_radius
+            valid = np.isfinite(cutout) & aperture_mask
+
+            if not np.any(valid):
+                if verbose:
+                    msg = f"Iteration {iteration}: no valid pixels"
+                    print(msg)
+                break
+
+            # Compute center of mass within aperture
+            values = cutout[valid]
+            x_coords = xg[valid]
+            y_coords = yg[valid]
+
+            # Use positive values only for weighting
+            weights = np.maximum(values, 0.0)
+            total_weight = np.sum(weights)
+
+            if total_weight == 0:
+                if verbose:
+                    msg = f"Iteration {iteration}: zero total weight"
+                    print(msg)
+                break
+
+            x_offset = np.sum(x_coords * weights) / total_weight
+            y_offset = np.sum(y_coords * weights) / total_weight
+            r_offset = np.hypot(x_offset, y_offset)
+
+            if verbose:
+                msg = (f"Iteration {iteration}: "
+                       f"radius = {search_radius:.2f} arcmin, "
+                       f"offset = ({x_offset:.3f}, {y_offset:.3f}), "
+                       f"r = {r_offset:.3f} arcmin")
+                print(msg)
+
+            # Update center using small-angle approximation
+            ell_deg += x_offset / 60.0 / np.cos(np.radians(b_deg))
+            b_deg += y_offset / 60.0
+
+            # Shrink search radius
+            search_radius *= shrink_factor
+
+            if search_radius < final_radius_arcmin:
+                converged = True
+                if verbose:
+                    msg = (f"Converged after {iteration + 1} "
+                           f"iteration(s)")
+                    print(msg)
+                break
+
+        # Final refinement: find max signal within final aperture
+        if converged:
+            cutout, extent = self.get_cutout_2d(
+                ell_deg, b_deg, size_arcmin)
+
+            npix = cutout.shape[0]
+            pixel_size = size_arcmin / npix
+            axis = (np.arange(npix) - (npix - 1) / 2.0) * pixel_size
+            xg, yg = np.meshgrid(axis, axis, indexing='xy')
+            r_map = np.hypot(xg, yg)
+
+            # Mask pixels within final radius
+            final_mask = r_map <= final_radius_arcmin
+            valid_final = np.isfinite(cutout) & final_mask
+
+            if np.any(valid_final):
+                # Find maximum signal position
+                cutout_masked = np.where(valid_final, cutout, -np.inf)
+                max_idx = np.nanargmax(cutout_masked)
+                iy_max, ix_max = np.unravel_index(max_idx,
+                                                   cutout.shape)
+
+                x_peak = axis[ix_max]
+                y_peak = axis[iy_max]
+                peak_signal = cutout[iy_max, ix_max]
+
+                if verbose:
+                    msg = (f"Peak refinement: offset = "
+                           f"({x_peak:.3f}, {y_peak:.3f}) arcmin, "
+                           f"signal = {peak_signal:.3e}")
+                    print(msg)
+
+                # Update to peak position
+                ell_deg += x_peak / 60.0 / np.cos(np.radians(b_deg))
+                b_deg += y_peak / 60.0
+
+        result = {
+            'converged': converged,
+            'n_iterations': iteration + 1,
+            'final_radius_arcmin': search_radius,
+        }
+
+        cutout_centered, extent = self.get_cutout_2d(
+            ell_deg, b_deg, size_arcmin)
+
+        return ell_deg, b_deg, result, cutout_centered, extent
