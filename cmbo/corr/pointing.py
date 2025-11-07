@@ -796,20 +796,32 @@ class PointingEnclosedProfile:
             for i, (r_sig, r_bg, sig) in enumerate(
                     zip(theta_arcmin, radii_background_arcmin,
                         signal_for_pval)):
-                j_sig = int(np.argmin(np.abs(theta_rand - r_sig)))
-                j_bg = int(np.argmin(np.abs(theta_rand_background - r_bg)))
+                # Interpolate each random profile at the requested radii
+                n_random = map_rand.shape[0]
+                rand_signal = np.empty(n_random, dtype=float)
+                rand_background = np.empty(n_random, dtype=float)
 
-                rand_signal = map_rand[:, j_sig]
-                rand_background = map_rand_background[:, j_bg]
+                for j in range(n_random):
+                    rand_signal[j] = np.interp(
+                        r_sig, theta_rand, map_rand[j, :])
+                    rand_background[j] = np.interp(
+                        r_bg, theta_rand_background, map_rand_background[j, :])
+
                 rand_combined = rand_signal - rand_background
-
                 pool = np.sort(rand_combined)
                 pval[i] = _pvalue_from_pool(sig, pool)
         else:
             for i, (r_sig, sig) in enumerate(
                     zip(theta_arcmin, signal_for_pval)):
-                j_sig = int(np.argmin(np.abs(theta_rand - r_sig)))
-                pool = np.sort(map_rand[:, j_sig])
+                # Interpolate each random profile at the requested radius
+                n_random = map_rand.shape[0]
+                rand_signal = np.empty(n_random, dtype=float)
+
+                for j in range(n_random):
+                    rand_signal[j] = np.interp(
+                        r_sig, theta_rand, map_rand[j, :])
+
+                pool = np.sort(rand_signal)
                 pval[i] = _pvalue_from_pool(sig, pool)
 
         return pval
