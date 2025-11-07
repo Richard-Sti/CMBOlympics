@@ -3,7 +3,7 @@ set -euo pipefail
 
 memory=4
 queue="berg"
-env=""
+env="/mnt/users/rstiskalek/CMBOlympics/venv_cmob/bin/python"
 default_nthreads=16
 
 usage() {
