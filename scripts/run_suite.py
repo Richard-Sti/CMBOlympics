@@ -116,10 +116,10 @@ def load_halo_catalogue(cfg, nsim):
     )
     pos = reader[catalogue_cfg["position_key"]]
     mass = reader[catalogue_cfg["mass_key"]]
-    r200 = reader[catalogue_cfg["radius_key"]]
+    r500 = reader[catalogue_cfg["radius_key"]]
     r, ell, b = cartesian_icrs_to_galactic_spherical(pos, centre)
 
-    theta_arcmin = np.rad2deg(np.arctan(r200 / r)) * 60
+    theta_arcmin = np.rad2deg(np.arctan(r500 / r)) * 60
     cuts = cfg["halo_cuts"]
 
     mask = np.isfinite(mass)
@@ -204,9 +204,6 @@ def save_results_hdf5(path, simulations):
                 halo_group.create_dataset(key, data=np.asarray(values))
             halo_group.create_dataset(
                 "pval_data", data=np.asarray(data["halo_pvals"]))
-            halo_group.create_dataset(
-                "pval_data_with_background",
-                data=np.asarray(data["halo_pvals_with_bg"]))
             if data.get("halo_bins") is not None:
                 halo_group.create_dataset(
                     "bin_index", data=np.asarray(data["halo_bins"]))
@@ -249,22 +246,6 @@ def save_results_hdf5(path, simulations):
                     data=np.asarray(entry["random_error"]),
                 )
                 grp.create_dataset(
-                    "stacked_profile_with_background",
-                    data=np.asarray(entry["stacked_profile_with_bg"]),
-                )
-                grp.create_dataset(
-                    "stacked_error_with_background",
-                    data=np.asarray(entry["stacked_error_with_bg"]),
-                )
-                grp.create_dataset(
-                    "random_profile_with_background",
-                    data=np.asarray(entry["random_profile_with_bg"]),
-                )
-                grp.create_dataset(
-                    "random_error_with_background",
-                    data=np.asarray(entry["random_error_with_bg"]),
-                )
-                grp.create_dataset(
                     "radii_norm",
                     data=np.asarray(entry["radii_norm"]),
                 )
@@ -302,29 +283,6 @@ def save_results_hdf5(path, simulations):
                     grp.create_dataset(
                         "t_fit_sigma",
                         data=np.asarray(entry["t_fit_sigma"]),
-                    )
-
-                if entry.get("p_value_profile_with_bg") is not None:
-                    grp.create_dataset(
-                        "p_value_profile_with_background",
-                        data=np.asarray(entry["p_value_profile_with_bg"]),
-                    )
-
-                if entry.get("sigma_profile_with_bg") is not None:
-                    grp.create_dataset(
-                        "sigma_profile_with_background",
-                        data=np.asarray(entry["sigma_profile_with_bg"]),
-                    )
-
-                if entry.get("t_fit_p_value_with_bg") is not None:
-                    grp.create_dataset(
-                        "t_fit_p_value_with_background",
-                        data=np.asarray(entry["t_fit_p_value_with_bg"]),
-                    )
-                if entry.get("t_fit_sigma_with_bg") is not None:
-                    grp.create_dataset(
-                        "t_fit_sigma_with_background",
-                        data=np.asarray(entry["t_fit_sigma_with_bg"]),
                     )
 
                 if entry["cutout_mean"] is not None:
@@ -411,8 +369,8 @@ def compute_significance_profile(data_stack, random_stacks, t_fit_nth=1,
 
 
 def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
-                       tsz_rand_signal, tsz_rand_background, theta_rand_bg,
-                       cutout_extractor, cutout_params, sim_index):
+                       tsz_rand_signal, cutout_extractor, cutout_params,
+                       sim_index):
     """Run the full analysis pipeline for a single simulation ID."""
 
     analysis_cfg = cfg["analysis"]
@@ -420,8 +378,6 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
 
     halos = load_halo_catalogue(cfg, sim_id)
     halos["aperture"] = analysis_cfg["aperture_scale"] * halos["theta"]
-    halos["aperture_background"] = (
-        analysis_cfg["background_radius_norm"] * halos["theta"])
     halos["log_mass"] = np.log10(halos["mass"])
 
     edges, medians = build_mass_bins(
@@ -431,11 +387,10 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         verbose=mass_cfg["verbose_bins"],
     )
 
-    signal, background = profiler.get_profiles_per_source(
+    signal = profiler.get_profiles_per_source(
         halos["ell"],
         halos["b"],
         halos["aperture"],
-        radii_background_arcmin=halos["aperture_background"],
     )
 
     size_scale = cutout_params["size_scale"]
@@ -448,7 +403,6 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
 
     results = []
     halo_pval_data = np.full(halos["mass"].shape, np.nan, dtype=float)
-    halo_pval_data_with_bg = np.full(halos["mass"].shape, np.nan, dtype=float)
     halo_bin_index = np.full(halos["mass"].shape, -1, dtype=int)
 
     n_bins = len(edges)
@@ -471,7 +425,7 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             f"{hi if hi is not None else '∞'}: {mask.sum()} candidates."
         )
 
-        # P-values without background subtraction
+        # Compute p-values
         pval_data = profiler.signal_to_pvalue(
             halos["aperture"][mask],
             signal[mask],
@@ -479,22 +433,10 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             tsz_rand_signal,
         )
 
-        # P-values with background subtraction
-        pval_data_with_bg = profiler.signal_to_pvalue(
-            halos["aperture"][mask],
-            signal[mask],
-            theta_rand,
-            tsz_rand_signal,
-            background=background[mask],
-            radii_background_arcmin=halos["aperture_background"][mask],
-            theta_rand_background=theta_rand_bg,
-            map_rand_background=tsz_rand_background,
-        )
-
         fprint(
             f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] "
-            f"Computed empirical p-values (with and without background) "
-            f"for {lo:.2f} ≤ log M < {hi if hi is not None else '∞'}."
+            f"Computed empirical p-values for {lo:.2f} ≤ log M < "
+            f"{hi if hi is not None else '∞'}."
         )
 
         return_individual = analysis_cfg.get(
@@ -522,13 +464,12 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             )
             pool_samples = tsz_rand_signal.shape[0]
 
-        # Stack without background subtraction
+        # Stack normalized profiles
         stack = profiler.stack_normalized_profiles(
             halos["ell"][mask],
             halos["b"][mask],
             halos["aperture"][mask],
             radii_stack,
-            subtract_background=False,
             n_boot=analysis_cfg["bootstrap"],
             seed=analysis_cfg["seed"],
             random_profile_pool=tsz_rand_signal,
@@ -538,7 +479,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             return_random_profiles=return_random,
         )
         stack_out = stack
-        stacked_profile, stacked_err, rand_mean, rand_err = stack_out[:4]
+        (stacked_profile, stacked_error,
+         rand_mean, rand_error) = stack_out[:4]
         individual = None
         random_profiles = None
         idx = 4
@@ -548,66 +490,19 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         if return_random:
             random_profiles = stack_out[idx]
 
-        # Stack with background subtraction
-        bg_radius_norm = analysis_cfg["background_radius_norm"]
-        stack_bg = profiler.stack_normalized_profiles(
-            halos["ell"][mask],
-            halos["b"][mask],
-            halos["aperture"][mask],
-            radii_stack,
-            subtract_background=True,
-            radii_background_norm=bg_radius_norm,
-            n_boot=analysis_cfg["bootstrap"],
-            seed=analysis_cfg["seed"],
-            random_profile_pool=tsz_rand_signal,
-            random_profile_pool_background=tsz_rand_background,
-            random_pool_radii=theta_rand,
-            random_pool_samples=pool_samples,
-            return_individual=return_individual,
-            return_random_profiles=return_random,
-        )
-        stack_out_bg = stack_bg
-        (stacked_profile_with_bg, stacked_err_with_bg, rand_mean_with_bg,
-         rand_err_with_bg) = stack_out_bg[:4]
-        individual_with_bg = None
-        random_profiles_with_bg = None
-        idx_bg = 4
-        if return_individual:
-            individual_with_bg = stack_out_bg[idx_bg]
-            idx_bg += 1
-        if return_random:
-            random_profiles_with_bg = stack_out_bg[idx_bg]
-
-        # Calculate p-value profile from the stacks (without background)
+        # Calculate p-value profile from the stacks
         t_fit_nth = analysis_cfg.get("t_fit_nth_sample", 1)
         if individual is not None and random_profiles is not None:
             data_stack = np.nanmean(individual, axis=0)
             random_stacks = np.nanmean(random_profiles, axis=1)
             (p_value_profile, sigma_profile, t_fit_p_value,
              t_fit_sigma) = compute_significance_profile(
-                data_stack, random_stacks, t_fit_nth=t_fit_nth,
-                description="(no background)")
+                data_stack, random_stacks, t_fit_nth=t_fit_nth)
         else:
             p_value_profile = None
             sigma_profile = None
             t_fit_p_value = None
             t_fit_sigma = None
-
-        # Calculate p-value profile from the stacks (with background)
-        if (individual_with_bg is not None
-                and random_profiles_with_bg is not None):
-            data_stack_bg = np.nanmean(individual_with_bg, axis=0)
-            random_stacks_bg = np.nanmean(random_profiles_with_bg, axis=1)
-            (p_value_profile_with_bg, sigma_profile_with_bg,
-             t_fit_p_value_with_bg, t_fit_sigma_with_bg
-             ) = compute_significance_profile(
-                data_stack_bg, random_stacks_bg, t_fit_nth=t_fit_nth,
-                description="(with background)")
-        else:
-            p_value_profile_with_bg = None
-            sigma_profile_with_bg = None
-            t_fit_p_value_with_bg = None
-            t_fit_sigma_with_bg = None
 
         fprint(
             f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] Generated stacked "
@@ -650,7 +545,6 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
 
         indices = np.nonzero(mask)[0]
         halo_pval_data[indices] = pval_data
-        halo_pval_data_with_bg[indices] = pval_data_with_bg
         halo_bin_index[indices] = bin_idx
 
         hi_str = "∞" if hi is None else f"{hi:.2f}"
@@ -667,13 +561,9 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
                 "count": mask.sum(),
                 "pval_data": pval_data,
                 "stacked_profile": stacked_profile,
-                "stacked_error": stacked_err,
+                "stacked_error": stacked_error,
                 "random_profile": rand_mean,
-                "random_error": rand_err,
-                "stacked_profile_with_bg": stacked_profile_with_bg,
-                "stacked_error_with_bg": stacked_err_with_bg,
-                "random_profile_with_bg": rand_mean_with_bg,
-                "random_error_with_bg": rand_err_with_bg,
+                "random_error": rand_error,
                 "radii_norm": radii_stack,
                 "individual_profiles": individual,
                 "random_profiles": random_profiles,
@@ -681,10 +571,6 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
                 "sigma_profile": sigma_profile,
                 "t_fit_p_value": t_fit_p_value,
                 "t_fit_sigma": t_fit_sigma,
-                "p_value_profile_with_bg": p_value_profile_with_bg,
-                "sigma_profile_with_bg": sigma_profile_with_bg,
-                "t_fit_p_value_with_bg": t_fit_p_value_with_bg,
-                "t_fit_sigma_with_bg": t_fit_sigma_with_bg,
                 "cutout_mean": cutout_mean,
                 "cutout_random_mean": cutout_random_mean,
                 "cutout_extent": cutout_extent,
@@ -700,7 +586,6 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
     return {
         "halos": halos_sorted,
         "halo_pvals": halo_pval_data[mass_order],
-        "halo_pvals_with_bg": halo_pval_data_with_bg[mass_order],
         "halo_bins": halo_bin_index[mass_order],
         "original_index": mass_order,
         "results": results,
@@ -782,18 +667,14 @@ def main():
     ):
         cutout_params["random_samples"] = None
 
-    (theta_rand, tsz_rand_signal, theta_rand_bg,
-     tsz_rand_background) = cmbo.io.read_from_hdf5(
+    theta_rand, tsz_rand_signal = cmbo.io.read_from_hdf5(
         map_cfg["random_pointing"],
         "theta_rand",
         "tsz_rand_signal",
-        "theta_rand_bg",
-        "tsz_rand_background",
     )
     fprint(
         f"Loaded random pointing pool from {map_cfg['random_pointing']} "
-        f"with signal shape {tsz_rand_signal.shape} and background shape "
-        f"{tsz_rand_background.shape}."
+        f"with signal shape {tsz_rand_signal.shape}."
     )
 
     sim_key = analysis_cfg["which_simulation"]
@@ -810,8 +691,6 @@ def main():
             radii_stack,
             theta_rand,
             tsz_rand_signal,
-            tsz_rand_background,
-            theta_rand_bg,
             cutout_extractor,
             cutout_params,
             idx,
