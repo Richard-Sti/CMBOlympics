@@ -873,7 +873,6 @@ class PointingEnclosedProfile:
                 "find_centers_observed_clusters first."
             )
 
-        n_clusters = len(clusters_to_process)
         iterator = tqdm(clusters_to_process, desc="Computing profiles",
                         disable=not verbose)
 
@@ -1539,4 +1538,4 @@ class Pointing2DCutout:
                 print(f"  Peak:  ({ell_center:.3f}, {b_center:.3f})")
                 print(f"  Offset: {offset:.2f} arcmin")
                 if not info['converged']:
-                    print(f"  WARNING: Did not converge!")
+                    print("WARNING: Did not converge!")
