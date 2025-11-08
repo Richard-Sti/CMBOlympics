@@ -114,3 +114,13 @@ mass_key = "Group_M_Crit200"
 radius_key = "Group_R_Crit200"
 box_size = 676.6
 omega_m = 0.3111
+
+
+[halo_catalogues.manticore]
+fname = "data/manticore_fof.hdf5"
+nsim = 16417 # Which simulation number to process ("all" or a specific integer)
+position_key = "Coordinates"
+mass_key = "Group_M_Crit200"
+radius_key = "Group_R_Crit200"
+box_size = 681.0
+omega_m = 0.306
