@@ -3,13 +3,13 @@
 # --- Paths ---
 # Base directory used to resolve relative paths in this config.
 [paths]
-# root = "/Users/rstiskalek/Projects/CMBOlympics"
-root = "/mnt/extraspace/rstiskalek/CMBOlympics"
+root = "/Users/rstiskalek/Projects/CMBOlympics"
+# root = "/mnt/extraspace/rstiskalek/CMBOlympics"
 
 # --- Runtime ---
 # Global parallelism controls placed near the top for quick access.
 [runtime]
-n_jobs = 28
+n_jobs = 4
 
 # --- Input Maps ---
 # Paths to the HEALPix maps for the tSZ signal and random pointings.
@@ -27,12 +27,9 @@ smooth_fwhm = 9.6
 # Signal aperture radii configuration (arcmin).
 theta_min = 1.0
 theta_max = 601.0
-n_theta = 1001
-# Background annulus radii (arcmin); match signal limits if unchanged.
-theta_background_min = 1.0
-theta_background_max = 601.0
+n_theta = 151
 # Random pointing sampling controls.
-n_points = 100_000
+n_points = 1000
 abs_b_min = 10.0
 fwhm_arcmin = 9.6
 seed = 42
@@ -45,8 +42,8 @@ r_max = 150.0     # Maximum comoving distance [Mpc/h]
 b_min = 10.0      # Minimum Galactic latitude (absolute value) [degrees]
 mass_min = 1e14   # Minimum halo mass (M_200c) [M_sun/h]
 mass_max = 1e16   # Maximum halo mass (M_200c) [M_sun/h]
-theta_min = 10.0  # Minimum angular size (theta_200) [arcmin]
-theta_max = 6000  # Maximum angular size (theta_200) [arcmin]
+theta_min = 5.0   # Minimum angular size (theta_500) [arcmin]
+theta_max = 6000  # Maximum angular size (theta_500) [arcmin]
 
 # --- Mass Binning ---
 # Parameters for dividing the selected halos into mass bins.
@@ -58,17 +55,17 @@ verbose_bins = true # Print details about the created mass bins
 # --- Analysis Parameters ---
 # Settings for the main analysis pipeline.
 [analysis]
-which_simulation = "csiborg1" # Key for the halo catalogue to use (see below)
+which_simulation = "csiborg2" # Key for the halo catalogue to use (see below)
 output_folder = "results" # Folder to save the HDF5 output file
 # output_tag = ""             # Optional tag to append to the output filename
 
 # Aperture and profile settings
-aperture_scale = 1.0            # Aperture size for per-halo p-value, as a multiple of theta_200
-background_radius_norm = 1.25   # Normalized radius for background measurement (applies to both per-halo and stacked profiles)
+aperture_scale = 5.0            # Aperture size for per-halo p-value, as a multiple of theta_500
+background_radius_norm = 5.0    # Normalized radius for background measurement
 
 # Stacked profile settings
-stack_rmin = 0.1  # Minimum radius for stacked profiles (in units of theta_200)
-stack_rmax = 3.0  # Maximum radius for stacked profiles (in units of theta_200)
+stack_rmin = 0.1  # Minimum radius for stacked profiles (in units of theta_500)
+stack_rmax = 2.0  # Maximum radius for stacked profiles (in units of theta_500)
 stack_n = 501     # Number of radial bins for stacked profiles
 
 # 2D cutout settings
@@ -76,7 +73,7 @@ cutout_random_samples = 0    # Number of random cutouts to stack for comparison 
 cutout_max_bins = 3          # Only generate cutouts for the first N mass bins
 cutout_pixels = 301          # Number of pixels per side for each 2D cutout
 cutout_nbins = 256           # Number of bins for the normalized 2D cutout grid
-cutout_size_scale = 5        # Cutout size as a multiple of theta_200
+cutout_size_scale = 5        # Cutout size as a multiple of theta_500
 cutout_random_abs_b_min = 10 # Minimum Galactic latitude for random cutouts
 
 # Stacking and significance settings
@@ -104,14 +101,14 @@ box_size = 677.7
 omega_m = 0.307
 position_key = "Position"
 mass_key = "M200c"
-radius_key = "R200c"
+radius_key = "R500c"
 
 [halo_catalogues.csiborg2]
 fname = "data/csiborg2_fof.hdf5"
 nsim = 16417 # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
 mass_key = "Group_M_Crit200"
-radius_key = "Group_R_Crit200"
+radius_key = "Group_R_Crit500"
 box_size = 676.6
 omega_m = 0.3111
 
@@ -121,6 +118,6 @@ fname = "data/manticore_fof.hdf5"
 nsim = 16417 # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
 mass_key = "Group_M_Crit200"
-radius_key = "Group_R_Crit200"
+radius_key = "Group_R_Crit500"
 box_size = 681.0
 omega_m = 0.306
