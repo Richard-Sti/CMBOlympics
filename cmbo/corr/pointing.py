@@ -827,6 +827,72 @@ class PointingEnclosedProfile:
 
         return pval
 
+    def compute_profiles_observed_clusters(self, obs_clusters, radii_arcmin,
+                                           radii_background_arcmin=None,
+                                           verbose=True):
+        """
+        Compute 1D radial profiles for observed clusters.
+
+        For each cluster with map_fit information, computes signal and
+        background profiles at the specified radii and stores the results
+        in the cluster's map_fit dictionary.
+
+        Parameters
+        ----------
+        obs_clusters
+            ObservedClusterCatalogue instance with map_fit populated.
+        radii_arcmin
+            Array of aperture radii [arcmin] at which to measure profiles.
+        radii_background_arcmin
+            Array of inner radii [arcmin] for background annulus. If None,
+            defaults to radii_arcmin. Can be scalar or array matching
+            radii_arcmin. Default: None.
+        verbose
+            If True, show progress bar. Default: True.
+        """
+        radii_arcmin = np.asarray(radii_arcmin, dtype=float)
+
+        if radii_background_arcmin is None:
+            radii_background_arcmin = radii_arcmin
+        else:
+            radii_background_arcmin = np.asarray(
+                radii_background_arcmin, dtype=float)
+            if radii_background_arcmin.size == 1:
+                radii_background_arcmin = np.full(
+                    radii_arcmin.shape, radii_background_arcmin.item())
+
+        # Filter clusters with map_fit
+        clusters_to_process = [
+            (i, cluster) for i, cluster in enumerate(obs_clusters)
+            if cluster.map_fit is not None
+        ]
+
+        if not clusters_to_process:
+            raise ValueError(
+                "No clusters with map_fit found. Run "
+                "find_centers_observed_clusters first."
+            )
+
+        n_clusters = len(clusters_to_process)
+        iterator = tqdm(clusters_to_process, desc="Computing profiles",
+                        disable=not verbose)
+
+        for i, cluster in iterator:
+            ell = cluster.map_fit['ell']
+            b = cluster.map_fit['b']
+
+            # Compute profile at all radii
+            signal, background = self.get_profile(
+                ell, b, radii_arcmin,
+                radii_background_arcmin=radii_background_arcmin
+            )
+
+            # Store in map_fit
+            obs_clusters.clusters[i].map_fit['radii_arcmin'] = radii_arcmin
+            obs_clusters.clusters[i].map_fit['signal_profile'] = signal
+            obs_clusters.clusters[i].map_fit['background_profile'] = (
+                background)
+
 
 @contextmanager
 def tqdm_joblib(tqdm_object):
@@ -1401,3 +1467,76 @@ class Pointing2DCutout:
             ell_deg, b_deg, size_arcmin)
 
         return ell_deg, b_deg, result, cutout_centered, extent
+
+    def find_centers_observed_clusters(self, obs_clusters, size_arcmin=240.0,
+                                       initial_radius_arcmin=None,
+                                       final_radius_arcmin=None,
+                                       shrink_factor=0.9,
+                                       max_iterations=1000,
+                                       verbose=True):
+        """
+        Find tSZ peak centers for all observed clusters.
+
+        For each cluster in the catalogue, finds the tSZ signal peak
+        and stores the result in the cluster's map_fit dictionary.
+
+        Parameters
+        ----------
+        obs_clusters
+            ObservedClusterCatalogue instance.
+        size_arcmin
+            Size of cutout for searching [arcmin]. Default: 240.0.
+        initial_radius_arcmin
+            Initial search aperture radius [arcmin]. If None, defaults
+            to size_arcmin / sqrt(2). Default: None.
+        final_radius_arcmin
+            Final aperture radius [arcmin]. If None, uses the FWHM of
+            the map. Default: None.
+        shrink_factor
+            Factor by which to shrink the aperture each iteration.
+            Must be between 0 and 1. Default: 0.9.
+        max_iterations
+            Maximum number of iterations. Default: 1000.
+        verbose
+            If True, print progress for each cluster. Default: True.
+        """
+        gal_coords = obs_clusters.galactic_coordinates
+
+        for i, (ell_obs, b_obs) in enumerate(gal_coords):
+            cluster_name = obs_clusters.names[i]
+
+            if verbose:
+                print(f"Processing {cluster_name} ({i+1}/"
+                      f"{len(obs_clusters)})...")
+
+            # Find the tSZ center
+            ell_center, b_center, info, cutout, extent = self.find_center(
+                ell_obs, b_obs,
+                size_arcmin=size_arcmin,
+                initial_radius_arcmin=initial_radius_arcmin,
+                final_radius_arcmin=final_radius_arcmin,
+                shrink_factor=shrink_factor,
+                max_iterations=max_iterations,
+                verbose=False
+            )
+
+            # Store in cluster object
+            obs_clusters.clusters[i].map_fit = {
+                'ell': float(ell_center),
+                'b': float(b_center),
+                'converged': info['converged'],
+                'n_iterations': info['n_iterations'],
+                'final_radius_arcmin': info['final_radius_arcmin'],
+                'cutout': cutout,
+                'extent': extent,
+            }
+
+            if verbose:
+                offset = np.sqrt(
+                    (ell_center - ell_obs)**2 + (b_center - b_obs)**2
+                ) * 60.0
+                print(f"  Input: ({ell_obs:.3f}, {b_obs:.3f})")
+                print(f"  Peak:  ({ell_center:.3f}, {b_center:.3f})")
+                print(f"  Offset: {offset:.2f} arcmin")
+                if not info['converged']:
+                    print(f"  WARNING: Did not converge!")
