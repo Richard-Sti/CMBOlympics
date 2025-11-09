@@ -35,10 +35,6 @@ class BinResult:
     stacked_error: Optional[np.ndarray] = None
     random_profile: Optional[np.ndarray] = None
     random_error: Optional[np.ndarray] = None
-    stacked_profile_with_background: Optional[np.ndarray] = None
-    stacked_error_with_background: Optional[np.ndarray] = None
-    random_profile_with_background: Optional[np.ndarray] = None
-    random_error_with_background: Optional[np.ndarray] = None
     radii_norm: Optional[np.ndarray] = None
     individual_profiles: Optional[np.ndarray] = None
     random_profiles: Optional[np.ndarray] = None
@@ -49,10 +45,6 @@ class BinResult:
     sigma_profile: Optional[np.ndarray] = None
     t_fit_p_value: Optional[np.ndarray] = None
     t_fit_sigma: Optional[np.ndarray] = None
-    p_value_profile_with_background: Optional[np.ndarray] = None
-    sigma_profile_with_background: Optional[np.ndarray] = None
-    t_fit_p_value_with_background: Optional[np.ndarray] = None
-    t_fit_sigma_with_background: Optional[np.ndarray] = None
 
     @property
     def has_profiles(self):
@@ -242,13 +234,31 @@ class TSZMassBinResults:
                     pval_data=subgrp["pval_data"][...],
                 )
                 if self.include_profiles and "stacked_profile" in subgrp:
-                    entry_kwargs.update(
-                        stacked_profile=subgrp["stacked_profile"][...],
-                        stacked_error=subgrp["stacked_error"][...],
-                        random_profile=subgrp["random_profile"][...],
-                        random_error=subgrp["random_error"][...],
-                        radii_norm=subgrp["radii_norm"][...],
-                    )
+                    # Load standard deviation fields
+                    if "stacked_error" in subgrp:
+                        entry_kwargs.update(
+                            stacked_profile=subgrp["stacked_profile"][...],
+                            stacked_error=subgrp["stacked_error"][...],
+                            random_profile=subgrp["random_profile"][...],
+                            random_error=subgrp["random_error"][...],
+                            radii_norm=subgrp["radii_norm"][...],
+                        )
+                    # Backward compatibility: old files with percentile-based fields
+                    elif "stacked_low" in subgrp and "stacked_high" in subgrp:
+                        # For backward compatibility, use the midpoint of low/high as error
+                        stacked_low = subgrp["stacked_low"][...]
+                        stacked_high = subgrp["stacked_high"][...]
+                        stacked_err = (stacked_high - stacked_low) / 2.0
+                        random_low = subgrp["random_low"][...]
+                        random_high = subgrp["random_high"][...]
+                        random_err = (random_high - random_low) / 2.0
+                        entry_kwargs.update(
+                            stacked_profile=subgrp["stacked_profile"][...],
+                            stacked_error=stacked_err,
+                            random_profile=subgrp["random_profile"][...],
+                            random_error=random_err,
+                            radii_norm=subgrp["radii_norm"][...],
+                        )
                 if self.include_profiles and "individual_profiles" in subgrp:
                     entry_kwargs["individual_profiles"] = subgrp[
                         "individual_profiles"
@@ -282,38 +292,6 @@ class TSZMassBinResults:
                 if "t_fit_sigma" in subgrp:
                     entry_kwargs["t_fit_sigma"] = subgrp[
                         "t_fit_sigma"
-                    ][...]
-                if "stacked_profile_with_background" in subgrp:
-                    entry_kwargs["stacked_profile_with_background"] = subgrp[
-                        "stacked_profile_with_background"
-                    ][...]
-                if "stacked_error_with_background" in subgrp:
-                    entry_kwargs["stacked_error_with_background"] = subgrp[
-                        "stacked_error_with_background"
-                    ][...]
-                if "random_profile_with_background" in subgrp:
-                    entry_kwargs["random_profile_with_background"] = subgrp[
-                        "random_profile_with_background"
-                    ][...]
-                if "random_error_with_background" in subgrp:
-                    entry_kwargs["random_error_with_background"] = subgrp[
-                        "random_error_with_background"
-                    ][...]
-                if "p_value_profile_with_background" in subgrp:
-                    entry_kwargs["p_value_profile_with_background"] = subgrp[
-                        "p_value_profile_with_background"
-                    ][...]
-                if "sigma_profile_with_background" in subgrp:
-                    entry_kwargs["sigma_profile_with_background"] = subgrp[
-                        "sigma_profile_with_background"
-                    ][...]
-                if "t_fit_p_value_with_background" in subgrp:
-                    entry_kwargs["t_fit_p_value_with_background"] = subgrp[
-                        "t_fit_p_value_with_background"
-                    ][...]
-                if "t_fit_sigma_with_background" in subgrp:
-                    entry_kwargs["t_fit_sigma_with_background"] = subgrp[
-                        "t_fit_sigma_with_background"
                     ][...]
                 bins.append(BinResult(**entry_kwargs))
 
