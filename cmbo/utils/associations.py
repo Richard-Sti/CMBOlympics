@@ -21,17 +21,13 @@ class HaloAssociation:
 
     # Map signal fields (populated by compute_map_signals)
     median_galactic: tuple = field(default=None)  # (r, ell, b)
-    median_theta200: float = field(default=None)
+    median_theta500: float = field(default=None)
     median_signal: float = field(default=None)
-    median_background: float = field(default=None)
     median_pval: float = field(default=None)
-    median_pval_with_background: float = field(default=None)
     halo_galactic: tuple = field(default=None)  # (r, ell, b) arrays
-    halo_theta200: np.ndarray = field(default=None)
+    halo_theta500: np.ndarray = field(default=None)
     halo_signals: np.ndarray = field(default=None)
-    halo_backgrounds: np.ndarray = field(default=None)
     halo_pvals: np.ndarray = field(default=None)
-    halo_pvals_with_background: np.ndarray = field(default=None)
 
     def keys(self):
         keys = [
@@ -131,9 +127,7 @@ class HaloAssociation:
         return float(r[0]), float(ell[0]), float(b[0])
 
     def compute_map_signals(self, profiler, obs_pos, theta_rand, map_rand,
-                            theta_rand_bg=None, map_rand_bg=None,
-                            background_radius_norm=1.5,
-                            r_key="Group_R_Crit200", coord_system="icrs"):
+                            r_key="Group_R_Crit500", coord_system="icrs"):
         """
         Compute and store map signals and p-values for this association.
 
@@ -152,17 +146,8 @@ class HaloAssociation:
         map_rand
             Map signal profiles for random pointings, shape
             (n_random, n_theta).
-        theta_rand_bg : array_like, optional
-            Angular sizes for random background profiles (arcmin).
-            If None, background is not used in p-value calculation.
-        map_rand_bg : array_like, optional
-            Map background profiles for random pointings, shape
-            (n_random, n_theta_bg). If None, background is not used.
-        background_radius_norm
-            Normalized radius for background annulus (default 1.5).
-            Background measured at theta200 * background_radius_norm.
         r_key
-            Key in optional_data for halo radii (e.g., 'Group_R_Crit200').
+            Key in optional_data for halo radii (e.g., 'Group_R_Crit500').
         coord_system
             Coordinate system of positions. Currently only "icrs".
         """
@@ -183,93 +168,51 @@ class HaloAssociation:
         radii = self.optional_data[r_key]
 
         # Compute aperture sizes
-        theta200 = np.rad2deg(np.arctan(radii / r)) * 60
-        theta200_bg = theta200 * background_radius_norm
+        theta500 = np.rad2deg(np.arctan(radii / r)) * 60
 
         # Compute median position and aperture
         median_r = float(np.median(r))
         median_ell = float(np.median(ell))
         median_b = float(np.median(b))
-        median_theta200 = float(np.median(theta200))
-        median_theta200_bg = float(np.median(theta200_bg))
+        median_theta500 = float(np.median(theta500))
 
         # Measure signal at median position
-        result = profiler.get_profile(
-            median_ell, median_b, median_theta200,
-            radii_background_arcmin=median_theta200_bg
-        )
-        median_signal = float(result[0])
-        median_background = float(result[1])
+        median_signal = float(profiler.get_profile(
+            median_ell, median_b, median_theta500
+        ))
 
-        # Compute p-value for median (without background subtraction)
+        # Compute p-value for median
         median_pval = float(profiler.signal_to_pvalue(
-            np.array([median_theta200]),
+            np.array([median_theta500]),
             np.array([median_signal]),
             theta_rand,
             map_rand
         )[0])
 
-        # Compute p-value with background subtraction if available
-        use_bg = (theta_rand_bg is not None and map_rand_bg is not None)
-        if use_bg:
-            median_pval_with_bg = float(profiler.signal_to_pvalue(
-                np.array([median_theta200]),
-                np.array([median_signal]),
-                theta_rand,
-                map_rand,
-                background=np.array([median_background]),
-                radii_background_arcmin=np.array([median_theta200_bg]),
-                theta_rand_background=theta_rand_bg,
-                map_rand_background=map_rand_bg
-            )[0])
-        else:
-            median_pval_with_bg = None
-
         # Measure signals for all haloes (disable progress bar)
-        results = profiler.get_profiles_per_source(
-            ell, b, theta200, radii_background_arcmin=theta200_bg,
-            verbose=False
+        halo_signals = profiler.get_profiles_per_source(
+            ell, b, theta500, verbose=False
         )
-        halo_signals = results[0]
-        halo_backgrounds = results[1]
 
-        # Compute p-values for all haloes (without background subtraction)
+        # Compute p-values for all haloes
         halo_pvals = profiler.signal_to_pvalue(
-            theta200, halo_signals, theta_rand, map_rand
+            theta500, halo_signals, theta_rand, map_rand
         )
-
-        # Compute p-values with background subtraction if available
-        if use_bg:
-            halo_pvals_with_bg = profiler.signal_to_pvalue(
-                theta200, halo_signals, theta_rand, map_rand,
-                background=halo_backgrounds,
-                radii_background_arcmin=theta200_bg,
-                theta_rand_background=theta_rand_bg,
-                map_rand_background=map_rand_bg
-            )
-        else:
-            halo_pvals_with_bg = None
 
         # Store results
         self.median_galactic = (median_r, median_ell, median_b)
-        self.median_theta200 = median_theta200
+        self.median_theta500 = median_theta500
         self.median_signal = median_signal
-        self.median_background = median_background
         self.median_pval = median_pval
-        self.median_pval_with_background = median_pval_with_bg
         self.halo_galactic = (r, ell, b)
-        self.halo_theta200 = theta200
+        self.halo_theta500 = theta500
         self.halo_signals = halo_signals
-        self.halo_backgrounds = halo_backgrounds
         self.halo_pvals = halo_pvals
-        self.halo_pvals_with_background = halo_pvals_with_bg
 
 
 def compute_association_signals(associations, profiler, obs_pos,
                                 theta_rand, map_rand,
-                                theta_rand_bg=None, map_rand_bg=None,
-                                background_radius_norm=1.5,
-                                r_key="Group_R_Crit200",
+                                r_key="Group_R_Crit500",
                                 coord_system="icrs"):
     """
     Compute map signals for all associations in a list.
@@ -289,15 +232,6 @@ def compute_association_signals(associations, profiler, obs_pos,
         Angular sizes for random pointings (arcmin).
     map_rand
         Map signals for random pointings, shape (n_random, n_theta).
-    theta_rand_bg : array_like, optional
-        Angular sizes for random background profiles (arcmin).
-        If None, background is not used in p-value calculation.
-    map_rand_bg : array_like, optional
-        Map background profiles for random pointings, shape
-        (n_random, n_theta_bg). If None, background is not used.
-    background_radius_norm
-        Normalized radius for background annulus (default 1.5).
-        Background measured at theta200 * background_radius_norm.
     r_key
         Key in optional_data for halo radii.
     coord_system
@@ -306,9 +240,6 @@ def compute_association_signals(associations, profiler, obs_pos,
     for assoc in tqdm(associations, desc="Computing association signals"):
         assoc.compute_map_signals(
             profiler, obs_pos, theta_rand, map_rand,
-            theta_rand_bg=theta_rand_bg,
-            map_rand_bg=map_rand_bg,
-            background_radius_norm=background_radius_norm,
             r_key=r_key,
             coord_system=coord_system
         )
