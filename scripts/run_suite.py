@@ -439,9 +439,9 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             f"{hi if hi is not None else '∞'}."
         )
 
-        return_individual = analysis_cfg.get(
+        save_individual = analysis_cfg.get(
             "return_individual_profiles", True)
-        return_random = analysis_cfg.get("return_random_profiles", True)
+        save_random = analysis_cfg.get("return_random_profiles", True)
 
         # Set the number of random samples based on the bin index
         high_sample_bins = analysis_cfg.get("high_sample_bins", 0)
@@ -465,6 +465,7 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             pool_samples = tsz_rand_signal.shape[0]
 
         # Stack normalized profiles
+        # Always request individual and random profiles for p-value computation
         stack = profiler.stack_normalized_profiles(
             halos["ell"][mask],
             halos["b"][mask],
@@ -475,34 +476,20 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             random_profile_pool=tsz_rand_signal,
             random_pool_radii=theta_rand,
             random_pool_samples=pool_samples,
-            return_individual=return_individual,
-            return_random_profiles=return_random,
+            return_individual=True,
+            return_random_profiles=True,
         )
         stack_out = stack
         (stacked_profile, stacked_error,
-         rand_mean, rand_error) = stack_out[:4]
-        individual = None
-        random_profiles = None
-        idx = 4
-        if return_individual:
-            individual = stack_out[idx]
-            idx += 1
-        if return_random:
-            random_profiles = stack_out[idx]
+         rand_mean, rand_error, individual, random_profiles) = stack_out
 
         # Calculate p-value profile from the stacks
         t_fit_nth = analysis_cfg.get("t_fit_nth_sample", 1)
-        if individual is not None and random_profiles is not None:
-            data_stack = np.nanmean(individual, axis=0)
-            random_stacks = np.nanmean(random_profiles, axis=1)
-            (p_value_profile, sigma_profile, t_fit_p_value,
-             t_fit_sigma) = compute_significance_profile(
-                data_stack, random_stacks, t_fit_nth=t_fit_nth)
-        else:
-            p_value_profile = None
-            sigma_profile = None
-            t_fit_p_value = None
-            t_fit_sigma = None
+        data_stack = np.nanmean(individual, axis=0)
+        random_stacks = np.nanmean(random_profiles, axis=1)
+        (p_value_profile, sigma_profile, t_fit_p_value,
+         t_fit_sigma) = compute_significance_profile(
+            data_stack, random_stacks, t_fit_nth=t_fit_nth)
 
         fprint(
             f"[Sim {sim_id}] [Bin {bin_idx + 1}/{n_bins}] Generated stacked "
@@ -565,8 +552,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
                 "random_profile": rand_mean,
                 "random_error": rand_error,
                 "radii_norm": radii_stack,
-                "individual_profiles": individual,
-                "random_profiles": random_profiles,
+                "individual_profiles": individual if save_individual else None,
+                "random_profiles": random_profiles if save_random else None,
                 "p_value_profile": p_value_profile,
                 "sigma_profile": sigma_profile,
                 "t_fit_p_value": t_fit_p_value,
