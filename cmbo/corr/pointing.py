@@ -65,10 +65,9 @@ class PointingEnclosedProfile:
         self.batch_size = batch_size
         self.fwhm_arcmin = fwhm_arcmin
 
-    def get_profile(self, ell_deg, b_deg, radii_arcmin,
-                    radii_background_arcmin=None):
+    def get_profile(self, ell_deg, b_deg, radii_arcmin):
         """
-        Mean enclosed profile with separate background estimate.
+        Mean enclosed profile at specified aperture radii.
 
         Parameters
         ----------
@@ -78,18 +77,11 @@ class PointingEnclosedProfile:
             Galactic latitude [deg].
         radii_arcmin : float or array_like
             Aperture radius/radii [arcmin] for signal measurement.
-        radii_background_arcmin : float or array_like or None, optional
-            Inner radius/radii [arcmin] of the background annulus. The
-            annulus extends from radii_background_arcmin to
-            radii_background_arcmin + fwhm_arcmin. If None, defaults to
-            radii_arcmin. Default: None.
 
         Returns
         -------
         signal : float or ndarray
             Mean value(s) within aperture(s).
-        background : float or ndarray
-            Mean value(s) in annular background region.
         """
         assert isinstance(ell_deg, (float, int)), \
             "`ell_deg` must be a scalar."
@@ -98,50 +90,14 @@ class PointingEnclosedProfile:
 
         radii_arcmin = np.atleast_1d(radii_arcmin)
 
-        if radii_background_arcmin is None:
-            radii_background_arcmin = radii_arcmin
-        else:
-            radii_background_arcmin = np.atleast_1d(
-                radii_background_arcmin)
-
-        if len(radii_background_arcmin) != len(radii_arcmin):
-            if len(radii_background_arcmin) == 1:
-                radii_background_arcmin = np.full(
-                    len(radii_arcmin), radii_background_arcmin[0])
-            else:
-                raise ValueError(
-                    "radii_background_arcmin must match radii_arcmin "
-                    "in length or be a scalar."
-                )
-
         th0 = np.radians(90.0 - b_deg)
         ph0 = np.radians(ell_deg)
         v0 = hp.ang2vec(th0, ph0)
 
         signal = np.full(len(radii_arcmin), np.nan)
-        background = np.full(len(radii_arcmin), np.nan)
 
-        for i, (r_arcmin, r_bg_arcmin) in enumerate(
-                zip(radii_arcmin, radii_background_arcmin)):
+        for i, r_arcmin in enumerate(radii_arcmin):
             r_rad = np.radians(r_arcmin / 60.0)
-            r_bg_inner_rad = np.radians(r_bg_arcmin / 60.0)
-            r_bg_outer_rad = np.radians(
-                (r_bg_arcmin + self.fwhm_arcmin) / 60.0)
-
-            # Query outer radius for background
-            idx_outer = hp.query_disc(
-                self.nside, v0, r_bg_outer_rad, inclusive=False,
-                fact=4)
-            if idx_outer.size == 0:
-                continue
-
-            values_outer = self.m[idx_outer]
-            good_outer = self.mask[idx_outer]
-            if not np.any(good_outer):
-                continue
-
-            vec_outer = hp.pix2vec(self.nside, idx_outer)
-            cosang_outer = np.clip(np.dot(v0, vec_outer), -1., 1.0)
 
             # Signal aperture
             idx_signal = hp.query_disc(
@@ -152,27 +108,88 @@ class PointingEnclosedProfile:
                 if np.any(good_signal):
                     signal[i] = np.mean(values_signal[good_signal])
 
-            # Background annulus
-            cos_bg_inner = np.cos(r_bg_inner_rad)
-            cos_bg_outer = np.cos(r_bg_outer_rad)
-            annulus_mask = (good_outer &
-                            (cosang_outer <= cos_bg_inner + 1e-12) &
-                            (cosang_outer >= cos_bg_outer - 1e-12))
-
-            if np.any(annulus_mask):
-                background[i] = np.mean(values_outer[annulus_mask])
-
-        # If input was scalar, return scalars
+        # If input was scalar, return scalar
         if signal.size == 1:
-            return float(signal[0]), float(background[0])
+            return float(signal[0])
 
-        return signal, background
+        return signal
+
+    def get_background(self, ell_deg, b_deg, radii_inner_arcmin,
+                       radii_outer_arcmin=None):
+        """
+        Mean background in annular regions.
+
+        Parameters
+        ----------
+        ell_deg : float
+            Galactic longitude [deg].
+        b_deg : float
+            Galactic latitude [deg].
+        radii_inner_arcmin : float or array_like
+            Inner radius/radii [arcmin] for background annulus.
+        radii_outer_arcmin : float or array_like, optional
+            Outer radius/radii [arcmin] for background annulus. If None,
+            defaults to 2 * radii_inner_arcmin.
+
+        Returns
+        -------
+        background : float or ndarray
+            Mean value(s) in annular region(s).
+        """
+        assert isinstance(ell_deg, (float, int)), \
+            "`ell_deg` must be a scalar."
+        assert isinstance(b_deg, (float, int)), \
+            "`b_deg` must be a scalar."
+
+        radii_inner_arcmin = np.atleast_1d(radii_inner_arcmin)
+        if radii_outer_arcmin is None:
+            radii_outer_arcmin = 2.0 * radii_inner_arcmin
+        else:
+            radii_outer_arcmin = np.atleast_1d(radii_outer_arcmin)
+
+        if radii_inner_arcmin.shape != radii_outer_arcmin.shape:
+            raise ValueError(
+                "radii_inner_arcmin and radii_outer_arcmin must have "
+                "the same shape."
+            )
+
+        th0 = np.radians(90.0 - b_deg)
+        ph0 = np.radians(ell_deg)
+        v0 = hp.ang2vec(th0, ph0)
+
+        background = np.full(len(radii_inner_arcmin), np.nan)
+
+        for i, (r_in, r_out) in enumerate(zip(radii_inner_arcmin,
+                                               radii_outer_arcmin)):
+            r_in_rad = np.radians(r_in / 60.0)
+            r_out_rad = np.radians(r_out / 60.0)
+
+            # Get pixels in outer disc
+            idx_outer = hp.query_disc(
+                self.nside, v0, r_out_rad, inclusive=False, fact=4)
+            # Get pixels in inner disc
+            idx_inner = hp.query_disc(
+                self.nside, v0, r_in_rad, inclusive=False, fact=4)
+
+            # Annulus is outer minus inner
+            idx_annulus = np.setdiff1d(idx_outer, idx_inner)
+
+            if idx_annulus.size > 0:
+                values_bg = self.m[idx_annulus]
+                good_bg = self.mask[idx_annulus]
+                if np.any(good_bg):
+                    background[i] = np.mean(values_bg[good_bg])
+
+        # If input was scalar, return scalar
+        if background.size == 1:
+            return float(background[0])
+
+        return background
 
     def get_profiles_per_source(self, ell_deg, b_deg, radii_arcmin,
-                                radii_background_arcmin=None,
                                 verbose=True):
         """
-        Mean enclosed profiles with separate background estimates.
+        Mean enclosed profiles for multiple sources.
 
         Parameters
         ----------
@@ -182,10 +199,6 @@ class PointingEnclosedProfile:
             Galactic latitudes [deg].
         radii_arcmin : array_like
             Aperture radii [arcmin], one per pointing.
-        radii_background_arcmin : array_like, optional
-            Inner radius of background annulus [arcmin]. If None, defaults
-            to radii_arcmin. Can be a scalar (applied to all sources) or
-            an array matching the shape of radii_arcmin.
         verbose : bool, optional
             If True, show progress bar. Default: True.
 
@@ -193,28 +206,15 @@ class PointingEnclosedProfile:
         -------
         signal : ndarray
             Mean values within each aperture.
-        background : ndarray
-            Mean values in each annular background region.
         """
         ell_deg = np.asarray(np.atleast_1d(ell_deg))
         b_deg = np.asarray(np.atleast_1d(b_deg))
         radii_arcmin = np.asarray(np.atleast_1d(radii_arcmin))
 
-        if radii_background_arcmin is None:
-            radii_background_arcmin = radii_arcmin
-        else:
-            radii_background_arcmin = np.asarray(
-                np.atleast_1d(radii_background_arcmin))
-            if radii_background_arcmin.size == 1:
-                radii_background_arcmin = np.full(
-                    radii_arcmin.shape, radii_background_arcmin.item())
-
         assert ell_deg.shape == b_deg.shape == radii_arcmin.shape
-        assert radii_background_arcmin.shape == radii_arcmin.shape
 
         n = ell_deg.size
         signal = np.full(n, np.nan, dtype=float)
-        background = np.full(n, np.nan, dtype=float)
 
         with tempfile.NamedTemporaryFile(suffix=".mmap",
                                          delete=False) as tmp:
@@ -233,12 +233,9 @@ class PointingEnclosedProfile:
                 iterator = tqdm(range(n), desc="Measuring profiles",
                                 disable=not verbose)
                 for i in iterator:
-                    sig, bg = temp_obj.get_profile(
-                        ell_deg[i], b_deg[i], radii_arcmin[i],
-                        radii_background_arcmin=radii_background_arcmin[i]
+                    signal[i] = temp_obj.get_profile(
+                        ell_deg[i], b_deg[i], radii_arcmin[i]
                     )
-                    signal[i] = sig
-                    background[i] = bg
             else:
                 from contextlib import nullcontext
                 ctx = tqdm_joblib(
@@ -248,33 +245,25 @@ class PointingEnclosedProfile:
                     else nullcontext()
 
                 with ctx:
-                    res = Parallel(n_jobs=self.n_jobs,
-                                   prefer=self.prefer,
-                                   batch_size=self.batch_size,
-                                   timeout=300)(
+                    signal[:] = Parallel(n_jobs=self.n_jobs,
+                                         prefer=self.prefer,
+                                         batch_size=self.batch_size,
+                                         timeout=300)(
                         delayed(temp_obj.get_profile)(
-                            ell_deg[i], b_deg[i], radii_arcmin[i],
-                            radii_background_arcmin=radii_background_arcmin[i])
+                            ell_deg[i], b_deg[i], radii_arcmin[i])
                         for i in range(n)
                     )
-                # Unpack tuples into separate arrays
-                for i, (sig, bg) in enumerate(res):
-                    signal[i] = sig
-                    background[i] = bg
         finally:
             if os.path.exists(mmap_path):
                 os.remove(mmap_path)
 
-        return signal, background
+        return signal
 
     def stack_normalized_profiles(self, ell_deg, b_deg, theta_ref_arcmin,
-                                  radii_norm, subtract_background=True,
-                                  radii_background_norm=None,
-                                  n_boot=10000, seed=None,
+                                  radii_norm, n_boot=10000, seed=None,
                                   return_individual=False,
                                   return_random_profiles=False,
                                   random_profile_pool=None,
-                                  random_profile_pool_background=None,
                                   random_pool_radii=None,
                                   random_pool_samples=1000):
         """
@@ -291,13 +280,6 @@ class PointingEnclosedProfile:
             Dimensionless radii where the profile is evaluated. The
             physical aperture for each source is
             ``radii_norm * theta_ref_arcmin``.
-        subtract_background : bool, optional
-            Whether to subtract background from signal. Default: True.
-        radii_background_norm : array_like or None, optional
-            Dimensionless radii where the background is evaluated. Must
-            be provided if subtract_background=True. Can be scalar
-            (applied to all radii) or array matching radii_norm shape.
-            Default: None.
         n_boot : int, optional
             Number of bootstrap resamples for the stacked profile.
             Default: 10000.
@@ -315,10 +297,6 @@ class PointingEnclosedProfile:
             :meth:`get_random_profiles`. If ``random_pool_radii`` is None,
             ``n_cols`` must match ``len(radii_norm)``; otherwise profiles are
             interpolated onto the requested radii.
-        random_profile_pool_background : array_like or None, optional
-            Precomputed random background profiles of shape (n_random,
-            n_cols). Must be provided if subtract_background=True. Must have
-            same shape as random_profile_pool.
         random_pool_radii : array_like or None, optional
             Physical radii [arcmin] associated with the columns of
             ``random_profile_pool``. Required when the pool was measured on
@@ -333,7 +311,7 @@ class PointingEnclosedProfile:
             Bootstrap mean profile across sources at each normalised radius.
             NaNs are ignored.
         stacked_error : ndarray
-            Bootstrap standard deviation.
+            Standard deviation of bootstrap means.
         random_profile : ndarray, optional
             Mean stacked profile from random sky positions (included when
             ``random_profile_pool`` is provided).
@@ -361,44 +339,12 @@ class PointingEnclosedProfile:
             raise ValueError(
                 "radii_norm must be a 1D array of dimensionless radii.")
 
-        if subtract_background:
-            if radii_background_norm is None:
-                raise ValueError(
-                    "radii_background_norm must be provided when "
-                    "subtract_background=True."
-                )
-            radii_background_norm = np.asarray(
-                np.atleast_1d(radii_background_norm), dtype=float)
-            if radii_background_norm.size == 1:
-                radii_background_norm = np.full(
-                    radii_norm.shape, radii_background_norm.item())
-            elif radii_background_norm.shape != radii_norm.shape:
-                raise ValueError(
-                    "radii_background_norm must be scalar or match "
-                    "radii_norm shape."
-                )
-
         pool = None
-        pool_bg = None
         pool_radii = None
         if random_profile_pool is not None:
             pool = np.asarray(random_profile_pool, dtype=float)
             if pool.ndim != 2:
                 raise ValueError("random_profile_pool must be a 2D array.")
-
-            if subtract_background:
-                if random_profile_pool_background is None:
-                    raise ValueError(
-                        "random_profile_pool_background must be provided "
-                        "when subtract_background=True."
-                    )
-                pool_bg = np.asarray(
-                    random_profile_pool_background, dtype=float)
-                if pool_bg.shape != pool.shape:
-                    raise ValueError(
-                        "random_profile_pool_background must have same "
-                        "shape as random_profile_pool."
-                    )
 
             if random_pool_radii is not None:
                 pool_radii = np.asarray(random_pool_radii, dtype=float)
@@ -412,8 +358,6 @@ class PointingEnclosedProfile:
                     order = np.argsort(pool_radii)
                     pool_radii = pool_radii[order]
                     pool = pool[:, order]
-                    if pool_bg is not None:
-                        pool_bg = pool_bg[:, order]
             elif pool.shape[1] != radii_norm.size:
                 raise ValueError(
                     "random_profile_pool width must match len(radii_norm) "
@@ -438,31 +382,17 @@ class PointingEnclosedProfile:
         b_tiled = np.repeat(b_deg, n_radii)
         radii_flat = radius_targets.reshape(-1)
 
-        if subtract_background:
-            radius_bg_targets = (theta_ref_arcmin[:, None] *
-                                 radii_background_norm[None, :])
-            radii_bg_flat = radius_bg_targets.reshape(-1)
-            signal_flat, bg_flat = self.get_profiles_per_source(
-                ell_tiled,
-                b_tiled,
-                radii_flat,
-                radii_background_arcmin=radii_bg_flat,
-            )
-            profiles_flat = signal_flat - bg_flat
-        else:
-            signal_flat, bg_flat = self.get_profiles_per_source(
-                ell_tiled,
-                b_tiled,
-                radii_flat,
-            )
-            profiles_flat = signal_flat
+        signal_flat = self.get_profiles_per_source(
+            ell_tiled,
+            b_tiled,
+            radii_flat,
+        )
+        profiles = signal_flat.reshape(n_sources, n_radii)
 
-        profiles = profiles_flat.reshape(n_sources, n_radii)
-
-        stacked, stacked_err = bootstrap_profile_mean(
+        stacked, stacked_error = bootstrap_profile_std(
             profiles, n_boot=n_boot, seed=seed)
 
-        random_mean = random_err = None
+        random_mean = random_error = None
         rng = np.random.default_rng(seed)
         rand_means = np.full((random_samples_eff, n_radii), np.nan,
                              dtype=float)
@@ -476,14 +406,10 @@ class PointingEnclosedProfile:
             idx = rng.choice(pool.shape[0], size=n_sources,
                              replace=True)
             selected_sig = pool[idx]
-            selected_bg = pool_bg[idx] if pool_bg is not None else None
 
             if pool_radii is None:
                 # Direct use without interpolation
-                if subtract_background:
-                    profiles_to_stack = selected_sig - selected_bg
-                else:
-                    profiles_to_stack = selected_sig
+                profiles_to_stack = selected_sig
 
                 if return_random_profiles:
                     rand_profiles[s] = profiles_to_stack
@@ -494,33 +420,17 @@ class PointingEnclosedProfile:
                                         size=n_sources,
                                         replace=True)
                 radii_random = theta_draw[:, None] * radii_norm[None, :]
-                interp_vals_sig = np.empty((n_sources, n_radii),
-                                           dtype=float)
+                interp_vals = np.empty((n_sources, n_radii), dtype=float)
                 for p in range(n_sources):
                     prof = selected_sig[p]
-                    interp_vals_sig[p] = np.interp(
+                    interp_vals[p] = np.interp(
                         radii_random[p],
                         pool_radii,
                         prof,
                         left=prof[0],
                         right=prof[-1],
                     )
-
-                if subtract_background:
-                    interp_vals_bg = np.empty((n_sources, n_radii),
-                                              dtype=float)
-                    for p in range(n_sources):
-                        prof_bg = selected_bg[p]
-                        interp_vals_bg[p] = np.interp(
-                            radii_random[p],
-                            pool_radii,
-                            prof_bg,
-                            left=prof_bg[0],
-                            right=prof_bg[-1],
-                        )
-                    profiles_to_stack = interp_vals_sig - interp_vals_bg
-                else:
-                    profiles_to_stack = interp_vals_sig
+                profiles_to_stack = interp_vals
 
                 if return_random_profiles:
                     rand_profiles[s] = profiles_to_stack
@@ -530,14 +440,13 @@ class PointingEnclosedProfile:
         if np.any(valid_rows):
             rand_subset = rand_means[valid_rows]
             random_mean = np.nanmean(rand_subset, axis=0)
-            ddof_rand = 1 if rand_subset.shape[0] > 1 else 0
-            random_err = np.nanstd(rand_subset, axis=0, ddof=ddof_rand)
+            random_error = np.nanstd(rand_subset, axis=0)
         else:
             random_mean = np.full(n_radii, np.nan, dtype=float)
-            random_err = np.full(n_radii, np.nan, dtype=float)
+            random_error = np.full(n_radii, np.nan, dtype=float)
 
-        outputs = [stacked, stacked_err]
-        outputs.extend([random_mean, random_err])
+        outputs = [stacked, stacked_error]
+        outputs.extend([random_mean, random_error])
         if return_individual:
             outputs.append(profiles)
         if return_random_profiles:
@@ -546,7 +455,7 @@ class PointingEnclosedProfile:
         return tuple(outputs)
 
     def get_random_profiles(self, radii_arcmin, n_points, abs_b_min=None,
-                            radii_background_arcmin=None, seed=None):
+                            seed=None):
         """
         Mean radial profiles at random HEALPix positions.
 
@@ -560,10 +469,6 @@ class PointingEnclosedProfile:
             Number of random positions to generate.
         abs_b_min : float or None, optional
             If given, require |b| >= abs_b_min [deg].
-        radii_background_arcmin : float or array_like, optional
-            Inner radius of background annulus [arcmin]. If None, defaults
-            to radii_arcmin. Must match the shape of radii_arcmin (1D or
-            2D).
         seed : int or None, optional
             Random seed for reproducibility.
 
@@ -571,9 +476,6 @@ class PointingEnclosedProfile:
         -------
         signal : ndarray
             Signal profiles at random positions (excluding NaN profiles).
-        background : ndarray
-            Background profiles at random positions (excluding NaN
-            profiles).
         """
         ell_deg, b_deg, __ = random_sky_positions(n_points, abs_b_min, seed)
         radii_arr = np.asarray(radii_arcmin, dtype=float)
@@ -587,26 +489,6 @@ class PointingEnclosedProfile:
             radii_per_point = radii_arr
         else:
             raise ValueError("radii_arcmin must be 1D or 2D array-like.")
-
-        if radii_background_arcmin is None:
-            radii_bg_per_point = radii_per_point
-        else:
-            radii_bg_arr = np.asarray(radii_background_arcmin, dtype=float)
-            if radii_bg_arr.ndim == 0:
-                radii_bg_per_point = np.full_like(
-                    radii_per_point, radii_bg_arr.item())
-            elif radii_bg_arr.ndim == 1:
-                radii_bg_per_point = np.tile(radii_bg_arr, (n_points, 1))
-            elif radii_bg_arr.ndim == 2:
-                if radii_bg_arr.shape[0] != n_points:
-                    raise ValueError(
-                        "For 2D radii_background_arcmin, shape[0] must "
-                        "equal n_points.")
-                radii_bg_per_point = radii_bg_arr
-            else:
-                raise ValueError(
-                    "radii_background_arcmin must be scalar, 1D or 2D "
-                    "array-like.")
 
         with tempfile.NamedTemporaryFile(suffix=".mmap",
                                          delete=False) as tmp:
@@ -625,11 +507,10 @@ class PointingEnclosedProfile:
                 results = []
                 for i in tqdm(range(n_points),
                               desc="Measuring profiles"):
-                    sig, bg = temp_obj.get_profile(
-                        ell_deg[i], b_deg[i], radii_per_point[i],
-                        radii_background_arcmin=radii_bg_per_point[i]
+                    sig = temp_obj.get_profile(
+                        ell_deg[i], b_deg[i], radii_per_point[i]
                     )
-                    results.append((sig, bg))
+                    results.append(sig)
             else:
                 with tqdm_joblib(tqdm(total=n_points,
                                       desc="Measuring profiles")):
@@ -638,39 +519,31 @@ class PointingEnclosedProfile:
                         batch_size=self.batch_size, timeout=300
                     )(
                         delayed(temp_obj.get_profile)(
-                            ell_deg[i], b_deg[i], radii_per_point[i],
-                            radii_background_arcmin=radii_bg_per_point[i])
+                            ell_deg[i], b_deg[i], radii_per_point[i])
                         for i in range(n_points)
                     )
         finally:
             if os.path.exists(mmap_path):
                 os.remove(mmap_path)
 
-        signal_list, background_list, num_skipped = [], [], 0
-        for sig, bg in results:
-            if np.any(np.isnan(sig)) or np.any(np.isnan(bg)):
+        signal_list, num_skipped = [], 0
+        for sig in results:
+            if np.any(np.isnan(sig)):
                 num_skipped += 1
             else:
                 signal_list.append(sig)
-                background_list.append(bg)
 
         print(f"Skipped {num_skipped} / {n_points} profiles due to "
               f"NaNs.")
-        return (np.asarray(signal_list, dtype=float),
-                np.asarray(background_list, dtype=float))
+        return np.asarray(signal_list, dtype=float)
 
-    def signal_to_pvalue(self, theta_arcmin, signal, theta_rand,
-                         map_rand, background=None,
-                         radii_background_arcmin=None,
-                         theta_rand_background=None,
-                         map_rand_background=None):
+    def signal_to_pvalue(self, theta_arcmin, signal, theta_rand, map_rand):
         """
         Convert signal values to empirical p-values using random
         pointings.
 
         For each source, interpolates the random profile at the signal
-        radius and background radius, subtracts them, and computes an
-        empirical p-value.
+        radius and computes an empirical p-value.
 
         Parameters
         ----------
@@ -684,21 +557,6 @@ class PointingEnclosedProfile:
         map_rand : array_like
             Random signal profile measurements. Shape (n_random, n_theta)
             where n_theta = len(theta_rand).
-        background : array_like or None, optional
-            Measured background per source. Must match theta_arcmin in
-            shape. If None, no background subtraction is performed.
-            Default: None.
-        radii_background_arcmin : array_like or None, optional
-            Radii for background measurement [arcmin]. Required if
-            background is provided. Can be scalar or match theta_arcmin
-            shape. Default: None.
-        theta_rand_background : array_like or None, optional
-            Radii grid for the random background profiles [arcmin].
-            Required if background is provided. Default: None.
-        map_rand_background : array_like or None, optional
-            Random background profile measurements. Shape (n_random,
-            n_theta_bg) where n_theta_bg = len(theta_rand_background).
-            Required if background is provided. Default: None.
 
         Returns
         -------
@@ -724,106 +582,25 @@ class PointingEnclosedProfile:
                 "theta_rand length must equal map_rand second dimension."
             )
 
-        # Determine if background subtraction should be performed
-        subtract_background = background is not None
-
-        if subtract_background:
-            if radii_background_arcmin is None:
-                raise ValueError(
-                    "radii_background_arcmin must be provided when "
-                    "background is provided."
-                )
-            if theta_rand_background is None:
-                raise ValueError(
-                    "theta_rand_background must be provided when "
-                    "background is provided."
-                )
-            if map_rand_background is None:
-                raise ValueError(
-                    "map_rand_background must be provided when "
-                    "background is provided."
-                )
-
-            background = np.asarray(background, dtype=float)
-            theta_rand_background = np.asarray(
-                theta_rand_background, dtype=float)
-            map_rand_background = np.asarray(
-                map_rand_background, dtype=float)
-
-            if signal.shape != background.shape:
-                raise ValueError(
-                    "signal and background must have the same shape."
-                )
-
-            if map_rand_background.ndim != 2:
-                raise ValueError("map_rand_background must be 2D.")
-
-            if theta_rand_background.shape[0] != map_rand_background.shape[1]:
-                raise ValueError(
-                    "theta_rand_background length must equal "
-                    "map_rand_background second dimension."
-                )
-
-            if map_rand.shape[0] != map_rand_background.shape[0]:
-                raise ValueError(
-                    "map_rand and map_rand_background must have same "
-                    "number of random pointings (first dimension)."
-                )
-
-            signal_for_pval = signal - background
-
-            # Handle background radii
-            radii_background_arcmin = np.asarray(
-                radii_background_arcmin, dtype=float)
-            if radii_background_arcmin.size == 1:
-                radii_background_arcmin = np.full(
-                    theta_arcmin.shape, radii_background_arcmin.item())
-            elif radii_background_arcmin.shape != theta_arcmin.shape:
-                raise ValueError(
-                    "radii_background_arcmin must be scalar or match "
-                    "theta_arcmin shape."
-                )
-        else:
-            signal_for_pval = signal
-
         def _pvalue_from_pool(val, pool):
             rank = np.searchsorted(pool, val, side="left")
             return 1.0 - rank / pool.size
 
-        # Build 2D interpolators once
+        # Build 2D interpolator
         # Interpolate along theta axis (axis=1) for all random profiles
         interp_signal = interp1d(
             theta_rand, map_rand, kind='linear', axis=1,
             bounds_error=False, fill_value='extrapolate'
         )
 
-        if subtract_background:
-            interp_background = interp1d(
-                theta_rand_background, map_rand_background,
-                kind='linear', axis=1,
-                bounds_error=False, fill_value='extrapolate'
-            )
-
         n_data = signal.size
         pval = np.empty(n_data, dtype=float)
 
-        if subtract_background:
-            for i, (r_sig, r_bg, sig) in enumerate(
-                    zip(theta_arcmin, radii_background_arcmin,
-                        signal_for_pval)):
-                # Interpolate all random profiles at once
-                rand_signal = interp_signal(r_sig)
-                rand_background = interp_background(r_bg)
-                rand_combined = rand_signal - rand_background
-                pool = np.sort(rand_combined)
-                pval[i] = _pvalue_from_pool(sig, pool)
-        else:
-            for i, (r_sig, sig) in enumerate(
-                    zip(theta_arcmin, signal_for_pval)):
-                # Interpolate all random profiles at once
-                rand_signal = interp_signal(r_sig)
-                pool = np.sort(rand_signal)
-                pval[i] = _pvalue_from_pool(sig, pool)
+        for i, (r_sig, sig) in enumerate(zip(theta_arcmin, signal)):
+            # Interpolate all random profiles at once
+            rand_signal = interp_signal(r_sig)
+            pool = np.sort(rand_signal)
+            pval[i] = _pvalue_from_pool(sig, pool)
 
         return pval
 
@@ -880,11 +657,12 @@ class PointingEnclosedProfile:
             ell = cluster.map_fit['ell']
             b = cluster.map_fit['b']
 
-            # Compute profile at all radii
-            signal, background = self.get_profile(
-                ell, b, radii_arcmin,
-                radii_background_arcmin=radii_background_arcmin
-            )
+            # Compute signal profile at all radii
+            signal = self.get_profile(ell, b, radii_arcmin)
+
+            # Compute background profile
+            background = self.get_background(
+                ell, b, radii_background_arcmin)
 
             # Store in map_fit
             obs_clusters.clusters[i].map_fit['radii_arcmin'] = radii_arcmin
@@ -951,14 +729,14 @@ def random_sky_positions(n_points, abs_b_min=None, seed=None):
 ###############################################################################
 
 
-def bootstrap_profile_mean(profiles, n_boot=1000, seed=None):
+def bootstrap_profile_std(profiles, n_boot=1000, seed=None):
     """
-    Bootstrap the mean stacked profile and its uncertainty.
+    Bootstrap the mean stacked profile with standard deviation uncertainties.
 
     Parameters
     ----------
     profiles : array_like, shape (n_sources, n_radii)
-        Per-source profiles. NaNs are ignored when averaging.
+        Per-source profiles. NaNs are ignored when computing statistics.
     n_boot : int, optional
         Number of bootstrap resamples. Default: 1000.
     seed : int or None, optional
@@ -967,7 +745,7 @@ def bootstrap_profile_mean(profiles, n_boot=1000, seed=None):
     -------
     mean_profile : ndarray, shape (n_radii,)
         Mean profile across all sources (NaNs ignored).
-    err_profile : ndarray, shape (n_radii,)
+    std_profile : ndarray, shape (n_radii,)
         Standard deviation of the bootstrap mean profiles.
     """
     profiles = np.asarray(profiles, dtype=float)
@@ -991,10 +769,9 @@ def bootstrap_profile_mean(profiles, n_boot=1000, seed=None):
         boot_means[i] = np.nanmean(sample, axis=0)
 
     mean_profile = np.nanmean(profiles, axis=0)
-    ddof = 1 if n_boot > 1 else 0
-    err_profile = np.nanstd(boot_means, axis=0, ddof=ddof)
+    std_profile = np.nanstd(boot_means, axis=0)
 
-    return mean_profile, err_profile
+    return mean_profile, std_profile
 
 
 ###############################################################################
