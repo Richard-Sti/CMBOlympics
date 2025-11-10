@@ -18,38 +18,107 @@ import astropy.units as u
 import cmasher as cmr
 import matplotlib.pyplot as plt
 import numpy as np
+from astropy.cosmology import FlatLambdaCDM
 from astropy.coordinates import SkyCoord
 
+from cmbo.utils import E_z
 
-def plot_mass_y_scaling(matches, obs_clusters=None):
+ARCMIN2_TO_SR = (np.pi / (180.0 * 60.0))**2
+PLANCK_H = 0.7
+LOG10 = np.log(10.0)
+
+
+def _estimate_mass_ratio(log_a, log_err_a, log_b, log_err_b,
+                         n_samples=50000, rng=None):
     """
-    Plot log10(M) vs log10(Y_corrected) for matched clusters.
+    Return Monte-Carlo estimate of <M_B / M_A> using log-normal sampling.
+    """
+    log_a = np.asarray(log_a, dtype=float)
+    log_b = np.asarray(log_b, dtype=float)
+    err_a = np.clip(np.asarray(log_err_a, dtype=float), 1e-6, None)
+    err_b = np.clip(np.asarray(log_err_b, dtype=float), 1e-6, None)
+
+    if not (
+        log_a.shape == log_b.shape
+        == err_a.shape
+        == err_b.shape
+    ):
+        raise ValueError(
+            "log_a/log_b and their errors must share the same shape.")
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    draws_a = rng.normal(
+        log_a[:, None],
+        err_a[:, None],
+        size=(log_a.size, n_samples),
+    )
+    draws_b = rng.normal(
+        log_b[:, None],
+        err_b[:, None],
+        size=(log_b.size, n_samples),
+    )
+    log_ratio = draws_b - draws_a
+    ratios = 10.0 ** log_ratio
+    sample_means = ratios.mean(axis=0)
+    return sample_means.mean(), sample_means.std(ddof=1)
+
+
+def plot_mass_y_scaling(matches, obs_clusters, Om):
+    """
+    Plot log10(M) vs log10(E(z)^(-2/3) Y500 D_A^2) and the Planck vs
+    Manticore mass comparison beneath it.
 
     Parameters
     ----------
-    matches : sequence
-        Iterable of matches, where each entry is a tuple whose first element
-        is a HaloAssociation with per-halo masses and Y_corrected data.
-    obs_clusters : ObservedClusterCatalogue, optional
-        Catalogue containing observed clusters. If provided, each data point
-        is annotated with the corresponding cluster name.
+    matches
+        Iterable whose first element per entry is the matched HaloAssociation.
+    obs_clusters
+        ObservedClusterCatalogue with ``planck_match`` metadata.
+    Om
+        Matter density parameter for flat LCDM (h = 1).
 
     Returns
     -------
-    fig, ax
-        Matplotlib figure and axis with the scaling plot.
+    fig, axes
+        Figure and axes array (upper: Y scaling, lower: mass comparison).
     """
-    if obs_clusters is not None and len(obs_clusters) != len(matches):
-        raise ValueError(
-            "obs_clusters and matches must have the same length."
-        )
+    if obs_clusters is None:
+        raise ValueError("obs_clusters must be provided.")
+    if len(obs_clusters) != len(matches):
+        raise ValueError("obs_clusters and matches must have the same length.")
+    if not np.isfinite(Om):
+        raise ValueError("Om must be finite.")
 
-    x, xerr = [], []
-    y, yerr = [], []
-    names = [] if obs_clusters is not None else None
+    cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
 
-    for idx, match in enumerate(matches):
+    x_vals, x_errs = [], []
+    y_vals, y_errs = [], []
+    y_mass_vals = []
+    y_mass_err_low = []
+    y_mass_err_up = []
+    labels = []
+
+    for cluster, match in zip(obs_clusters, matches):
         if match is None:
+            continue
+
+        planck_match = getattr(cluster, "planck_match", None)
+        if not planck_match:
+            continue
+
+        y_arcmin2 = float(planck_match.get("y5r500", np.nan))
+        y_err_arcmin2 = float(planck_match.get("y5r500_err", np.nan))
+        z_planck = float(planck_match.get("redshift", np.nan))
+
+        if not (
+            np.isfinite(y_arcmin2)
+            and np.isfinite(y_err_arcmin2)
+            and np.isfinite(z_planck)
+        ):
+            continue
+        if y_arcmin2 <= 0 or y_err_arcmin2 <= 0 or z_planck < 0:
             continue
 
         if isinstance(match, (tuple, list)):
@@ -59,76 +128,116 @@ def plot_mass_y_scaling(matches, obs_clusters=None):
         else:
             assoc = match
 
-        if assoc is None:
+        masses = getattr(assoc, "masses", None)
+        if masses is None:
             continue
 
-        if (
-            assoc.optional_data is None
-            or "Y_corrected" not in assoc.optional_data
-        ):
-            raise KeyError(
-                "Association missing 'Y_corrected'. "
-                "Run measure_mass_matched_cluster first."
-            )
-
-        masses = np.asarray(assoc.masses, dtype=float)
-        y_corr = np.asarray(assoc.optional_data["Y_corrected"], dtype=float)
-
-        mask = (
-            np.isfinite(masses)
-            & np.isfinite(y_corr)
-            & (masses > 0)
-            & (y_corr > 0)
-        )
+        masses = np.asarray(masses, dtype=float)
+        mask = np.isfinite(masses) & (masses > 0)
         if not np.any(mask):
             continue
 
-        logM = np.log10(masses[mask])
-        logY = np.log10(y_corr[mask])
+        log_mass = np.log10(masses[mask])
 
-        x.append(np.mean(logM))
-        xerr.append(np.std(logM))
-        y.append(np.mean(logY))
-        yerr.append(np.std(logY))
-        if obs_clusters is not None:
-            names.append(obs_clusters.names[idx])
+        da_mpc = cosmo.angular_diameter_distance(z_planck).value
+        Ez = E_z(z_planck, Om)
+        conversion = ARCMIN2_TO_SR * (da_mpc**2)
+        y_phys = y_arcmin2 * conversion
+        y_phys_err = y_err_arcmin2 * conversion
+        Ez_factor = Ez**(-2.0 / 3.0)
+        y_scaled = y_phys * Ez_factor
+        y_scaled_err = y_phys_err * Ez_factor
 
-    if not x:
-        raise ValueError("No valid mass-Y pairs to plot.")
+        msz = float(planck_match.get("msz", np.nan))
+        msz_err_up = float(planck_match.get("msz_err_up", np.nan))
+        msz_err_low = float(planck_match.get("msz_err_low", np.nan))
 
-    x = np.asarray(x)
-    xerr = np.asarray(xerr)
-    y = np.asarray(y)
-    yerr = np.asarray(yerr)
+        if not (
+            np.isfinite(y_phys)
+            and np.isfinite(y_phys_err)
+            and np.isfinite(Ez_factor)
+            and np.isfinite(msz)
+            and np.isfinite(msz_err_up)
+            and np.isfinite(msz_err_low)
+        ):
+            continue
+
+        if (
+            y_scaled <= 0
+            or y_scaled_err <= 0
+            or msz <= 0
+            or msz_err_up <= 0
+            or msz_err_low <= 0
+        ):
+            continue
+
+        msz_lower = msz - msz_err_low
+        msz_upper = msz + msz_err_up
+        if msz_lower <= 0 or msz_upper <= 0:
+            continue
+
+        mass_scale = 1e14 * PLANCK_H
+        log_msz = np.log10(msz * mass_scale)
+        err_low_log = (np.log10(msz * mass_scale)
+                       - np.log10(msz_lower * mass_scale))
+        err_up_log = (np.log10(msz_upper * mass_scale)
+                      - np.log10(msz * mass_scale))
+
+        x_vals.append(np.mean(log_mass))
+        x_errs.append(np.std(log_mass))
+        y_vals.append(np.log10(y_scaled))
+        y_errs.append(y_scaled_err / (y_scaled * LOG10))
+        y_mass_vals.append(log_msz)
+        y_mass_err_low.append(err_low_log)
+        y_mass_err_up.append(err_up_log)
+        labels.append(cluster.name)
+
+    if not x_vals:
+        raise ValueError("No matched clusters with finite Planck data.")
+
+    x = np.asarray(x_vals)
+    xerr = np.asarray(x_errs)
+    y = np.asarray(y_vals)
+    yerr = np.asarray(y_errs)
+    y_mass = np.asarray(y_mass_vals)
+    y_mass_err_low = np.asarray(y_mass_err_low)
+    y_mass_err_up = np.asarray(y_mass_err_up)
+    labels = np.asarray(labels, dtype=object)
 
     mask = (
         np.isfinite(x)
         & np.isfinite(y)
         & np.isfinite(xerr)
         & np.isfinite(yerr)
+        & np.isfinite(y_mass)
+        & np.isfinite(y_mass_err_low)
+        & np.isfinite(y_mass_err_up)
     )
-    if not np.any(mask):
-        raise ValueError("All mass-Y entries are non-finite.")
-
     x = x[mask]
     xerr = xerr[mask]
     y = y[mask]
     yerr = yerr[mask]
-    if names is not None:
-        names = np.asarray(names, dtype=object)[mask]
+    y_mass = y_mass[mask]
+    y_mass_err_low = y_mass_err_low[mask]
+    y_mass_err_up = y_mass_err_up[mask]
+    labels = labels[mask]
 
-    if not np.any((xerr > 0) & (yerr > 0)):
-        raise ValueError("Mass or Y scatter is zero for all associations.")
+    if x.size == 0:
+        raise ValueError("All cluster entries failed the quality cuts.")
 
     slope = 5.0 / 3.0
     x0 = np.nanmedian(x)
     y0 = np.nanmedian(y)
-
     x_line = np.linspace(np.nanmin(x), np.nanmax(x), 200)
     y_line = y0 + slope * (x_line - x0)
 
     with plt.style.context("science"):
-        fig, ax = plt.subplots(figsize=(6, 5))
+        fig, axes = plt.subplots(
+            1, 2, figsize=(12, 5.5), constrained_layout=True
+        )
+        ax = axes[0]
+        ax_mass = axes[1]
+
         ax.errorbar(
             x,
             y,
@@ -136,29 +245,75 @@ def plot_mass_y_scaling(matches, obs_clusters=None):
             yerr=yerr,
             fmt="o",
             color="C0",
-            label="Data",
+            label=r"$E(z)^{-2/3} Y_{500} D_A^2$",
         )
         ax.plot(
             x_line,
             y_line,
             "r--",
-            label=r"$Y \propto M^{5/3}$",
+            label=r"$E(z)^{-2/3}Y_{500}D_A^2 \propto M^{5/3}$",
         )
-        ax.set_xlabel(r"$\log_{10}(M_{500\mathrm{c}}\,[M_\odot])$")
-        ax.set_ylabel(r"$\log_{10}(Y_{500})$")
-        ax.legend()
-        if names is not None:
-            for xi, yi, label in zip(x, y, names):
-                ax.annotate(
-                    label,
-                    xy=(xi, yi),
-                    xytext=(4, 4),
-                    textcoords="offset points",
-                    fontsize=8,
-                )
-        fig.tight_layout()
+        ax.set_xlabel(r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]$")
+        ax.set_ylabel(r"$\log E(z)^{-2/3}Y_{500}D_A^2\,[\mathrm{Mpc}^2]$")
+        ax.legend(loc="lower right")
+        for xi, yi, label in zip(x, y, labels):
+            ax.annotate(
+                label,
+                xy=(xi, yi),
+                xytext=(4, 4),
+                textcoords="offset points",
+                fontsize=8,
+            )
 
-    return fig, ax
+        ax_mass.errorbar(
+            x,
+            y_mass,
+            xerr=xerr,
+            yerr=np.vstack((y_mass_err_low, y_mass_err_up)),
+            fmt="s",
+            color="C1",
+            label=r"$M_{500}^{\mathrm{Planck}}\,[h^{-1}M_\odot]$",
+        )
+        ax_mass.plot(
+            x_line,
+            x_line,
+            "k--",
+            label=r"$M_{500}^{\mathrm{Planck}} = M_{500}^{\mathrm{Manticore}}$",  # noqa
+        )
+        ax_mass.set_xlabel(r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]$")
+        ax_mass.set_ylabel(
+            r"$\log M_{500}^{\mathrm{Planck}}\,[h^{-1}M_\odot]$")
+        ax_mass.legend(loc="lower right")
+        for xi, yi, label in zip(x, y_mass, labels):
+            ax_mass.annotate(
+                label,
+                xy=(xi, yi),
+                xytext=(4, 4),
+                textcoords="offset points",
+                fontsize=8,
+            )
+        y_mass_err_sym = 0.5 * (y_mass_err_low + y_mass_err_up)
+        ratio_mean, ratio_std = _estimate_mass_ratio(
+            x, xerr, y_mass, y_mass_err_sym
+        )
+        ax_mass.text(
+            0.02,
+            0.95,
+            r"$\langle M_{\mathrm{Planck}} / M_{\mathrm{Manticore}} \rangle = "
+            f"{ratio_mean:.2f} \\pm {ratio_std:.2f}$",
+            transform=ax_mass.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            bbox={
+                "boxstyle": "round,pad=0.2",
+                "fc": "white",
+                "ec": "0.8",
+                "alpha": 0.75,
+            },
+        )
+
+    return fig, axes
 
 
 def tangent_offsets_arcmin(ell_deg, b_deg, ellc_deg, bc_deg):
@@ -533,9 +688,138 @@ def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
     return fig, axes
 
 
+def plot_mass_comparison(matches_a, matches_b, obs_clusters,
+                         labels=("A", "B")):
+    """
+    Compare mean masses from two match catalogues.
+
+    Parameters
+    ----------
+    matches_a, matches_b
+        Sequences aligned with obs_clusters. Only entries with valid
+        HaloAssociation masses in both are plotted.
+    obs_clusters
+        ObservedClusterCatalogue providing cluster names.
+    labels : tuple of str, optional
+        Names for the two data sets (used in axis labels).
+
+    Returns
+    -------
+    fig, axes
+        Figure containing the scatter comparison and a text panel.
+    """
+    if len(matches_a) != len(matches_b):
+        raise ValueError("matches_a and matches_b must have the same length.")
+    if len(matches_a) != len(obs_clusters):
+        raise ValueError("Matches must align with obs_clusters.")
+
+    def _stats(match):
+        assoc = match[0] if isinstance(match, (tuple, list)) else match
+        masses = getattr(assoc, "masses", None)
+        if masses is None:
+            return None
+        masses = np.asarray(masses, dtype=float)
+        mask = np.isfinite(masses) & (masses > 0)
+        if not np.any(mask):
+            return None
+        sel = masses[mask]
+        return np.mean(sel), np.std(sel)
+
+    means_a, stds_a, means_b, stds_b, names = [], [], [], [], []
+    for cluster, ma, mb in zip(obs_clusters, matches_a, matches_b):
+        if ma is None or mb is None:
+            continue
+        stats_a = _stats(ma)
+        stats_b = _stats(mb)
+        if stats_a is None or stats_b is None:
+            continue
+        means_a.append(stats_a[0])
+        stds_a.append(stats_a[1])
+        means_b.append(stats_b[0])
+        stds_b.append(stats_b[1])
+        names.append(cluster.name)
+
+    if not means_a:
+        raise ValueError("No overlapping clusters with valid masses.")
+
+    means_a = np.array(means_a)
+    stds_a = np.array(stds_a)
+    means_b = np.array(means_b)
+    stds_b = np.array(stds_b)
+
+    log_a = np.log10(means_a)
+    log_b = np.log10(means_b)
+    log_err_a = stds_a / (means_a * LOG10)
+    log_err_b = stds_b / (means_b * LOG10)
+
+    with plt.style.context("science"):
+        fig, ax_scatter = plt.subplots(figsize=(6, 4), constrained_layout=True)
+
+        ax_scatter.errorbar(
+            log_a,
+            log_b,
+            xerr=log_err_a,
+            yerr=log_err_b,
+            fmt="o",
+            color="C0",
+            alpha=0.85,
+        )
+        anchor = (np.median(log_a), np.median(log_a))
+        ax_scatter.axline(
+            anchor,
+            slope=1.0,
+            color="k",
+            linestyle="--",
+            label="1:1",
+        )
+        ax_scatter.set_xlabel(
+            r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]\ (\mathrm{" + labels[0] + "})$"  # noqa
+        )
+        ax_scatter.set_ylabel(
+            r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]\ (\mathrm{" + labels[1] + "})$"  # noqa
+        )
+        for xi, yi, name in zip(log_a, log_b, names):
+            ax_scatter.annotate(
+                name,
+                xy=(xi, yi),
+                xytext=(6, 6),
+                textcoords="offset points",
+                fontsize=7,
+                bbox={"boxstyle": "round,pad=0.15",
+                      "fc": "white", "ec": "none", "alpha": 0.4},
+            )
+        ax_scatter.legend(loc="lower right")
+        ratio_mean, ratio_std = _estimate_mass_ratio(
+            log_a, log_err_a, log_b, log_err_b
+        )
+        ratio_label = (
+            r"$\langle M_{\mathrm{" + labels[1] + r"}} / "
+            r"M_{\mathrm{" + labels[0] + r"}} \rangle = "
+            f"{ratio_mean:.2f} \\pm {ratio_std:.2f}$"
+        )
+        ax_scatter.text(
+            0.02,
+            0.95,
+            ratio_label,
+            transform=ax_scatter.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            bbox={
+                "boxstyle": "round,pad=0.2",
+                "fc": "white",
+                "ec": "0.8",
+                "alpha": 0.75,
+            },
+        )
+
+    return fig, ax_scatter
+
+
 __all__ = [
     "tangent_offsets_arcmin",
     "plot_mass_y_scaling",
+    "plot_mass_comparison",
     "plot_cluster_cutout",
     "plot_observed_cluster_cutout",
     "plot_observed_cluster_grid",
