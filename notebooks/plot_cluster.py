@@ -21,6 +21,146 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 
 
+def plot_mass_y_scaling(matches, obs_clusters=None):
+    """
+    Plot log10(M) vs log10(Y_corrected) for matched clusters.
+
+    Parameters
+    ----------
+    matches : sequence
+        Iterable of matches, where each entry is a tuple whose first element
+        is a HaloAssociation with per-halo masses and Y_corrected data.
+    obs_clusters : ObservedClusterCatalogue, optional
+        Catalogue containing observed clusters. If provided, each data point
+        is annotated with the corresponding cluster name.
+
+    Returns
+    -------
+    fig, ax
+        Matplotlib figure and axis with the scaling plot.
+    """
+    if obs_clusters is not None and len(obs_clusters) != len(matches):
+        raise ValueError(
+            "obs_clusters and matches must have the same length."
+        )
+
+    x, xerr = [], []
+    y, yerr = [], []
+    names = [] if obs_clusters is not None else None
+
+    for idx, match in enumerate(matches):
+        if match is None:
+            continue
+
+        if isinstance(match, (tuple, list)):
+            if not match:
+                continue
+            assoc = match[0]
+        else:
+            assoc = match
+
+        if assoc is None:
+            continue
+
+        if (
+            assoc.optional_data is None
+            or "Y_corrected" not in assoc.optional_data
+        ):
+            raise KeyError(
+                "Association missing 'Y_corrected'. "
+                "Run measure_mass_matched_cluster first."
+            )
+
+        masses = np.asarray(assoc.masses, dtype=float)
+        y_corr = np.asarray(assoc.optional_data["Y_corrected"], dtype=float)
+
+        mask = (
+            np.isfinite(masses)
+            & np.isfinite(y_corr)
+            & (masses > 0)
+            & (y_corr > 0)
+        )
+        if not np.any(mask):
+            continue
+
+        logM = np.log10(masses[mask])
+        logY = np.log10(y_corr[mask])
+
+        x.append(np.mean(logM))
+        xerr.append(np.std(logM))
+        y.append(np.mean(logY))
+        yerr.append(np.std(logY))
+        if obs_clusters is not None:
+            names.append(obs_clusters.names[idx])
+
+    if not x:
+        raise ValueError("No valid mass-Y pairs to plot.")
+
+    x = np.asarray(x)
+    xerr = np.asarray(xerr)
+    y = np.asarray(y)
+    yerr = np.asarray(yerr)
+
+    mask = (
+        np.isfinite(x)
+        & np.isfinite(y)
+        & np.isfinite(xerr)
+        & np.isfinite(yerr)
+    )
+    if not np.any(mask):
+        raise ValueError("All mass-Y entries are non-finite.")
+
+    x = x[mask]
+    xerr = xerr[mask]
+    y = y[mask]
+    yerr = yerr[mask]
+    if names is not None:
+        names = np.asarray(names, dtype=object)[mask]
+
+    if not np.any((xerr > 0) & (yerr > 0)):
+        raise ValueError("Mass or Y scatter is zero for all associations.")
+
+    slope = 5.0 / 3.0
+    x0 = np.nanmedian(x)
+    y0 = np.nanmedian(y)
+
+    x_line = np.linspace(np.nanmin(x), np.nanmax(x), 200)
+    y_line = y0 + slope * (x_line - x0)
+
+    with plt.style.context("science"):
+        fig, ax = plt.subplots(figsize=(6, 5))
+        ax.errorbar(
+            x,
+            y,
+            xerr=xerr,
+            yerr=yerr,
+            fmt="o",
+            color="C0",
+            label="Data",
+        )
+        ax.plot(
+            x_line,
+            y_line,
+            "r--",
+            label=r"$Y \propto M^{5/3}$",
+        )
+        ax.set_xlabel(r"$\log_{10}(M_{500\mathrm{c}}\,[M_\odot])$")
+        ax.set_ylabel(r"$\log_{10}(Y_{500})$")
+        ax.legend()
+        if names is not None:
+            for xi, yi, label in zip(x, y, names):
+                ax.annotate(
+                    label,
+                    xy=(xi, yi),
+                    xytext=(4, 4),
+                    textcoords="offset points",
+                    fontsize=8,
+                )
+        fig.tight_layout()
+
+    return fig, ax
+
+
 def tangent_offsets_arcmin(ell_deg, b_deg, ellc_deg, bc_deg):
     """
     Compute tangent-plane offsets in arcminutes from a Galactic center.
@@ -395,6 +535,7 @@ def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
 
 __all__ = [
     "tangent_offsets_arcmin",
+    "plot_mass_y_scaling",
     "plot_cluster_cutout",
     "plot_observed_cluster_cutout",
     "plot_observed_cluster_grid",
