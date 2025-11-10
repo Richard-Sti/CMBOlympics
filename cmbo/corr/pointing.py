@@ -160,7 +160,7 @@ class PointingEnclosedProfile:
         background = np.full(len(radii_inner_arcmin), np.nan)
 
         for i, (r_in, r_out) in enumerate(zip(radii_inner_arcmin,
-                                               radii_outer_arcmin)):
+                                              radii_outer_arcmin)):
             r_in_rad = np.radians(r_in / 60.0)
             r_out_rad = np.radians(r_out / 60.0)
 
@@ -661,14 +661,24 @@ class PointingEnclosedProfile:
             signal = self.get_profile(ell, b, radii_arcmin)
 
             # Compute background profile
+            radii_background_arcmin = np.asarray(
+                radii_background_arcmin, dtype=float
+            )
+            radii_outer_arcmin = radii_background_arcmin + self.fwhm_arcmin
             background = self.get_background(
-                ell, b, radii_background_arcmin)
+                ell, b, radii_background_arcmin, radii_outer_arcmin
+            )
+            # background = np.zeros_like(radii_background_arcmin)
 
             # Store in map_fit
             obs_clusters.clusters[i].map_fit['radii_arcmin'] = radii_arcmin
             obs_clusters.clusters[i].map_fit['signal_profile'] = signal
-            obs_clusters.clusters[i].map_fit['background_profile'] = (
-                background)
+            obs_clusters.clusters[i].map_fit[
+                'radii_background_arcmin'
+            ] = radii_background_arcmin
+            obs_clusters.clusters[i].map_fit[
+                'background_profile'
+            ] = background
 
 
 @contextmanager
@@ -1303,6 +1313,7 @@ class Pointing2DCutout:
                 'converged': info['converged'],
                 'n_iterations': info['n_iterations'],
                 'final_radius_arcmin': info['final_radius_arcmin'],
+                'fwhm_arcmin': float(self.fwhm_arcmin),
                 'cutout': cutout,
                 'extent': extent,
             }
