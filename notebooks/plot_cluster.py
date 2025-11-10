@@ -65,7 +65,7 @@ def _estimate_mass_ratio(log_a, log_err_a, log_b, log_err_b,
     return sample_means.mean(), sample_means.std(ddof=1)
 
 
-def plot_mass_y_scaling(matches, obs_clusters, Om):
+def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
     """
     Plot log10(M) vs log10(E(z)^(-2/3) Y500 D_A^2) and the Planck vs
     Manticore mass comparison beneath it.
@@ -78,6 +78,8 @@ def plot_mass_y_scaling(matches, obs_clusters, Om):
         ObservedClusterCatalogue with ``planck_match`` metadata.
     Om
         Matter density parameter for flat LCDM (h = 1).
+    sim_label : str, optional
+        Name describing the association-based masses (default: "Manticore").
 
     Returns
     -------
@@ -226,14 +228,12 @@ def plot_mass_y_scaling(matches, obs_clusters, Om):
         raise ValueError("All cluster entries failed the quality cuts.")
 
     slope = 5.0 / 3.0
-    x0 = np.nanmedian(x)
-    y0 = np.nanmedian(y)
-    x_line = np.linspace(np.nanmin(x), np.nanmax(x), 200)
-    y_line = y0 + slope * (x_line - x0)
+
+    sim_label_tex = sim_label.replace("_", r"\_").replace(" ", r"\ ")
 
     with plt.style.context("science"):
         fig, axes = plt.subplots(
-            1, 2, figsize=(12, 5.5), constrained_layout=True
+            1, 2, figsize=(12, 4), constrained_layout=True
         )
         ax = axes[0]
         ax_mass = axes[1]
@@ -245,24 +245,25 @@ def plot_mass_y_scaling(matches, obs_clusters, Om):
             yerr=yerr,
             fmt="o",
             color="C0",
-            label=r"$E(z)^{-2/3} Y_{500} D_A^2$",
         )
-        ax.plot(
-            x_line,
-            y_line,
-            "r--",
-            label=r"$E(z)^{-2/3}Y_{500}D_A^2 \propto M^{5/3}$",
+        anchor_y = (np.nanmedian(x), np.nanmedian(y))
+        ax.axline(
+            anchor_y,
+            slope=slope,
+            color="k",
+            linestyle="--",
+            label=r"$E(z)^{-2/3}Y_{5R500\mathrm{c}}D_A^2 \propto M^{5/3}$",
         )
         ax.set_xlabel(r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]$")
-        ax.set_ylabel(r"$\log E(z)^{-2/3}Y_{500}D_A^2\,[\mathrm{Mpc}^2]$")
+        ax.set_ylabel(r"$\log E(z)^{-2/3}Y_{5R500\mathrm{c}}D_A^2\,[\mathrm{Mpc}^2]$")  # noqa
         ax.legend(loc="lower right")
-        for xi, yi, label in zip(x, y, labels):
+        for xi, yi, name in zip(x, y, labels):
             ax.annotate(
-                label,
+                name,
                 xy=(xi, yi),
                 xytext=(4, 4),
                 textcoords="offset points",
-                fontsize=8,
+                fontsize=7,
             )
 
         ax_mass.errorbar(
@@ -270,37 +271,43 @@ def plot_mass_y_scaling(matches, obs_clusters, Om):
             y_mass,
             xerr=xerr,
             yerr=np.vstack((y_mass_err_low, y_mass_err_up)),
-            fmt="s",
-            color="C1",
-            label=r"$M_{500}^{\mathrm{Planck}}\,[h^{-1}M_\odot]$",
+            fmt="o",
+            color="C0",
         )
-        ax_mass.plot(
-            x_line,
-            x_line,
-            "k--",
-            label=r"$M_{500}^{\mathrm{Planck}} = M_{500}^{\mathrm{Manticore}}$",  # noqa
+        anchor_mass = (np.nanmedian(x), np.nanmedian(x))
+        ax_mass.axline(
+            anchor_mass,
+            slope=1.0,
+            color="k",
+            linestyle="--",
+            label=rf"$M_{{500}}^{{\mathrm{{Planck}}}} = M_{{500}}^{{\mathrm{{{sim_label_tex}}}}}$",  # noqa
         )
-        ax_mass.set_xlabel(r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]$")
+        ax_mass.set_xlabel(
+            r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]\ (\mathrm{" + sim_label_tex + "})$"  # noqa
+        )
         ax_mass.set_ylabel(
             r"$\log M_{500}^{\mathrm{Planck}}\,[h^{-1}M_\odot]$")
         ax_mass.legend(loc="lower right")
-        for xi, yi, label in zip(x, y_mass, labels):
+        for xi, yi, name in zip(x, y_mass, labels):
             ax_mass.annotate(
-                label,
+                name,
                 xy=(xi, yi),
                 xytext=(4, 4),
                 textcoords="offset points",
-                fontsize=8,
+                fontsize=7,
             )
         y_mass_err_sym = 0.5 * (y_mass_err_low + y_mass_err_up)
         ratio_mean, ratio_std = _estimate_mass_ratio(
             x, xerr, y_mass, y_mass_err_sym
         )
+        ratio_label = (
+            rf"$\langle M_{{\mathrm{{Planck}}}} / M_{{\mathrm{{{sim_label_tex}}}}} \rangle = "  # noqa
+            f"{ratio_mean:.2f} \\pm {ratio_std:.2f}$"
+        )
         ax_mass.text(
             0.02,
             0.95,
-            r"$\langle M_{\mathrm{Planck}} / M_{\mathrm{Manticore}} \rangle = "
-            f"{ratio_mean:.2f} \\pm {ratio_std:.2f}$",
+            ratio_label,
             transform=ax_mass.transAxes,
             ha="left",
             va="top",
@@ -784,7 +791,7 @@ def plot_mass_comparison(matches_a, matches_b, obs_clusters,
                 xy=(xi, yi),
                 xytext=(6, 6),
                 textcoords="offset points",
-                fontsize=7,
+                fontsize=6,
                 bbox={"boxstyle": "round,pad=0.15",
                       "fc": "white", "ec": "none", "alpha": 0.4},
             )
