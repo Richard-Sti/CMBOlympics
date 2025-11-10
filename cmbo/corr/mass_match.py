@@ -52,8 +52,8 @@ def measure_mass_matched_cluster(
         Default: 5.
     Returns
     -------
-    ndarray
-        Array of per-halo ``Y_corrected`` values, also stored in
+    None
+        Per-halo ``Y_corrected`` values are stored in
         ``assoc.optional_data['Y_corrected']``.
     """
     if obs_cluster.map_fit is None:
@@ -113,9 +113,6 @@ def measure_mass_matched_cluster(
         radii_background, profile_background, bkg_radius
     )
 
-    if not np.all(np.isfinite(signal_value) & np.isfinite(y_bkg)):
-        raise ValueError("Profiles cannot be evaluated at requested radii.")
-
     source_radius_rad = source_radius * ARCMIN_TO_RAD
     omega_aperture = np.pi * source_radius_rad**2
     y_sz = omega_aperture * (signal_value - y_bkg)
@@ -128,7 +125,65 @@ def measure_mass_matched_cluster(
         assoc.optional_data = {}
     assoc.optional_data["Y_corrected"] = Y_corrected
 
-    return Y_corrected
+
+def measure_mass_matched_catalog(
+    obs_clusters,
+    matches,
+    obs_pos,
+    Om,
+    source_scale=5.0,
+    bkg_inner_scale=5.0,
+):
+    """
+    Compute per-halo Y_corrected for every matched observed cluster.
+
+    Parameters
+    ----------
+    obs_clusters : ObservedClusterCatalogue
+        Catalogue with map-fit information populated.
+    matches : sequence
+        Iterable where each element is either ``None`` (no match) or a tuple
+        whose first entry is the matched ``HaloAssociation`` (the remaining
+        entries are ignored).
+    obs_pos : array-like, shape (3,)
+        Observer position used to derive distances and redshifts.
+    Om : float
+        Matter density parameter for the assumed flat LCDM cosmology.
+    source_scale : float, optional
+        Source aperture factor (in units of theta500). Default: 5.
+    bkg_inner_scale : float, optional
+        Background aperture factor (in units of theta500). Default: 5.
+
+    Returns
+    -------
+    None
+        Results are stored on the matched associations.
+    """
+    if len(obs_clusters) != len(matches):
+        raise ValueError("obs_clusters and matches must have the same length.")
+
+    for cluster, match in zip(obs_clusters, matches):
+        if match is None or cluster.map_fit is None:
+            continue
+
+        if isinstance(match, (tuple, list)):
+            if not match:
+                continue
+            assoc = match[0]
+        else:
+            assoc = match
+
+        if assoc is None:
+            continue
+
+        measure_mass_matched_cluster(
+            cluster,
+            assoc,
+            obs_pos,
+            Om,
+            source_scale=source_scale,
+            bkg_inner_scale=bkg_inner_scale,
+        )
 
 
 def _interp_profile(radii_arcmin, values, target_arcmin):
@@ -138,22 +193,26 @@ def _interp_profile(radii_arcmin, values, target_arcmin):
 
     if radii.ndim != 1 or vals.ndim != 1 or radii.size != vals.size:
         raise ValueError("Profiles must be 1D arrays of equal length.")
-    if not np.all(np.isfinite(radii)):
-        raise ValueError("radii_arcmin contains non-finite values.")
-    if not np.all(np.isfinite(vals)):
-        raise ValueError("Profile values contain non-finite entries.")
+    mask = np.isfinite(radii) & np.isfinite(vals)
+    if not np.any(mask):
+        raise ValueError(
+            "Profile contains no finite values for interpolation.")
+    radii = radii[mask]
+    vals = vals[mask]
+    order = np.argsort(radii)
+    radii = radii[order]
+    vals = vals[order]
+
     if targets.ndim != 1:
         targets = targets.ravel()
+    if not np.all(np.isfinite(targets)):
+        raise ValueError("Requested radii contain non-finite entries.")
 
-    out = np.full_like(targets, np.nan, dtype=float)
-    mask = (
-        np.isfinite(targets)
-        & (targets >= radii[0])
-        & (targets <= radii[-1])
-    )
-    if np.any(mask):
-        out[mask] = np.interp(targets[mask], radii, vals)
+    within = (targets >= radii[0]) & (targets <= radii[-1])
+    if not np.all(within):
+        raise ValueError("Requested radius outside finite profile range.")
 
+    result = np.interp(targets, radii, vals)
     if np.isscalar(target_arcmin):
-        return float(out[0])
-    return out
+        return float(result[0])
+    return result
