@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 import numpy as np
+import astropy.units as u
+from astropy.cosmology import z_at_value, FlatLambdaCDM
 from tqdm import tqdm
 from .coords import cartesian_icrs_to_galactic_spherical
 
@@ -125,6 +127,74 @@ class HaloAssociation:
             self.centroid.reshape(1, 3), center
         )
         return float(r[0]), float(ell[0]), float(b[0])
+
+    def to_z(self, center, Om):
+        """
+        Compute cosmological redshifts from comoving distances.
+
+        Parameters
+        ----------
+        center : array-like
+            Observer position used as the comoving-distance origin.
+        Om : float
+            Matter density parameter of a flat LCDM cosmology with h=1.
+
+        Returns
+        -------
+        ndarray
+            Redshifts corresponding to each halo position.
+        """
+        center = np.asarray(center, dtype=float)
+        if center.shape != (3,):
+            raise ValueError("center must be a 3-vector.")
+
+        positions = np.asarray(self.positions, dtype=float)
+        if positions.ndim != 2 or positions.shape[1] != 3:
+            raise ValueError("positions must have shape (N, 3).")
+
+        rel = positions - center
+        comoving = np.linalg.norm(rel, axis=1)
+
+        z = np.full_like(comoving, np.nan, dtype=float)
+        mask = np.isfinite(comoving) & (comoving >= 0)
+        if not np.any(mask):
+            return z
+
+        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
+        distances = comoving * u.Mpc
+        idx = np.where(mask)[0]
+        for i in idx:
+            dist = distances[i]
+            z[i] = float(z_at_value(cosmo.comoving_distance, dist))
+
+        return z
+
+    def to_da(self, center, Om):
+        """
+        Compute angular diameter distances for halo members.
+
+        Parameters
+        ----------
+        center : array-like
+            Observer position used as the comoving-distance origin.
+        Om : float
+            Matter density parameter of a flat LCDM cosmology with h=1.
+
+        Returns
+        -------
+        ndarray
+            Angular diameter distances in Mpc for each halo in this association.
+        """
+        z = self.to_z(center, Om)
+        da = np.full_like(z, np.nan, dtype=float)
+        mask = np.isfinite(z) & (z >= 0)
+        if not np.any(mask):
+            return da
+
+        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
+        da[mask] = cosmo.angular_diameter_distance(z[mask]).to_value(u.Mpc)
+
+        return da
 
     def compute_map_signals(self, profiler, obs_pos, theta_rand, map_rand,
                             r_key="Group_R_Crit500", coord_system="icrs"):
