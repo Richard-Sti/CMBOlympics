@@ -24,9 +24,10 @@ The aim is to test how the spatial alignment between simulated haloes and the ob
 
 ....
 
-# References
-[1] McAlpine 2025, [arXiv:2510.16574](https://arxiv.org/abs/2510.16574)  
-[2] Pfeifer S., et al., 2023, [arXiv:2305.05694](https://arxiv.org/abs/2305.05694)
+# Example
+
+To be added.
+
 
 # Installation
 
@@ -42,3 +43,12 @@ Installing in editable mode pulls the dependencies declared in `setup.py`. Alter
 ```bash
 pip install -r requirements.txt
 ```
+
+# References
+[1] McAlpine 2025, [arXiv:2510.16574](https://arxiv.org/abs/2510.16574)
+[2] Pfeifer S., et al., 2023, [arXiv:2305.05694](https://arxiv.org/abs/2305.05694)
+
+
+# License
+
+This project is released under the MIT License.
