@@ -2,13 +2,25 @@
 
 Toolkit for analysing cosmological “digital twin” simulations and Cosmic Microwave Background (CMB) observations. CMBO is built to measure the thermal Sunyaev–Zel’dovich (tSZ) signal at the locations of haloes drawn from the digital twins, and to test whether the digital-twin halo masses are consistent with both the SZ map amplitude and SZ-derived mass estimates.
 
+# Disciplines
+
+**1. Local cluster population tSZ significance.**
+
+The discipline starts by constructing halo "associations" as defined in [1]. Each association is a stable, localised set of massive haloes collected across all digital-twin realisations with the constraint that no association contains more than one halo from the same twin. The halos in a single association act as posterior samples of a single observed cluster. Following the matching strategy of [2], every association is compared to a catalogue of 19 nearby, well-studied clusters. For each halo–cluster pair we evaluate an association p-value and then perform a greedy assignment so the most significant matches are fixed first. The outcome is a subset of associations that are paired with the observed clusters, each annotated with the corresponding Pfeifer significance value. Once a halo is matched, we quantify its tSZ detection significance by measuring the mean signal within a circular aperture of radius $\theta_{\rm 500c}$, derived from the halo’s size and distance. We then compare this signal to expectations from random sky pointings of identical aperture size, yielding a $p$-value that represents the probability of obtaining such a signal by chance. This metric quantifies how well the digital-twin halo angular positions align with the observed SZ amplitudes for these nearby clusters.
+
+This is the set of 19, well-studied clusters: Abell 1644, Abell 119, Abell 548, Abell 1736, Abell 496, Hydra (A1060), Centaurus (A3526), Hercules (A2199), Hercules (A2147), Hercules (A2063), Hercules (A2151), Leo (A1367), Coma (A1656), Norma (A3627), Virgo Cluster, Shapley (A3571), Shapley (A3558), Shapley (A3562), and Perseus (A426).
+
+**References**  
+[1] McAlpine 2025, [arXiv:2510.16574](https://arxiv.org/abs/2510.16574)  
+[2] Pfeifer S., et al., 2023, [arXiv:2305.05694](https://arxiv.org/abs/2305.05694)
+
 ## Capabilities
 
 ### 1D Aperture Profiles & Background Subtraction
 
 The primary analysis method involves extracting 1D profiles of the tSZ signal around the locations of simulated haloes.
 
-- **Aperture Signal:** The signal is calculated as the **mean tSZ value of all pixels within a circular aperture** of a given radius. This is an "enclosed" profile, as implemented in the `cmbo.corr.PointingEnclosedProfile` class.
+- **Aperture Signal:** The signal is calculated as the **mean tSZ value of all pixels within a circular aperture** of a given radius—commonly \(\theta_{500}\) or simple multiples thereof. This is an "enclosed" profile, as implemented in the `cmbo.corr.PointingEnclosedProfile` class.
 
 - **Background Subtraction:** To isolate the halo's signal, a local background is estimated and subtracted. This is done by calculating the mean signal in a concentric annulus surrounding the main aperture (e.g., from 1.0 to 1.5 times the aperture radius) and subtracting this value. This feature is controlled by the `subtract_background` parameter in the profile extraction functions.
 
