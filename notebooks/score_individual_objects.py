@@ -565,16 +565,20 @@ def print_cluster_scores(
             else:
                 combined = np.nan
 
-        match_display = match_p
-        if not np.isfinite(match_display):
-            match_display = 1.0
+        if entry is None:
+            match_display = None
+        else:
+            match_display = match_p if np.isfinite(match_p) else 1.0
+        match_display_str = (
+            f"{match_display:>12.1e}" if match_display is not None else " " * 12
+        )
 
         row = (
             f"{name:<22} "
             f"{str(assoc_label):>7} "
             f"{frac_present:>6.2f} "
             f"{median_logm:>14.2f} "
-            f"{match_display:>12.1e} "
+            f"{match_display_str} "
             f"{centroid_dist:>13.3f} "
             f"{ell_deg:>10.2f} "
             f"{b_deg:>10.2f} "
@@ -714,9 +718,16 @@ def plot_cluster_pvalue_violins(
 
         ax.set_xticks(positions, names, rotation=45, ha="right")
         ax.set_ylabel(r"$p_{\mathrm{tSZ}}$")
-        # ax.set_ylim(0.0, 1.0)
         ax.set_yscale("log")
         ax.grid(True, axis="y", linestyle="--", alpha=0.3)
+        for thresh in (0.05, 0.005):
+            ax.axhline(
+                thresh,
+                color="red",
+                linestyle="--",
+                linewidth=1.0,
+                alpha=0.4,
+            )
 
     return fig, ax
 
@@ -764,6 +775,16 @@ def plot_pfeifer_vs_tsz(
         ax.set_yscale("log")
         ax.set_xlabel(r"$p_{\mathrm{Pfeifer}}$")
         ax.set_ylabel(r"$p_{\mathrm{tSZ,median}}$")
-        ax.grid(True, which="both", ls="--", alpha=0.4)
+        ax.grid(False)
+        x_min, x_max = ax.get_xlim()
+        line_x = np.logspace(np.log10(x_min), np.log10(x_max), 1000)
+        ax.plot(
+            line_x,
+            line_x,
+            color="red",
+            linestyle="--",
+            linewidth=1.0,
+            alpha=0.5,
+        )
 
     return fig, ax
