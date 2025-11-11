@@ -4,6 +4,8 @@ Toolkit for analysing cosmological “digital twin” simulations and Cosmic Mic
 
 # Disciplines
 
+We introduce three disciplines to assess the fidelity of the digital-twin simulations against observed tSZ data.
+
 ## 1. Local cluster population tSZ significance.
 
 The discipline starts by constructing halo "associations" as defined in [1]. Each association is a stable, localised set of massive haloes collected across all digital-twin realisations with the constraint that no association contains more than one halo from the same twin. The halos in a single association act as posterior samples of a single observed cluster. Following the matching strategy of [2], every association is compared to a catalogue of 19 nearby, well-studied clusters. For each halo–cluster pair we evaluate an association p-value and then perform a greedy assignment so the most significant matches are fixed first. The outcome is a subset of associations that are paired with the observed clusters, each annotated with the corresponding Pfeifer significance value. Once a halo is matched, we quantify its tSZ detection significance by measuring the mean signal within a circular aperture of radius $\theta_{\rm 500c}$, derived from the halo’s size and distance. We then compare this signal to expectations from random sky pointings of identical aperture size, yielding a $p$-value that represents the probability of obtaining such a signal by chance.
