@@ -16,11 +16,15 @@ This is the set of 19, well-studied clusters: Abell 1644, Abell 119, Abell�
 [1] McAlpine 2025, [arXiv:2510.16574](https://arxiv.org/abs/2510.16574)
 [2] Pfeifer S., et al., 2023, [arXiv:2305.05694](https://arxiv.org/abs/2305.05694)
 
-## 2. Stacked tSZ signal vs halo mass
+## 2. Stacked tSZ signal as a function of halo mass
 
 In this discipline, we move beyond individual halo detections to assess the stacked tSZ signal as a function of halo mass across the entire digital-twin ensemble. For each simulated halo, we extract the 1D tSZ profile as a function of angular radius and stack these profiles in bins of halo mass, normalised by the halo’s angular size. The stacked profiles are then compared to a distribution of equally sized stacks drawn from random sky locations using identical aperture sizes. This yields a significance for the stacked tSZ signal in each mass bin as a function of normalised angular radius.
 
 The aim is to test how the spatial alignment between simulated haloes and the observed tSZ signal depends on halo mass, identifying the mass range above which the digital twins trace real structures rather than random fluctuations. The binning scheme is defined as follows: the highest-mass bin contains the 10 most massive haloes in the simulation (within the selected radial range and sky area), the next bin includes the following 50 most massive haloes, and the remaining bins are spaced by $0.2~\mathrm{dex}$. Halo masses are defined using the FoF $M_{200c}$ measure, and we typically restrict the analysis to haloes with $M_{200c} > 10^{14}~M_\odot/h$. This discipline is sensitive not only to the angular positions of the haloes but also to the fraction of random objects included in each mass bin, as their presence dilutes the stacked signal.
+
+### 3. Agreement of tSZ-signal amplitude and digital twin halo masses
+
+....
 
 
 ## Capabilities
