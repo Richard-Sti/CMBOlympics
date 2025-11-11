@@ -14,10 +14,6 @@ This metric quantifies how well the angular positions of digital-twin haloes ali
 
 This is the set of 19, well-studied clusters: Abell 1644, Abell 119, Abell 548, Abell 1736, Abell 496, Hydra (A1060), Centaurus (A3526), Hercules (A2199), Hercules (A2147), Hercules (A2063), Hercules (A2151), Leo (A1367), Coma (A1656), Norma (A3627), Virgo Cluster, Shapley (A3571), Shapley (A3558), Shapley (A3562), and Perseus (A426).
 
-**References**
-[1] McAlpine 2025, [arXiv:2510.16574](https://arxiv.org/abs/2510.16574)
-[2] Pfeifer S., et al., 2023, [arXiv:2305.05694](https://arxiv.org/abs/2305.05694)
-
 ## 2. Stacked tSZ signal as a function of halo mass
 
 In this discipline, we move beyond individual halo detections to assess the stacked tSZ signal as a function of halo mass across the entire digital-twin ensemble. For each simulated halo, we extract the 1D tSZ profile as a function of angular radius and stack these profiles in bins of halo mass, normalised by the halo’s angular size. The stacked profiles are then compared to a distribution of equally sized stacks drawn from random sky locations using identical aperture sizes. This yields a significance for the stacked tSZ signal in each mass bin as a function of normalised angular radius.
@@ -61,6 +57,10 @@ The toolkit also provides functionality to extract and stack 2D cutouts (small i
 - **Normalization and Re-binning:** To allow for meaningful comparison and stacking, each 2D cutout is normalized by its halo's characteristic size (`theta200`). The cutout is re-binned onto a standardized grid where the coordinates are expressed in units of `theta200`. This ensures that halos of different apparent sizes are aligned and can be co-added.
 
 - **Stacking:** The normalized cutouts for a population of halos (e.g., within a mass bin) are then stacked by taking the mean pixel value at each position in the normalized grid. This produces an average 2D image of the tSZ signal for that halo population, significantly enhancing the signal-to-noise ratio. A corresponding stack from random sky locations can also be generated for comparison.
+
+# References
+[1] McAlpine 2025, [arXiv:2510.16574](https://arxiv.org/abs/2510.16574)  
+[2] Pfeifer S., et al., 2023, [arXiv:2305.05694](https://arxiv.org/abs/2305.05694)
 
 ## Installation
 
