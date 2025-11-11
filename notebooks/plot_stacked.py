@@ -14,9 +14,69 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Plotting helpers for tSZ mass-bin analyses."""
 
+from pathlib import Path
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
+
+from cmbo.io import TSZMassBinResults
+
+
+def load_mass_bin_results(
+    cfg,
+    sim_key,
+    include_profiles=True,
+    simulation_id=None,
+):
+    """
+    Load TSZ mass-bin results for a given simulation using the CMBO config.
+
+    Parameters
+    ----------
+    cfg : dict
+        Parsed CMBO configuration dictionary.
+    sim_key : str
+        Simulation key (e.g., ``"csiborg2"``) locating both the halo catalogue
+        and the corresponding HDF5 output.
+    include_profiles : bool, optional
+        If ``True`` (default) the stacked profile datasets are loaded.
+
+    simulation_id : str or int, optional
+        Specific simulation group inside the results file (e.g. ``15517``).
+        If omitted, all simulations are loaded.
+
+    Returns
+    -------
+    TSZMassBinResults
+        Results object ready for plotting utilities.
+    """
+    try:
+        analysis_cfg = cfg["analysis"]
+    except KeyError as exc:
+        raise ValueError("Configuration missing 'analysis' section.") from exc
+
+    output_dir = Path(analysis_cfg.get("output_folder", "."))
+    root_path = Path(cfg.get("_root_path", "."))
+    if not output_dir.is_absolute():
+        output_dir = (root_path / output_dir).resolve()
+    tag = analysis_cfg.get("output_tag")
+    stem = sim_key if not tag else f"{sim_key}_{tag}"
+    results_path = output_dir / f"{stem}.hdf5"
+    if not results_path.exists():
+        raise FileNotFoundError(
+            f"Results file '{results_path}' not found. "
+            "Run the mass-bin analysis first."
+        )
+
+    if simulation_id is not None:
+        simulation_id = str(simulation_id)
+
+    return TSZMassBinResults(
+        results_path,
+        include_profiles=include_profiles,
+        simulation=simulation_id,
+    )
 
 
 def plot_stacked_profiles(
@@ -511,4 +571,5 @@ def plot_cutout_maps(
 __all__ = [
     "plot_stacked_profiles",
     "plot_cutout_maps",
+    "load_mass_bin_results",
 ]
