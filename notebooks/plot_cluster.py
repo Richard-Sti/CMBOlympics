@@ -85,6 +85,8 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
     -------
     fig, axes
         Figure and axes array (upper: Y scaling, lower: mass comparison).
+    data : dict
+        Dictionary containing the left panel data: x, xerr, y, yerr.
     """
     if obs_clusters is None:
         raise ValueError("obs_clusters must be provided.")
@@ -93,7 +95,7 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
     if not np.isfinite(Om):
         raise ValueError("Om must be finite.")
 
-    cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
+    cosmo = FlatLambdaCDM(H0=70, Om0=float(Om))
 
     x_vals, x_errs = [], []
     y_vals, y_errs = [], []
@@ -110,9 +112,13 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
         if not planck_match:
             continue
 
-        y_arcmin2 = float(planck_match.get("y5r500", np.nan))
-        y_err_arcmin2 = float(planck_match.get("y5r500_err", np.nan))
+        y5r500_arcmin2 = float(planck_match.get("y5r500", np.nan))
+        y5r500_err_arcmin2 = float(planck_match.get("y5r500_err", np.nan))
         z_planck = float(planck_match.get("redshift", np.nan))
+
+        # Convert Y5R500 to Y500 using spherical profile assumption
+        y_arcmin2 = y5r500_arcmin2 / 1.81 * 1e-3
+        y_err_arcmin2 = y5r500_err_arcmin2 / 1.81 * 1e-3
 
         if not (
             np.isfinite(y_arcmin2)
@@ -252,10 +258,10 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
             slope=slope,
             color="k",
             linestyle="--",
-            label=r"$E(z)^{-2/3}Y_{5R500\mathrm{c}}D_A^2 \propto M^{5/3}$",
+            label=r"$E(z)^{-2/3}Y_{500}D_A^2 \propto M^{5/3}$",
         )
         ax.set_xlabel(r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]$")
-        ax.set_ylabel(r"$\log E(z)^{-2/3}Y_{5R500\mathrm{c}}D_A^2\,[\mathrm{Mpc}^2]$")  # noqa
+        ax.set_ylabel(r"$\log E(z)^{-2/3}Y_{500}D_A^2\,[\mathrm{Mpc}^2]$")  # noqa
         ax.legend(loc="lower right")
         for xi, yi, name in zip(x, y, labels):
             ax.annotate(
@@ -319,6 +325,8 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
                 "alpha": 0.75,
             },
         )
+
+    plt.close()
 
     return fig, axes
 
