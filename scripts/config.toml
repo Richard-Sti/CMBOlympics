@@ -59,6 +59,7 @@ verbose_bins = true # Print details about the created mass bins
 which_simulation = "csiborg2" # Key for the halo catalogue to use (see below)
 output_folder = "results" # Folder to save the HDF5 output file
 # output_tag = ""             # Optional tag to append to the output filename
+matching_pvalue_threshold = 0.05
 
 # Aperture and profile settings
 aperture_scale = 2.0          # Aperture size for per-halo p-value, as a multiple of theta_500
