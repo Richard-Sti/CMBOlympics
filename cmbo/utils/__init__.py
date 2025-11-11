@@ -34,6 +34,10 @@ from .cluster_matching import (  # noqa: F401
 from .crossmatch import crossmatch_planck_catalog  # noqa: F401
 from .pfeifer import MatchingProbability  # noqa: F401
 from .smoothing import smooth_map_gaussian  # noqa: F401
+from .config_reader import (  # noqa: F401
+    load_config,
+    apply_root_to_config_paths,
+)
 
 from datetime import datetime
 import numpy as np
