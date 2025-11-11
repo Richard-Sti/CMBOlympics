@@ -22,11 +22,9 @@ class HaloAssociation:
     optional_data: dict = field(default=None)
 
     # Map signal fields (populated by compute_map_signals)
-    median_galactic: tuple = field(default=None)  # (r, ell, b)
     median_theta500: float = field(default=None)
     median_signal: float = field(default=None)
     median_pval: float = field(default=None)
-    halo_galactic: tuple = field(default=None)  # (r, ell, b) arrays
     halo_theta500: np.ndarray = field(default=None)
     halo_signals: np.ndarray = field(default=None)
     halo_pvals: np.ndarray = field(default=None)
@@ -242,7 +240,6 @@ class HaloAssociation:
         theta500 = np.rad2deg(np.arctan(radii / r)) * 60
 
         # Compute median position and aperture
-        median_r = float(np.median(r))
         median_ell = float(np.median(ell))
         median_b = float(np.median(b))
         median_theta500 = float(np.median(theta500))
@@ -271,11 +268,9 @@ class HaloAssociation:
         )
 
         # Store results
-        self.median_galactic = (median_r, median_ell, median_b)
         self.median_theta500 = median_theta500
         self.median_signal = median_signal
         self.median_pval = median_pval
-        self.halo_galactic = (r, ell, b)
         self.halo_theta500 = theta500
         self.halo_signals = halo_signals
         self.halo_pvals = halo_pvals
