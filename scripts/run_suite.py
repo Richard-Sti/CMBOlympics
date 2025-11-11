@@ -25,77 +25,11 @@ from cmbo.utils import (
     build_mass_bins,
     cartesian_icrs_to_galactic_spherical,
     fprint,
+    load_config,
     pvalue_to_sigma,
 )
 from scipy.stats import norm, t
 from tqdm import tqdm
-
-try:
-    import tomllib as _toml_loader  # Python 3.11+
-except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
-    try:
-        import tomli as _toml_loader  # type: ignore
-    except ModuleNotFoundError as exc:  # pragma: no cover
-        raise SystemExit(
-            "tomli is required to read the configuration file "
-            "(install with 'pip install tomli')."
-        ) from exc
-
-tomli = _toml_loader
-
-
-def _resolve_root_path(cfg):
-    """Return the absolute root directory for resolving relative paths."""
-
-    paths_cfg = cfg.get("paths", {})
-    root_value = paths_cfg.get("root")
-    if root_value is None:
-        return Path(__file__).resolve().parents[1]
-
-    root_path = Path(root_value).expanduser()
-    if not root_path.is_absolute():
-        root_path = (Path(__file__).resolve().parent / root_path).resolve()
-    return root_path
-
-
-def _resolve_with_root(root_path, value):
-    """Resolve a file path relative to the configured root directory."""
-
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = root_path / path
-    return str(path)
-
-
-def apply_root_to_config_paths(cfg):
-    """Resolve all known file paths in the config using the root directory."""
-
-    root_path = _resolve_root_path(cfg)
-
-    map_cfg = cfg.get("input_map", {})
-    for key in ("signal_map", "random_pointing"):
-        if key in map_cfg:
-            map_cfg[key] = _resolve_with_root(root_path, map_cfg[key])
-
-    analysis_cfg = cfg.get("analysis", {})
-    if "output_folder" in analysis_cfg:
-        analysis_cfg["output_folder"] = _resolve_with_root(
-            root_path, analysis_cfg["output_folder"]
-        )
-
-    for catalogue in cfg.get("halo_catalogues", {}).values():
-        if "fname" in catalogue:
-            catalogue["fname"] = _resolve_with_root(
-                root_path, catalogue["fname"])
-
-    return root_path
-
-
-def load_config(path):
-    """Return the raw configuration dictionary loaded from a TOML file."""
-
-    with open(path, "rb") as fh:
-        return tomli.load(fh)
 
 
 def load_halo_catalogue(cfg, nsim):
@@ -139,6 +73,8 @@ def load_halo_catalogue(cfg, nsim):
     if mass_max is not None:
         mask &= mass <= mass_max
 
+    selection_index = np.nonzero(mask)[0]
+
     if not np.any(mask):
         raise ValueError(
             f"No haloes passed the selection cuts for simulation {nsim}."
@@ -153,6 +89,7 @@ def load_halo_catalogue(cfg, nsim):
         "b": b[mask],
         "mass": mass[mask],
         "theta": theta_arcmin[mask],
+        "catalogue_index": selection_index,
     }
 
 
@@ -210,6 +147,16 @@ def save_results_hdf5(path, simulations):
             if data.get("original_index") is not None:
                 halo_group.create_dataset(
                     "original_index", data=np.asarray(data["original_index"]))
+            if data.get("halo_pvals_original") is not None:
+                halo_group.create_dataset(
+                    "pval_original_order",
+                    data=np.asarray(data["halo_pvals_original"]),
+                )
+            if data.get("catalogue_index_original") is not None:
+                halo_group.create_dataset(
+                    "catalogue_index_original",
+                    data=np.asarray(data["catalogue_index_original"]),
+                )
 
             bin_results = data.get("results") or []
             if not bin_results:
@@ -402,6 +349,7 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
     max_cutout_bins = cutout_params["max_bins"]
 
     results = []
+    catalogue_index_original = np.array(halos["catalogue_index"], copy=True)
     halo_pval_data = np.full(halos["mass"].shape, np.nan, dtype=float)
     halo_bin_index = np.full(halos["mass"].shape, -1, dtype=int)
 
@@ -564,6 +512,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             }
         )
 
+    halo_pvals_original = halo_pval_data.copy()
+
     mass_order = np.argsort(-np.asarray(halos["mass"]))
     halos_sorted = {
         key: np.asarray(values)[mass_order]
@@ -575,6 +525,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         "halo_pvals": halo_pval_data[mass_order],
         "halo_bins": halo_bin_index[mass_order],
         "original_index": mass_order,
+        "halo_pvals_original": halo_pvals_original,
+        "catalogue_index_original": catalogue_index_original,
         "results": results,
     }
 
@@ -586,7 +538,6 @@ def determine_simulations(catalogue_cfg, requested):
         sims = cmbo.io.list_simulations_hdf5(catalogue_cfg["fname"])
 
         fprint(f"Processing simulations {sims}.")
-        sims = sims[:2]
 
         return [str(sim) for sim in sims]
 
@@ -617,7 +568,7 @@ def main():
             f"'runtime.n_jobs' missing from {config_path}."
         )
 
-    root_path = apply_root_to_config_paths(cfg)
+    root_path = Path(cfg.get("_root_path", Path(__file__).resolve().parents[1]))
     fprint(f"Loaded config from {config_path} with root {root_path}")
 
     analysis_cfg = cfg["analysis"]
