@@ -18,99 +18,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 
-from cmbo.utils import pvalue_to_sigma
-
-
-def plot_mass_bin_pvalues(res, output_path=None, dpi=300):
-    """
-    Plot Kolmogorov-Smirnov p-values versus median halo mass per bin.
-
-    Parameters
-    ----------
-    res
-        TSZMassBinResults instance.
-    output_path : str or pathlib.Path, optional
-        When provided, save the figure to this location.
-    dpi : int, optional
-        Figure DPI used when saving, default is 300.
-    """
-
-    sims = list(res.iter_simulations())
-    nsim = len(sims)
-    max_bins = max((len(sim.bins) for _, sim in sims), default=0)
-
-    log_mass = np.full((nsim, max_bins), np.nan)
-    pvals = np.full((nsim, max_bins), np.nan)
-
-    for i, (_, sim) in enumerate(sims):
-        for j, bin_res in enumerate(sim.bins):
-            log_mass[i, j] = bin_res.log_median_mass
-            pvals[i, j] = bin_res.ks_p
-
-    with plt.style.context("science"):
-        fig, ax = plt.subplots()
-        lw = plt.rcParams["lines.linewidth"]
-        for i in range(nsim):
-            ax.plot(
-                log_mass[i],
-                pvals[i],
-                marker="o",
-                markersize=2,
-                lw=lw / 2,
-                color="k",
-                alpha=0.5,
-            )
-
-        if nsim > 1:
-            med_pval = np.nanmedian(pvals, axis=0)
-            med_log_mass = np.nanmedian(log_mass, axis=0)
-            median_color = "C0"
-            ax.plot(
-                med_log_mass,
-                med_pval,
-                color=median_color,
-                lw=lw,
-                label="Median",
-                zorder=5,
-            )
-
-        ax.set_yscale("log")
-        ax.set_xlabel(r"$\log_{10} M_{\rm 200c} ~ [h^{-1}\, M_{\rm sun}]$")
-        ax.set_ylabel(r"$p_{\rm KS}$")
-        ax.axhline(
-            0.05,
-            color="gray",
-            lw=1.0,
-            ls="--",
-            label=r"$p=0.05$",
-        )
-        if np.isfinite(log_mass).any():
-            lo = np.nanmin(log_mass) - 0.1
-            hi = np.nanmax(log_mass) + 0.1
-            ax.set_xlim(lo, hi)
-        finite_all = pvals[np.isfinite(pvals) & (pvals > 0)]
-        if finite_all.size:
-            ymin = finite_all.min() * 0.8
-            ymax_all = finite_all.max() * 1.3
-            ax.set_ylim(ymin, ymax_all)
-
-        ax.legend(frameon=False)
-        fig.tight_layout()
-
-    if output_path is not None:
-        fig.savefig(output_path, dpi=dpi)
-
-    return fig, ax
-
 
 def plot_stacked_profiles(
     res,
     nbins=3,
-    output_path=None,
-    dpi=300,
     simulation=None,
+    theta500_scale=5.0,
 ):
-    """
+    r"""
     Plot stacked or per-simulation y-profile summaries for leading mass bins.
 
     Parameters
@@ -119,12 +34,12 @@ def plot_stacked_profiles(
         TSZMassBinResults instance.
     nbins : int, optional
         Maximum number of bins to display, default is 3.
-    output_path : str or pathlib.Path, optional
-        When provided, save the figure to this location.
     dpi : int, optional
         Figure DPI used when saving, default is 300.
     simulation : str, optional
         If provided, select a single simulation to plot without stacking.
+    theta500_scale : float, optional
+        Scaling applied to the radial normalization relative to theta_500c.
     """
 
     all_sims = list(res.iter_simulations())
@@ -158,12 +73,17 @@ def plot_stacked_profiles(
     if radii_norm is None:
         raise ValueError("No radial grid stored in the results.")
     nradii = radii_norm.size
+    x_min = float(np.nanmin(radii_norm))
+    x_max = float(np.nanmax(radii_norm))
+    if not np.isfinite(x_min) or not np.isfinite(x_max):
+        raise ValueError("Non-finite radial grid detected.")
 
     nsim = len(sims)
     profile_mean = np.full((nsim, max_bins, nradii), np.nan)
     profile_err = np.full((nsim, max_bins, nradii), np.nan)
     random_mean = np.full((nsim, max_bins, nradii), np.nan)
     random_err = np.full((nsim, max_bins, nradii), np.nan)
+    pvalue_profile = np.full((nsim, max_bins, nradii), np.nan)
 
     for i, (_, sim) in enumerate(sims):
         for j, bin_res in enumerate(sim.bins):
@@ -190,25 +110,52 @@ def plot_stacked_profiles(
                     bin_res.random_error,
                     dtype=float,
                 )
+            if getattr(bin_res, "p_value_profile", None) is not None:
+                pvalue_profile[i, j] = np.asarray(
+                    bin_res.p_value_profile,
+                    dtype=float,
+                )
 
     nbins_to_plot = min(nbins, max_bins)
     with plt.style.context("science"):
         width = 3.2 * nbins_to_plot
-        fig, axes = plt.subplots(1, nbins_to_plot, figsize=(width, 3.2))
+        height = 4.0
+        if theta500_scale == 1:
+            theta_label = r"$\theta / \theta_{500\mathrm{c}}$"
+        else:
+            theta_label = (
+                r"$\theta / ("
+                f"{theta500_scale:g}"
+                r"\,\theta_{500\mathrm{c}})$"
+            )
+        fig, axes = plt.subplots(
+            2,
+            nbins_to_plot,
+            figsize=(width, height),
+            sharex="col",
+            constrained_layout=True,
+            gridspec_kw={"height_ratios": [3.0, 1.0]},
+        )
         if nbins_to_plot == 1:
-            axes = [axes]
+            axes = axes.reshape(2, 1)
+        profile_axes = axes[0]
+        sig_axes = axes[1]
 
         lw = plt.rcParams["lines.linewidth"]
-        for j_bin, ax in enumerate(axes[:nbins_to_plot]):
+        for j_bin in range(nbins_to_plot):
+            ax = profile_axes[j_bin]
+            ax_sig = sig_axes[j_bin]
             have_bin = ~np.isnan(profile_mean[:, j_bin, 0])
             if not np.any(have_bin):
                 ax.set_axis_off()
+                ax_sig.set_axis_off()
                 continue
 
             pm = profile_mean[have_bin, j_bin]
             pe = profile_err[have_bin, j_bin]
             rm = random_mean[have_bin, j_bin]
             re = random_err[have_bin, j_bin]
+            pv = pvalue_profile[have_bin, j_bin]
 
             if simulation is None or nsim > 1:
                 stack_mean = np.nanmean(pm, axis=0)
@@ -289,50 +236,64 @@ def plot_stacked_profiles(
             )
 
             ax.axhline(0.0, lw=lw * 0.7, alpha=0.6, color="k")
-            ax.set_xlabel(r"$\theta/\theta_{200\mathrm{c}}$")
+            ax.set_xlim(x_min, x_max)
 
-            p_values = []
-            for idx in np.where(have_bin)[0]:
-                value = sims[idx][1].bins[j_bin].ks_p
-                if value is None or not np.isfinite(value) or value <= 0:
-                    continue
-                p_values.append(float(value))
-            if p_values:
-                if simulation is None or nsim > 1:
-                    summary_p = float(np.nanmedian(p_values))
-                else:
-                    summary_p = float(p_values[0])
-                if np.isfinite(summary_p) and summary_p > 0:
-                    sigma_val = pvalue_to_sigma(summary_p / 2.0)
-                    if not np.isfinite(sigma_val):
-                        sigma_text = r"$\sigma > 10$"
-                    else:
-                        sigma_text = rf"$\sigma = {sigma_val:.2f}$"
-                    base, exp = f"{summary_p:.2e}".split("e")
-                    p_text = (
-                        rf"$p_{{\rm KS}} = {float(base):.2f}"
-                        rf"\times10^{{{int(exp)}}}$"
+            ax_sig.set_xlim(x_min, x_max)
+            ax_sig.set_yscale("log")
+            ax_sig.axhline(0.05, color="k", lw=lw)
+            multi_sim = pv.shape[0] > 1
+            if simulation is None or nsim > 1:
+                stack_pv = np.nanmedian(pv, axis=0)
+            else:
+                stack_pv = pv[0]
+            valid = np.isfinite(stack_pv) & (stack_pv > 0)
+            if np.any(valid):
+                ax_sig.plot(
+                    radii_norm[valid],
+                    stack_pv[valid],
+                    color="C3",
+                    lw=lw * 0.9,
+                )
+                if multi_sim:
+                    pv_clean = pv.copy()
+                    pv_clean[~np.isfinite(pv_clean) | (pv_clean <= 0)] = np.nan
+                    low = np.nanpercentile(pv_clean, 16.0, axis=0)
+                    high = np.nanpercentile(pv_clean, 84.0, axis=0)
+                    band = (
+                        np.isfinite(low)
+                        & np.isfinite(high)
+                        & (low > 0)
+                        & (high > 0)
                     )
-                    text = "\n".join((p_text, sigma_text))
-                    ax.text(
-                        0.98,
-                        0.98,
-                        text,
-                        transform=ax.transAxes,
-                        ha="right",
-                        va="top",
-                    )
+                    if np.any(band):
+                        ax_sig.fill_between(
+                            radii_norm[band],
+                            low[band],
+                            high[band],
+                            color="C3",
+                            alpha=0.2,
+                            linewidth=0,
+                        )
+                ymin = stack_pv[valid].min()
+                ymax = stack_pv[valid].max()
+                if ymin == ymax:
+                    ymin *= 0.8
+                    ymax *= 1.2
+                ymin = min(ymin, 0.05 * 0.8)
+                ymax = max(ymax, 0.05 * 1.2)
+                ax_sig.set_ylim(ymin, ymax)
+            else:
+                ax_sig.set_axis_off()
+                continue
 
-        axes[0].set_ylabel(r"$y$")
-        axes[0].legend(
-            frameon=False,
-            loc="upper right",
-            bbox_to_anchor=(0.98, 0.82),
-        )
-        fig.tight_layout()
+        profile_axes[0].set_ylabel(
+            r"$\langle y(<\theta) \rangle$ (mean enclosed)")
+        profile_axes[0].legend(frameon=False, loc="upper right")
+        for ax_sig in sig_axes:
+            ax_sig.set_xlabel(theta_label)
+        sig_axes[0].set_ylabel(r"$p_{\rm KS}(\theta)$")
 
-    if output_path is not None:
-        fig.savefig(output_path, dpi=dpi)
+    plt.close()
 
     return fig, axes
 
@@ -345,11 +306,15 @@ def plot_cutout_maps(
     circle_color="k",
     circle_lw=1.0,
     cmap="coolwarm",
-    output_path=None,
-    dpi=300,
+    theta500_scale=5.0,
 ):
-    """
+    r"""
     Plot stacked or per-simulation cutout mean maps for selected bins.
+
+    Parameters
+    ----------
+    theta500_scale : float, optional
+        Scaling applied to the angular normalization relative to theta_500c.
     """
 
     mode = mode.lower()
@@ -419,6 +384,22 @@ def plot_cutout_maps(
                     f"Available: {names}"
                 )
             sim_idx = match
+
+    if theta500_scale == 1:
+        theta_x_label = r"$\theta_x / \theta_{500\mathrm{c}}$"
+        theta_y_label = r"$\theta_y / \theta_{500\mathrm{c}}$"
+    else:
+        factor = f"{theta500_scale:g}"
+        theta_x_label = (
+            r"$\theta_x / ("
+            f"{factor}"
+            r"\,\theta_{500\mathrm{c}})$"
+        )
+        theta_y_label = (
+            r"$\theta_y / ("
+            f"{factor}"
+            r"\,\theta_{500\mathrm{c}})$"
+        )
 
     with plt.style.context("science"):
         fig, axes = plt.subplots(
@@ -510,9 +491,9 @@ def plot_cutout_maps(
                     fontsize=11,
                 )
 
-            ax.set_xlabel(r"$\theta_x / \theta_{200\mathrm{c}}$")
+            ax.set_xlabel(theta_x_label)
             if j_bin == 0:
-                ax.set_ylabel(r"$\theta_y / \theta_{200\mathrm{c}}$")
+                ax.set_ylabel(theta_y_label)
             else:
                 ax.set_ylabel("")
 
@@ -522,14 +503,12 @@ def plot_cutout_maps(
 
         fig.tight_layout()
 
-    if output_path is not None:
-        fig.savefig(output_path, dpi=dpi)
+    plt.close()
 
     return fig, axes
 
 
 __all__ = [
-    "plot_mass_bin_pvalues",
     "plot_stacked_profiles",
     "plot_cutout_maps",
 ]

@@ -51,6 +51,16 @@ class ObservedCluster:
     dec_deg: float
     cz_cmb: float | None
     cz_cmb_err: float | None
+    map_fit: dict | None = None
+    planck_match: dict | None = None
+
+    @property
+    def galactic_coordinates(self):
+        """Galactic longitude and latitude in degrees."""
+        ell, b = radec_to_galactic(
+            np.array([self.ra_deg]), np.array([self.dec_deg])
+        )
+        return float(ell[0]), float(b[0])
 
     def as_dict(self):
         """Return a serialisable view of the cluster."""
@@ -61,6 +71,8 @@ class ObservedCluster:
             "dec_deg": self.dec_deg,
             "cz_cmb": self.cz_cmb,
             "cz_cmb_err": self.cz_cmb_err,
+            "map_fit": self.map_fit,
+            "planck_match": self.planck_match,
         }
 
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate random tSZ signal and background profiles from the Planck NILC
-Compton-y map.
+Generate random tSZ signal profiles from the Planck NILC Compton-y map.
 """
 
 from pathlib import Path
@@ -101,7 +100,8 @@ def load_config_sections(config_path):
         )
 
     map_cfg = dict(map_cfg)
-    map_cfg["signal_map"] = _resolve_with_root(root_path, map_cfg["signal_map"])
+    map_cfg["signal_map"] = _resolve_with_root(
+        root_path, map_cfg["signal_map"])
     map_cfg["random_pointing"] = _resolve_with_root(
         root_path, map_cfg["random_pointing"]
     )
@@ -117,18 +117,11 @@ def main():
     theta_min = rand_cfg["theta_min"]
     theta_max = rand_cfg["theta_max"]
     n_theta = rand_cfg["n_theta"]
-    theta_bg_min = rand_cfg.get("theta_background_min")
-    theta_bg_max = rand_cfg.get("theta_background_max")
     n_points = rand_cfg["n_points"]
     abs_b_min = rand_cfg["abs_b_min"]
     fwhm_arcmin = rand_cfg["fwhm_arcmin"]
     seed = rand_cfg["seed"]
     n_jobs = runtime_cfg["n_jobs"]
-
-    if theta_bg_min is None:
-        theta_bg_min = theta_min
-    if theta_bg_max is None:
-        theta_bg_max = theta_max
 
     y_map = cmbo.io.read_Planck_comptonSZ(planck_map)
     mu, std = np.nanmean(y_map), np.nanstd(y_map)
@@ -142,16 +135,13 @@ def main():
         y_map, n_jobs=n_jobs, fwhm_arcmin=fwhm_arcmin)
 
     theta_rand = np.linspace(theta_min, theta_max, n_theta)
-    theta_rand_bg = np.linspace(theta_bg_min, theta_bg_max, n_theta)
 
     fprint(f"Signal radii: [{theta_min}, {theta_max}] arcmin")
-    fprint(f"Background radii: [{theta_bg_min}, {theta_bg_max}] arcmin")
 
-    tsz_rand_signal, tsz_rand_background = profiler.get_random_profiles(
+    tsz_rand_signal = profiler.get_random_profiles(
         theta_rand,
         n_points=n_points,
         abs_b_min=abs_b_min,
-        radii_background_arcmin=theta_rand_bg,
         seed=seed,
     )
 
@@ -163,8 +153,6 @@ def main():
         output_path,
         theta_rand=theta_rand,
         tsz_rand_signal=tsz_rand_signal,
-        theta_rand_bg=theta_rand_bg,
-        tsz_rand_background=tsz_rand_background,
     )
     fprint(f"Wrote random profiles to {output_path}")
 

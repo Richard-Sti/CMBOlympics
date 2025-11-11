@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 import numpy as np
+import astropy.units as u
+from astropy.cosmology import z_at_value, FlatLambdaCDM
 from tqdm import tqdm
 from .coords import cartesian_icrs_to_galactic_spherical
 
@@ -21,11 +23,11 @@ class HaloAssociation:
 
     # Map signal fields (populated by compute_map_signals)
     median_galactic: tuple = field(default=None)  # (r, ell, b)
-    median_theta200: float = field(default=None)
+    median_theta500: float = field(default=None)
     median_signal: float = field(default=None)
     median_pval: float = field(default=None)
     halo_galactic: tuple = field(default=None)  # (r, ell, b) arrays
-    halo_theta200: np.ndarray = field(default=None)
+    halo_theta500: np.ndarray = field(default=None)
     halo_signals: np.ndarray = field(default=None)
     halo_pvals: np.ndarray = field(default=None)
 
@@ -126,8 +128,77 @@ class HaloAssociation:
         )
         return float(r[0]), float(ell[0]), float(b[0])
 
+    def to_z(self, center, Om):
+        """
+        Compute cosmological redshifts from comoving distances.
+
+        Parameters
+        ----------
+        center : array-like
+            Observer position used as the comoving-distance origin.
+        Om : float
+            Matter density parameter of a flat LCDM cosmology with h=1.
+
+        Returns
+        -------
+        ndarray
+            Redshifts corresponding to each halo position.
+        """
+        center = np.asarray(center, dtype=float)
+        if center.shape != (3,):
+            raise ValueError("center must be a 3-vector.")
+
+        positions = np.asarray(self.positions, dtype=float)
+        if positions.ndim != 2 or positions.shape[1] != 3:
+            raise ValueError("positions must have shape (N, 3).")
+
+        rel = positions - center
+        comoving = np.linalg.norm(rel, axis=1)
+
+        z = np.full_like(comoving, np.nan, dtype=float)
+        mask = np.isfinite(comoving) & (comoving >= 0)
+        if not np.any(mask):
+            return z
+
+        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
+        distances = comoving * u.Mpc
+        idx = np.where(mask)[0]
+        for i in idx:
+            dist = distances[i]
+            z[i] = float(z_at_value(cosmo.comoving_distance, dist))
+
+        return z
+
+    def to_da(self, center, Om):
+        """
+        Compute angular diameter distances for halo members.
+
+        Parameters
+        ----------
+        center : array-like
+            Observer position used as the comoving-distance origin.
+        Om : float
+            Matter density parameter of a flat LCDM cosmology with h=1.
+
+        Returns
+        -------
+        ndarray
+            Angular diameter distances in Mpc for each halo in this
+            association.
+        """
+        z = self.to_z(center, Om)
+        da = np.full_like(z, np.nan, dtype=float)
+        mask = np.isfinite(z) & (z >= 0)
+        if not np.any(mask):
+            return da
+
+        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
+        da[mask] = cosmo.angular_diameter_distance(z[mask]).to_value(u.Mpc)
+
+        return da
+
     def compute_map_signals(self, profiler, obs_pos, theta_rand, map_rand,
-                            r_key="Group_R_Crit200", coord_system="icrs"):
+                            r_key="Group_R_Crit500", coord_system="icrs"):
         """
         Compute and store map signals and p-values for this association.
 
@@ -142,11 +213,12 @@ class HaloAssociation:
             Observer position (3D array) in same coordinate system as
             association positions.
         theta_rand
-            Angular sizes for random pointings (arcmin).
+            Angular sizes for random signal profiles (arcmin).
         map_rand
-            Map signals for random pointings, shape (n_random, n_theta).
+            Map signal profiles for random pointings, shape
+            (n_random, n_theta).
         r_key
-            Key in optional_data for halo radii (e.g., 'Group_R_Crit200').
+            Key in optional_data for halo radii (e.g., 'Group_R_Crit500').
         coord_system
             Coordinate system of positions. Currently only "icrs".
         """
@@ -167,22 +239,22 @@ class HaloAssociation:
         radii = self.optional_data[r_key]
 
         # Compute aperture sizes
-        theta200 = np.rad2deg(np.arctan(radii / r)) * 60
+        theta500 = np.rad2deg(np.arctan(radii / r)) * 60
 
         # Compute median position and aperture
         median_r = float(np.median(r))
         median_ell = float(np.median(ell))
         median_b = float(np.median(b))
-        median_theta200 = float(np.median(theta200))
+        median_theta500 = float(np.median(theta500))
 
         # Measure signal at median position
         median_signal = float(profiler.get_profile(
-            median_ell, median_b, median_theta200
+            median_ell, median_b, median_theta500
         ))
 
         # Compute p-value for median
         median_pval = float(profiler.signal_to_pvalue(
-            np.array([median_theta200]),
+            np.array([median_theta500]),
             np.array([median_signal]),
             theta_rand,
             map_rand
@@ -190,28 +262,28 @@ class HaloAssociation:
 
         # Measure signals for all haloes (disable progress bar)
         halo_signals = profiler.get_profiles_per_source(
-            ell, b, theta200, verbose=False
+            ell, b, theta500, verbose=False
         )
 
         # Compute p-values for all haloes
         halo_pvals = profiler.signal_to_pvalue(
-            theta200, halo_signals, theta_rand, map_rand
+            theta500, halo_signals, theta_rand, map_rand
         )
 
         # Store results
         self.median_galactic = (median_r, median_ell, median_b)
-        self.median_theta200 = median_theta200
+        self.median_theta500 = median_theta500
         self.median_signal = median_signal
         self.median_pval = median_pval
         self.halo_galactic = (r, ell, b)
-        self.halo_theta200 = theta200
+        self.halo_theta500 = theta500
         self.halo_signals = halo_signals
         self.halo_pvals = halo_pvals
 
 
 def compute_association_signals(associations, profiler, obs_pos,
                                 theta_rand, map_rand,
-                                r_key="Group_R_Crit200",
+                                r_key="Group_R_Crit500",
                                 coord_system="icrs"):
     """
     Compute map signals for all associations in a list.
@@ -238,7 +310,9 @@ def compute_association_signals(associations, profiler, obs_pos,
     """
     for assoc in tqdm(associations, desc="Computing association signals"):
         assoc.compute_map_signals(
-            profiler, obs_pos, theta_rand, map_rand, r_key, coord_system
+            profiler, obs_pos, theta_rand, map_rand,
+            r_key=r_key,
+            coord_system=coord_system
         )
 
 

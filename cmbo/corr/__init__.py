@@ -22,3 +22,8 @@ from .pointing import (                                                         
     PointingEnclosedProfile,                                                    # noqa
     Pointing2DCutout,                                                           # noqa
     )                                                                           # noqa
+
+from .mass_match import (                                                       # noqa
+    measure_mass_matched_cluster,                                               # noqa
+    measure_mass_matched_catalog,                                               # noqa
+    )                                                                           # noqa

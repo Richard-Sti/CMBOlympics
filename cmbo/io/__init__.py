@@ -15,6 +15,7 @@
 
 from .cmb import (  # noqa
     read_Planck_comptonSZ,  # noqa
+    read_Planck_cluster_catalog,  # noqa
 )
 
 from .snapshot import (  # noqa
