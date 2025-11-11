@@ -41,7 +41,7 @@ seed = 42
 r_min = 0.0       # Minimum comoving distance [Mpc/h]
 r_max = 150.0     # Maximum comoving distance [Mpc/h]
 b_min = 10.0      # Minimum Galactic latitude (absolute value) [degrees]
-mass_min = 1e14   # Minimum halo mass (M_200c) [M_sun/h]
+mass_min = 5e13   # Minimum halo mass (M_200c) [M_sun/h]
 mass_max = 1e16   # Maximum halo mass (M_200c) [M_sun/h]
 theta_min = 5.0   # Minimum angular size (theta_500) [arcmin]
 theta_max = 6000  # Maximum angular size (theta_500) [arcmin]
@@ -80,8 +80,8 @@ cutout_random_abs_b_min = 10 # Minimum Galactic latitude for random cutouts
 # Stacking and significance settings
 bootstrap = 10_000           # Number of bootstrap resamples for error estimation
 high_sample_bins = 3         # Number of high-mass bins to use more random samples for
-random_pool_samples_high = 10000 # Number of random stacks for high-mass bins
-random_pool_samples_low = 1000   # Number of random stacks for low-mass bins
+random_pool_samples_high = 100000 # Number of random stacks for high-mass bins
+random_pool_samples_low = 10000   # Number of random stacks for low-mass bins
 t_fit_nth_sample = 10        # Down-sampling factor for t-distribution fitting (1 for full)
 
 # General settings
