@@ -4,6 +4,7 @@
 # Base directory used to resolve relative paths in this config.
 [paths]
 root = "/Users/rstiskalek/Projects/CMBOlympics"
+observed_clusters = "data/observed_cluster_masses.toml"
 # root = "/mnt/extraspace/rstiskalek/CMBOlympics"
 
 # --- Runtime ---
@@ -92,6 +93,7 @@ return_random_profiles = false     # Save all individual random 1D profiles to t
 # --- Halo Catalogues ---
 # Definitions of available halo catalogues. The key is used in `analysis.which_simulation`.
 [halo_catalogues]
+min_association_mass = 5e13
 
 [halo_catalogues.csiborg1]
 fname = "data/csiborg1_fof.hdf5"
