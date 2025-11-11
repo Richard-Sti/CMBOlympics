@@ -668,7 +668,6 @@ class PointingEnclosedProfile:
             background = self.get_background(
                 ell, b, radii_background_arcmin, radii_outer_arcmin
             )
-            # background = np.zeros_like(radii_background_arcmin)
 
             # Store in map_fit
             obs_clusters.clusters[i].map_fit['radii_arcmin'] = radii_arcmin
@@ -1231,13 +1230,10 @@ class Pointing2DCutout:
 
                 x_peak = axis[ix_max]
                 y_peak = axis[iy_max]
-                peak_signal = cutout[iy_max, ix_max]
-
                 if verbose:
-                    msg = (f"Peak refinement: offset = "
-                           f"({x_peak:.3f}, {y_peak:.3f}) arcmin, "
-                           f"signal = {peak_signal:.3e}")
-                    print(msg)
+                    print(f"Peak refinement: offset = "
+                          f"({x_peak:.3f}, {y_peak:.3f}) arcmin, "
+                          f"signal = {cutout[iy_max, ix_max]:.3e}")
 
                 # Update to peak position
                 ell_deg += x_peak / 60.0 / np.cos(np.radians(b_deg))
