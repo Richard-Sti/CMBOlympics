@@ -97,7 +97,7 @@ min_association_mass = 5e13
 
 [halo_catalogues.csiborg1]
 fname = "data/csiborg1_fof.hdf5"
-nsim = 7540
+nsim = "all"
 box_size = 677.7
 omega_m = 0.307
 position_key = "Position"
@@ -106,7 +106,7 @@ radius_key = "R500c"
 
 [halo_catalogues.csiborg2]
 fname = "data/csiborg2_fof.hdf5"
-nsim = 16417 # Which simulation number to process ("all" or a specific integer)
+nsim = "all"  # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
 mass_key = "Group_M_Crit200"
 radius_key = "Group_R_Crit500"
@@ -116,7 +116,7 @@ omega_m = 0.3111
 
 [halo_catalogues.manticore]
 fname = "data/manticore_fof.hdf5"
-nsim = 16417 # Which simulation number to process ("all" or a specific integer)
+nsim = "all" # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
 mass_key = "Group_M_Crit200"
 radius_key = "Group_R_Crit500"
