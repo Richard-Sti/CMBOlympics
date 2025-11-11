@@ -1,6 +1,6 @@
 # Cosmic Microwave Background Olympics
 
-Toolkit for analysing cosmological “digital twin” simulations and Cosmic Microwave Background (CMB) observations. CMBO is built to measure the thermal Sunyaev–Zel’dovich (tSZ) signal at the locations of haloes drawn from the digital twins.
+Toolkit for analysing cosmological “digital twin” simulations and Cosmic Microwave Background (CMB) observations. CMBO is built to measure the thermal Sunyaev–Zel’dovich (tSZ) signal at the locations of haloes drawn from the digital twins, and to test whether the digital-twin halo masses are consistent with both the SZ map amplitude and SZ-derived mass estimates.
 
 ## Capabilities
 
