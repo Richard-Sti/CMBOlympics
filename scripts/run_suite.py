@@ -568,7 +568,8 @@ def main():
             f"'runtime.n_jobs' missing from {config_path}."
         )
 
-    root_path = Path(cfg.get("_root_path", Path(__file__).resolve().parents[1]))
+    root_path = Path(
+        cfg.get("_root_path", Path(__file__).resolve().parents[1]))
     fprint(f"Loaded config from {config_path} with root {root_path}")
 
     analysis_cfg = cfg["analysis"]
