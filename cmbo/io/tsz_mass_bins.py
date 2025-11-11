@@ -243,9 +243,11 @@ class TSZMassBinResults:
                             random_error=subgrp["random_error"][...],
                             radii_norm=subgrp["radii_norm"][...],
                         )
-                    # Backward compatibility: old files with percentile-based fields
+                    # Backward compatibility: old files with percentile-based
+                    # fields
                     elif "stacked_low" in subgrp and "stacked_high" in subgrp:
-                        # For backward compatibility, use the midpoint of low/high as error
+                        # For backward compatibility, use the midpoint of
+                        # low/high as error
                         stacked_low = subgrp["stacked_low"][...]
                         stacked_high = subgrp["stacked_high"][...]
                         stacked_err = (stacked_high - stacked_low) / 2.0
