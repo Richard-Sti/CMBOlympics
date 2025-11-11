@@ -183,7 +183,8 @@ class HaloAssociation:
         Returns
         -------
         ndarray
-            Angular diameter distances in Mpc for each halo in this association.
+            Angular diameter distances in Mpc for each halo in this
+            association.
         """
         z = self.to_z(center, Om)
         da = np.full_like(z, np.nan, dtype=float)
