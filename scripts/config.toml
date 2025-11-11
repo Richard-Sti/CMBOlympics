@@ -26,10 +26,10 @@ smooth_fwhm = 9.6
 [random_profiles]
 # Signal aperture radii configuration (arcmin).
 theta_min = 1.0
-theta_max = 601.0
-n_theta = 151
+theta_max = 751.0
+n_theta = 1001
 # Random pointing sampling controls.
-n_points = 1000
+n_points = 100_000
 abs_b_min = 10.0
 fwhm_arcmin = 9.6
 seed = 42
@@ -60,12 +60,11 @@ output_folder = "results" # Folder to save the HDF5 output file
 # output_tag = ""             # Optional tag to append to the output filename
 
 # Aperture and profile settings
-aperture_scale = 5.0            # Aperture size for per-halo p-value, as a multiple of theta_500
-background_radius_norm = 5.0    # Normalized radius for background measurement
+aperture_scale = 2.0          # Aperture size for per-halo p-value, as a multiple of theta_500
 
 # Stacked profile settings
-stack_rmin = 0.1  # Minimum radius for stacked profiles (in units of theta_500)
-stack_rmax = 2.0  # Maximum radius for stacked profiles (in units of theta_500)
+stack_rmin = 0.1  # Minimum radius for stacked profiles (in units of aperture scale)
+stack_rmax = 2.0  # Maximum radius for stacked profiles (in units of aperture scale)
 stack_n = 501     # Number of radial bins for stacked profiles
 
 # 2D cutout settings
