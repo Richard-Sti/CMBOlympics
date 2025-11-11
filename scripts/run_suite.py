@@ -15,7 +15,7 @@
 """Analyse tSZ profiles in mass bins."""
 
 from pathlib import Path
-import sys
+import argparse
 
 import h5py
 import numpy as np
@@ -552,11 +552,27 @@ def determine_simulations(catalogue_cfg, requested):
 def main():
     """Entry-point for the command-line script."""
 
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
-    else:
-        config_path = Path(__file__).with_name("config.toml")
+    parser = argparse.ArgumentParser(
+        description="Run the tSZ mass-bin analysis suite."
+    )
+    parser.add_argument(
+        "config",
+        nargs="?",
+        default=Path(__file__).with_name("config.toml"),
+        help="Path to the TOML configuration file (default: config.toml)",
+    )
+    parser.add_argument(
+        "--simulation",
+        dest="simulation",
+        help="Override analysis.which_simulation from the config file.",
+    )
+    args = parser.parse_args()
+
+    config_path = Path(args.config)
     cfg = load_config(config_path)
+    if args.simulation:
+        cfg.setdefault("analysis", {})["which_simulation"] = args.simulation
+
     try:
         runtime_cfg = cfg["runtime"]
     except KeyError as exc:
@@ -621,8 +637,9 @@ def main():
     sim_ids = determine_simulations(catalogue_cfg, catalogue_cfg.get("nsim"))
 
     results_by_sim = {}
+    total_sims = len(sim_ids)
     for idx, sim_id in enumerate(sim_ids):
-        fprint(f"Processing simulation {sim_id}")
+        fprint(f"Processing simulation {sim_id} ({idx + 1}/{total_sims})")
         results_by_sim[sim_id] = process_simulation(
             cfg,
             sim_id,
