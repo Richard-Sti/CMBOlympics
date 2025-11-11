@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+rsync_delete_flag=()
+
 # ---- local source ----
 SRC_BASE="$HOME/Projects/CMBOlympics"
 
@@ -32,8 +34,11 @@ sync_dir() {
 
     ensure_remote_dir "$subdir"
     echo "[INFO] Pushing '${subdir}' to glamdring -> ${DEST_PATH}/${subdir}/"
-    rsync -avh --progress -e "ssh -i $SSH_KEY" \
-        "${rsync_delete_flag[@]}" \
+    local rsync_args=(-avh --progress -e "ssh -i $SSH_KEY")
+    if [[ ${#rsync_delete_flag[@]} -gt 0 ]]; then
+        rsync_args+=("${rsync_delete_flag[@]}")
+    fi
+    rsync "${rsync_args[@]}" \
         "${local_path}/" \
         "$DEST_USER@$DEST_HOST:${DEST_PATH}/${subdir}/"
 }
@@ -53,7 +58,6 @@ if [[ $# -eq 2 ]]; then
     fi
 fi
 
-rsync_delete_flag=()
 if [[ $DELETE_FLAG -eq 1 ]]; then
     rsync_delete_flag=(--delete)
     echo "[INFO] Remote files absent locally will be deleted."
