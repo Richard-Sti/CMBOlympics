@@ -26,8 +26,11 @@ from __future__ import annotations
 
 import h5py
 import numpy as np
+from collections.abc import Sequence
+import scienceplots  # noqa: F401
 from pathlib import Path
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 from scipy.stats import combine_pvalues
 
 import cmbo
@@ -37,6 +40,8 @@ from cmbo.utils import (
     greedy_global_matching,
     cartesian_icrs_to_galactic_spherical,
 )
+
+plt.style.use("science")
 
 
 def _load_simulation_halos(cfg, sim_key):
@@ -570,7 +575,7 @@ def print_cluster_scores(
         else:
             match_display = match_p if np.isfinite(match_p) else 1.0
         match_display_str = (
-            f"{match_display:>12.1e}" if match_display is not None else " " * 12
+            f"{match_display:>12.1e}" if match_display is not None else " " * 12  # noqa
         )
 
         row = (
@@ -626,17 +631,23 @@ def print_cluster_scores(
             print(f"  - {method:<17}: {combined_val: .3e}")
 
 
-def plot_cluster_pvalue_violins(
+def plot_cluster_pvalue_percentiles(
     cfg,
     matches,
     obs_clusters=None,
-    default_pval=0.5,
     sim_key=None,
     observer_centre=None,
     ax=None,
+    suite_labels=None,
+    suite_colors=None,
 ):
     """
-    Plot per-cluster distributions of per-halo tSZ p-values as violins.
+    Plot per-cluster percentile summaries of per-halo tSZ p-values.
+
+    Parameters
+    ----------
+    suite_colors
+        Optional sequence of Matplotlib color specs, one per simulation suite.
     """
     if obs_clusters is None:
         try:
@@ -651,8 +662,6 @@ def plot_cluster_pvalue_violins(
     names = getattr(obs_clusters, "names", None)
     if names is None:
         raise ValueError("obs_clusters must expose 'names'.")
-    if len(matches) != len(names):
-        raise ValueError("matches and observed clusters lengths differ.")
     if not names:
         raise ValueError("No observed clusters available to plot.")
 
@@ -662,71 +671,208 @@ def plot_cluster_pvalue_violins(
     if observer_centre.shape != (3,):
         raise ValueError("observer_centre must be a 3-vector.")
 
-    violin_data = []
-    violin_positions = []
-    medians = []
-    median_positions = []
-    blank_positions = []
-    for idx, entry in enumerate(matches, start=1):
+    def _is_match_entry(entry):
         if entry is None:
-            blank_positions.append(idx)
-            continue
-        assoc = entry[0]
-        per_halo = np.asarray(getattr(assoc, "halo_pvals", []), dtype=float)
-        finite = per_halo[np.isfinite(per_halo)]
-        if finite.size == 0:
-            blank_positions.append(idx)
-            continue
-        violin_data.append(finite)
-        violin_positions.append(idx)
-        medians.append(float(np.median(finite)))
-        median_positions.append(idx)
+            return True
+        if isinstance(entry, tuple) and entry:
+            entry = entry[0]
+        return hasattr(entry, "halo_pvals")
+
+    def _normalise_matches(match_input):
+        if not isinstance(match_input, Sequence) or isinstance(
+            match_input, (str, bytes)
+        ):
+            raise ValueError("matches must be a sequence.")
+        if not match_input:
+            raise ValueError("matches must not be empty.")
+
+        first = match_input[0]
+        if _is_match_entry(first):
+            if len(match_input) != len(names):
+                raise ValueError(
+                    "Single-suite matches length does not match observed "
+                    "clusters."
+                )
+            return [match_input]
+
+        def _is_suite(candidate):
+            if not isinstance(candidate, Sequence) or isinstance(
+                candidate, (str, bytes)
+            ):
+                return False
+            if len(candidate) != len(names):
+                return False
+            probe = next((
+                item for item in candidate if item is not None), None)
+            if probe is None:
+                return True
+            return _is_match_entry(probe)
+
+        if not _is_suite(first):
+            raise ValueError(
+                "Could not interpret matches input. Provide either a single "
+                "match list aligned with the observed clusters or a sequence "
+                "of such lists (one per simulation suite)."
+            )
+
+        suites = []
+        for suite_idx, suite in enumerate(match_input):
+            if not _is_suite(suite):
+                raise ValueError(
+                    f"Suite index {suite_idx} does not align with clusters."
+                )
+            suites.append(suite)
+        return suites
+
+    matches_by_suite = _normalise_matches(matches)
+    num_suites = len(matches_by_suite)
+    if suite_labels is not None:
+        if len(suite_labels) != num_suites:
+            raise ValueError(
+                "suite_labels must match the number of match collections."
+            )
+    else:
+        suite_labels = [f"Suite {idx + 1}" for idx in range(num_suites)]
+    if suite_colors is not None:
+        if not isinstance(suite_colors, Sequence) or isinstance(
+            suite_colors, (str, bytes)
+        ):
+            raise ValueError(
+                "suite_colors must be a sequence of Matplotlib color specs."
+            )
+        if len(suite_colors) < num_suites:
+            raise ValueError(
+                "suite_colors sequence must provide at least one entry per suite."  # noqa
+            )
+        suite_colors = list(suite_colors)
+
+    percentile_levels = (5, 50, 95)
+    stats_payloads = []
+    for suite in matches_by_suite:
+        positions = []
+        p05 = []
+        p50 = []
+        p95 = []
+        for idx, entry in enumerate(suite, start=1):
+            if entry is None:
+                continue
+            assoc = entry[0]
+            per_halo = np.asarray(
+                getattr(assoc, "halo_pvals", []), dtype=float)
+            finite = per_halo[np.isfinite(per_halo)]
+            if finite.size == 0:
+                continue
+            positions.append(idx)
+            q05, q50, q95 = np.percentile(finite, percentile_levels)
+            p05.append(float(q05))
+            p50.append(float(q50))
+            p95.append(float(q95))
+        stats_payloads.append(
+            {
+                "positions": np.asarray(positions, dtype=float),
+                "p05": np.asarray(p05, dtype=float),
+                "p50": np.asarray(p50, dtype=float),
+                "p95": np.asarray(p95, dtype=float),
+            }
+        )
 
     with plt.style.context("science"):
         if ax is None:
-            width = max(6.0, 0.5 * len(names))
+            width = max(8.0, 0.7 * len(names))
             fig, ax = plt.subplots(figsize=(width, 4.0))
         else:
             fig = ax.figure
 
         positions = np.arange(1, len(names) + 1)
-        if violin_data:
-            vparts = ax.violinplot(
-                violin_data,
-                positions=violin_positions,
-                showmeans=False,
-                showmedians=True,
-                showextrema=False,
-            )
-            face_color = "#4C78A8"
-            for body in vparts["bodies"]:
-                body.set_facecolor(face_color)
-                body.set_edgecolor("black")
-                body.set_alpha(0.7)
-            if "cmedians" in vparts:
-                vparts["cmedians"].set_color("black")
-                vparts["cmedians"].set_linewidth(1.2)
+        offsets = np.zeros(num_suites)
+        if num_suites > 1:
+            offsets = np.linspace(-0.35, 0.35, num_suites)
+        marker_size = 25
+        if suite_colors is not None:
+            colors = suite_colors
+        else:
+            prop_cycle = plt.rcParams.get("axes.prop_cycle", None)
+            default_colors = ["#4C78A8", "#F58518", "#54A24B", "#E45756"]
+            if prop_cycle is not None:
+                colors = prop_cycle.by_key().get("color", default_colors)
+            else:
+                colors = default_colors
 
-        if medians:
-            ax.scatter(
-                median_positions,
+        legend_handles = []
+        for suite_idx, payload in enumerate(stats_payloads):
+            pos = payload["positions"]
+            if pos.size == 0:
+                continue
+            color = colors[suite_idx % len(colors)]
+            suite_positions = pos + offsets[suite_idx]
+            medians = payload["p50"]
+            yerr = np.vstack(
+                [
+                    medians - payload["p05"],
+                    payload["p95"] - medians,
+                ]
+            )
+            ax.errorbar(
+                suite_positions,
                 medians,
-                color="black",
-                s=15,
-                zorder=3,
+                yerr=yerr,
+                fmt="o",
+                color=color,
+                ecolor=color,
+                elinewidth=1.2,
+                capsize=4,
+                markersize=np.sqrt(marker_size),
+            )
+            legend_handles.append(
+                Line2D(
+                    [0],
+                    [0],
+                    color=color,
+                    label=suite_labels[suite_idx],
+                )
             )
 
-        ax.set_xticks(positions, names, rotation=45, ha="right")
+        ax.set_xticks(positions, names)
+        ax.tick_params(axis="x", which="both", length=0)
+        for label in ax.get_xticklabels():
+            label.set_horizontalalignment("right")
+            label.set_rotation(50)
+            label.set_rotation_mode("anchor")
+        ax.set_xlim(0.5, len(names) + 0.5)
+        boundaries = np.arange(1.5, len(names) + 0.5, 1.0)
+        for xpos in boundaries:
+            ax.axvline(
+                xpos,
+                color="grey",
+                linestyle="-",
+                linewidth=1.1,
+                alpha=0.7,
+                zorder=0,
+            )
         ax.set_ylabel(r"$p_{\mathrm{tSZ}}$")
+        if legend_handles:
+            legend = ax.legend(
+                handles=legend_handles,
+                frameon=True,
+                framealpha=1.0,
+                facecolor="white",
+                edgecolor="none",
+                loc="upper right",
+            )
+            legend.get_frame().set_linewidth(0.0)
         ax.set_yscale("log")
-        ax.grid(True, axis="y", linestyle="--", alpha=0.3)
+        y_min, y_max = ax.get_ylim()
+        if y_max > 1.0:
+            ax.set_ylim(y_min, 1.0)
+        ax.grid(False)
         for thresh in (0.05, 0.005):
             ax.axhline(
                 thresh,
                 color="red",
-                linestyle="--",
+                linestyle=":",
                 linewidth=1.0,
-                alpha=0.4,
+                alpha=0.8,
+                zorder=0,
             )
 
     return fig, ax
