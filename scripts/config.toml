@@ -5,6 +5,9 @@
 [paths]
 root = "/Users/rstiskalek/Projects/CMBOlympics"
 observed_clusters = "data/observed_cluster_masses.toml"
+Planck_tSZ_catalogue = "data/HFI_PCCS_SZ-union_R2.08.fits"
+MCXC_catalogue = "data/MCXCII_2024.fits"
+eRASS_catalogue = "data/erass1cl_primary_v3.2.fits"
 # root = "/mnt/extraspace/rstiskalek/CMBOlympics"
 
 # --- Runtime ---
