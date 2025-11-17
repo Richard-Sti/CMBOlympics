@@ -32,6 +32,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy.stats import combine_pvalues
+import re
 
 import cmbo
 from cmbo.match.cluster_matching import (
@@ -44,6 +45,31 @@ from cmbo.utils import (
 )
 
 plt.style.use("science")
+
+
+def _infer_mass_definition(mass_key):
+    """Infer mass definition (e.g. 500c) from a halo mass key."""
+    key = mass_key.lower()
+    match = re.search(r"m\s*(\d+)([cm])", key)
+    if match:
+        if match.group(1) not in ("200", "500"):
+            raise ValueError(
+                f"Unsupported mass scale '{match.group(1)}' in '{mass_key}'.")
+        if match.group(2) != "c":
+            raise ValueError(f"Mass definition must be 'c' (critical), got '{match.group(2)}'.")  # noqa
+        return f"{match.group(1)}c"
+    match = re.search(r"(crit|mean)\s*(\d+)", key)
+    if match:
+        if match.group(2) not in ("200", "500"):
+            raise ValueError(f"Unsupported mass scale '{match.group(2)}' in '{mass_key}'.")  # noqa
+        if match.group(1) != "crit":
+            raise ValueError(
+                f"Mass definition must be critical, got '{match.group(1)}'.")
+        return f"{match.group(2)}c"
+    raise ValueError(
+        f"Cannot infer mass definition from mass key '{mass_key}'. "
+        "Expected patterns like 'M200c' or 'Group_M_Crit500'."
+    )
 
 
 def _load_simulation_halos(cfg, sim_key):
@@ -119,6 +145,8 @@ def _load_simulation_halos(cfg, sim_key):
             "No haloes survive the selection cuts across any simulation."
         )
 
+    mass_definition = _infer_mass_definition(mass_key)
+
     data = {
         "positions": positions_all,
         "masses": masses_all,
@@ -130,6 +158,7 @@ def _load_simulation_halos(cfg, sim_key):
         "theta_catalogues": theta_catalogues,
         "box_size": box_size,
         "centre": centre,
+        "mass_definition": mass_definition,
     }
     return data
 
@@ -364,12 +393,15 @@ def load_associations(sim_key, cfg, verbose=True):
     for assoc in associations:
         assoc.optional_data = assoc.optional_data or {}
         assoc.optional_data.setdefault("box_size", halo_data["box_size"])
+        assoc.optional_data.setdefault(
+            "mass_definition", halo_data["mass_definition"]
+        )
 
     return associations
 
 
 def attach_associations_to_obs_clusters(
-    obs_clusters, associations, cfg, sim_key, verbose=True
+    obs_clusters, associations, cfg, verbose=True
 ):
     """Match associations to observed clusters via greedy matching."""
     if obs_clusters is None:
