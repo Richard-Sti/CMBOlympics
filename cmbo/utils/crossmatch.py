@@ -313,13 +313,11 @@ def crossmatch_mcxc(
         "delta_cz": np.nan,
         "RAJ2000": np.nan,
         "DEJ2000": np.nan,
-        "GLON": np.nan,
-        "GLAT": np.nan,
         "Z": np.nan,
         "Z_TYPE": None,
         "M500": np.nan,
-        "ERRPM500": np.nan,
-        "ERRMM500": np.nan,
+        "M500_upper_err": np.nan,
+        "M500_lower_err": np.nan,
         "M500_err": np.nan,
     }
 
@@ -329,6 +327,137 @@ def crossmatch_mcxc(
     for match in matches:
         obs_idx = match["obs_index"]
         obs_clusters.clusters[obs_idx].mcxc_match = {
+            key: match.get(key, empty[key]) for key in empty
+        }
+
+    return None
+
+
+def crossmatch_erass(
+    obs_clusters,
+    erass_catalogue,
+    max_sep_arcmin=10.0,
+    max_delta_cz=500.0,
+):
+    """
+    Cross-match observed clusters to the eRASS catalogue.
+    """
+    required = {"RA", "DEC", "BEST_Z", "BEST_Z_TYPE", "M500", "M500_L",
+                "M500_H"}
+    names = erass_catalogue.dtype.names
+    if names is None or not required.issubset(names):
+        missing = sorted(required.difference(names or ()))
+        raise KeyError(f"eRASS catalogue missing fields: {missing}")
+
+    obs_ra = np.array([cluster.ra_deg for cluster in obs_clusters],
+                      dtype=float)
+    obs_dec = np.array([cluster.dec_deg for cluster in obs_clusters],
+                       dtype=float)
+    obs_z = obs_clusters.redshifts
+    obs_coord = SkyCoord(obs_ra * u.deg, obs_dec * u.deg)
+
+    erass_ra = np.asarray(erass_catalogue["RA"], dtype=float)
+    erass_dec = np.asarray(erass_catalogue["DEC"], dtype=float)
+    erass_coord = SkyCoord(erass_ra * u.deg, erass_dec * u.deg)
+
+    idx_erass, idx_obs, sep2d, _ = obs_coord.search_around_sky(
+        erass_coord, max_sep_arcmin * u.arcmin
+    )
+
+    obs_cz = obs_z * SPEED_OF_LIGHT_KMS
+    erass_z = np.asarray(erass_catalogue["BEST_Z"], dtype=float)
+    erass_cz = erass_z * SPEED_OF_LIGHT_KMS
+
+    if max_delta_cz is None:
+        cz_mask = np.ones_like(idx_obs, dtype=bool)
+        dcz = np.full(idx_obs.size, np.nan, dtype=float)
+    else:
+        dcz = np.abs(obs_cz[idx_obs] - erass_cz[idx_erass])
+        cz_mask = np.isfinite(dcz) & (dcz <= float(max_delta_cz))
+
+    valid = cz_mask
+    matches = []
+    if np.any(valid):
+        obs_names = obs_clusters.names
+        names = (
+            np.char.strip(erass_catalogue["NAME"].astype(str))
+            if "NAME" in erass_catalogue.dtype.names
+            else np.full(erass_ra.shape, "", dtype=str)
+        )
+        z_type = np.char.strip(erass_catalogue["BEST_Z_TYPE"].astype(str))
+        m500 = np.asarray(erass_catalogue["M500"], dtype=float)
+        err_plus = np.asarray(erass_catalogue["M500_H"], dtype=float)
+        err_minus = np.asarray(erass_catalogue["M500_L"], dtype=float)
+        sym_err = 0.5 * (err_plus + err_minus)
+
+        best_by_obs: dict[int, dict] = {}
+        for obs_idx, erass_idx, sep, delta_cz in zip(
+            idx_obs[valid], idx_erass[valid], sep2d[valid], dcz[valid]
+        ):
+            sep_arcmin = float(sep.to_value(u.arcmin))
+            record = {
+                "obs_index": int(obs_idx),
+                "erass_index": int(erass_idx),
+                "obs_name": obs_names[obs_idx],
+                "erass_name": names[erass_idx],
+                "separation_arcmin": sep_arcmin,
+                "delta_cz": float(delta_cz),
+                "RA": float(erass_ra[erass_idx]),
+                "DEC": float(erass_dec[erass_idx]),
+                "Z": float(erass_z[erass_idx]),
+                "Z_TYPE": z_type[erass_idx],
+                "M500": float(m500[erass_idx]),
+                "M500_upper_err": float(err_plus[erass_idx]),
+                "M500_lower_err": float(err_minus[erass_idx]),
+                "M500_err": float(sym_err[erass_idx]),
+            }
+            if obs_idx not in best_by_obs or (
+                sep_arcmin < best_by_obs[obs_idx]["separation_arcmin"]
+            ):
+                best_by_obs[obs_idx] = record
+
+        matches = list(best_by_obs.values())
+
+    matched_obs_indices = np.sort(
+        np.array([m["obs_index"] for m in matches], dtype=int),
+    )
+
+    unmatched_obs = np.setdiff1d(
+        np.arange(len(obs_clusters), dtype=int),
+        matched_obs_indices,
+        assume_unique=True,
+    )
+
+    if unmatched_obs.size:
+        skipped = [obs_clusters.names[idx] for idx in unmatched_obs]
+        print(
+            "No eRASS match for {n} observed clusters: {names}".format(
+                n=unmatched_obs.size,
+                names=skipped,
+            )
+        )
+
+    empty = {
+        "erass_index": np.nan,
+        "erass_name": None,
+        "separation_arcmin": np.nan,
+        "delta_cz": np.nan,
+        "RA": np.nan,
+        "DEC": np.nan,
+        "Z": np.nan,
+        "Z_TYPE": None,
+        "M500": np.nan,
+        "M500_upper_err": np.nan,
+        "M500_lower_err": np.nan,
+        "M500_err": np.nan,
+    }
+
+    for idx in unmatched_obs:
+        obs_clusters.clusters[idx].erass_match = empty.copy()
+
+    for match in matches:
+        obs_idx = match["obs_index"]
+        obs_clusters.clusters[obs_idx].erass_match = {
             key: match.get(key, empty[key]) for key in empty
         }
 
