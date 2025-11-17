@@ -23,6 +23,7 @@ from h5py import File
 
 from ..utils.logging import fprint
 
+
 class FoFHaloReader:
     """Reader exposing FoF halo fields through dictionary-style access."""
 
