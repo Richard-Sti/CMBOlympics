@@ -19,23 +19,24 @@ from __future__ import annotations
 import numpy as np
 from tqdm import tqdm
 
-from cmbo.match.pfeifer import MatchingProbability
+from .pfeifer import MatchingProbability
 
 
-def compute_matching_matrix(obs_clusters, associations, box_size, mdef="200c",
-                            cosmo_params=None, verbose=True):
+def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
+                                      mdef="500c", cosmo_params=None,
+                                      verbose=True):
     """
-    Compute a 2D array of average p-values between observed clusters and
-    halo associations.
+    Compute match matrices for provided Cartesian positions.
 
     Parameters
     ----------
-    obs_clusters
-        Observed clusters with an `icrs_cartesian()` method.
+    x_obs : array-like, shape (n_obs, 3)
+        Cartesian positions of observed clusters in Mpc/h.
     associations
         Iterable of associations with `positions` and `masses` attributes.
-    box_size
-        Simulation box size in Mpc/h.
+    box_size : float, optional
+        Simulation box size in Mpc/h. When omitted, the function attempts to
+        read ``optional_data['box_size']`` from the first association.
     mdef
         Mass definition for the halo mass function.
     cosmo_params
@@ -45,13 +46,11 @@ def compute_matching_matrix(obs_clusters, associations, box_size, mdef="200c",
 
     Returns
     -------
-    pval_matrix : ndarray of shape (n_obs_clusters, n_associations)
-        Average p-value for each cluster-association pair.
-    dist_matrix : ndarray of shape (n_obs_clusters, n_associations)
+    pval_matrix : ndarray of shape (n_obs, n_associations)
+        Average p-value for each position-association pair.
+    dist_matrix : ndarray of shape (n_obs, n_associations)
         Distance between association centroid and observed cluster position
         in Mpc/h.
-    not_matched : list
-        Names of clusters with no good match (min p-value > 0.05).
     """
     if cosmo_params is None:
         cosmo_params = {
@@ -62,9 +61,24 @@ def compute_matching_matrix(obs_clusters, associations, box_size, mdef="200c",
             'sigma8': 0.8101,
             'ns': 0.9665
         }
+    x_obs = np.asarray(x_obs, dtype=float)
+    if x_obs.ndim != 2 or x_obs.shape[1] != 3:
+        raise ValueError("x_obs must have shape (n_obs, 3).")
 
-    x_obs = obs_clusters.icrs_cartesian()
-    n_obs = len(x_obs)
+    if box_size is None:
+        if not associations:
+            raise ValueError(
+                "box_size must be provided when there are no associations."
+            )
+        first = associations[0]
+        opt = getattr(first, "optional_data", {}) or {}
+        if "box_size" not in opt:
+            raise ValueError(
+                "box_size not provided and missing from association "
+                "optional_data.")
+        box_size = float(opt["box_size"])
+
+    n_obs = x_obs.shape[0]
     associations = list(associations)
     n_assoc = len(associations)
 
@@ -87,6 +101,58 @@ def compute_matching_matrix(obs_clusters, associations, box_size, mdef="200c",
             pval, _, _ = matcher.cdf_per_halo(x_obs[i])
             pval_matrix[i, j] = np.mean(pval)
             dist_matrix[i, j] = np.linalg.norm(x_obs[i] - centroid)
+
+    if verbose:
+        for i in range(n_obs):
+            min_pval = np.min(pval_matrix[i])
+            if min_pval > 0.05:
+                print(f"Position {i}: min p-value = {min_pval:.3e}")
+
+    return pval_matrix, dist_matrix
+
+
+def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
+                                mdef="500c", cosmo_params=None,
+                                verbose=True):
+    """
+    Wrapper around :func:`compute_matching_matrix_cartesian` that extracts
+    Cartesian positions from an ``ObservedCluster`` catalogue.
+
+    Parameters
+    ----------
+    obs_clusters : ObservedClusterCatalogue
+        Catalogue exposing ``icrs_cartesian()`` and ``names`` accessors.
+    associations : sequence
+        Halo associations as required by
+        :func:`compute_matching_matrix_cartesian`.
+    box_size : float, optional
+        Simulation box size in Mpc/h. When ``None`` the function attempts to
+        read ``optional_data['box_size']`` from the associations.
+    mdef : str, optional
+        Mass definition forwarded to the Pfeifer matcher (default: ``"500c"``).
+    cosmo_params : dict, optional
+        Cosmological parameters for :class:`MatchingProbability`. When omitted
+        the default LCDM parameters are used.
+    verbose : bool, optional
+        If True, print observed cluster names whose minimum p-value exceeds
+        0.05 indicating a poor match.
+
+    Returns
+    -------
+    pval_matrix : ndarray
+        Matrix of average p-values with shape ``(n_obs, n_assoc)``.
+    dist_matrix : ndarray
+        Matrix of centroid distances (Mpc/h) with the same shape.
+    """
+    x_obs = obs_clusters.icrs_cartesian()
+    pval_matrix, dist_matrix = compute_matching_matrix_cartesian(
+        x_obs,
+        associations,
+        box_size,
+        mdef=mdef,
+        cosmo_params=cosmo_params,
+        verbose=False,
+    )
 
     not_matched = []
     for i, name in enumerate(obs_clusters.names):

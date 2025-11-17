@@ -28,7 +28,7 @@ from .associations import (  # noqa: F401
     compute_association_signals,
 )
 # Re-export matching helpers from the dedicated match package                   # noqa
-from cmbo.match.crossmatch import (  # noqa: F401
+from ..match.crossmatch import (  # noqa: F401
     crossmatch_planck_catalog,
     crossmatch_mcxc,
     crossmatch_erass,
