@@ -39,6 +39,10 @@ from .tsz_mass_bins import (  # noqa
     TSZMassBinResults,  # noqa
 )
 
+from .xray import (  # noqa
+    load_mcxc_catalogue,  # noqa
+)
+
 from h5py import File
 
 

@@ -19,8 +19,20 @@ import numpy as np
 
 
 def read_Planck_comptonSZ(fname, which="FULL"):
-    d = fits.open(fname)[1].data
-    return d[which].astype(np.float32)
+    """
+    Load a Planck Compton-y map column, warning when the key is missing.
+    """
+    data = fits.getdata(fname, ext=1)
+    try:
+        column = data[which]
+    except KeyError as exc:
+        names = data.dtype.names or ()
+        available = ", ".join(names) if names else "none"
+        raise KeyError(
+            f"Column '{which}' not found in '{fname}'. "
+            f"Available keys: {available}"
+        ) from exc
+    return np.asarray(column, dtype=np.float32)
 
 
 def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
