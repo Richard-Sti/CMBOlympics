@@ -14,14 +14,15 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Readers for observed cluster catalogues stored as TOML files."""
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from ..constants import SPEED_OF_LIGHT_KMS
-from ..utils.coords import cz_to_comoving_distance, radec_to_galactic
+from ..utils.coords import (cz_to_comoving_distance, radec_to_cartesian,
+                            radec_to_galactic)
 
 try:  # pragma: no cover - runtime import fallback for Python <3.11
     import tomllib as _toml_loader
@@ -163,8 +164,7 @@ class ObservedClusterCatalogue:
         dec = np.array([cluster.dec_deg for cluster in self._clusters],
                        dtype=float)
 
-        ra_rad = np.deg2rad(ra)
-        dec_rad = np.deg2rad(dec)
+        unit_vec = radec_to_cartesian(ra, dec)
 
         cz = np.array([
             cluster.cz_cmb if cluster.cz_cmb is not None else np.nan
@@ -172,11 +172,7 @@ class ObservedClusterCatalogue:
         ], dtype=float)
         r = cz_to_comoving_distance(cz, h, Om0)
 
-        x = r * np.cos(dec_rad) * np.cos(ra_rad)
-        y = r * np.cos(dec_rad) * np.sin(ra_rad)
-        z = r * np.sin(dec_rad)
-
-        return np.stack((x, y, z), axis=-1)
+        return (unit_vec.T * r).T
 
 
 def _load_catalogue(path: Path):
