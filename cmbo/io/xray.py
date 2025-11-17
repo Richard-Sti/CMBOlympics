@@ -33,7 +33,7 @@ __all__ = (
 _C_LIGHT_KMS = 299792.458
 
 
-def load_mcxc_catalogue(fname="data/MCXCII_2024.fits"):
+def load_mcxc_catalogue(fname="data/MCXCII_2024.fits", verbose=True):
     """
     Load the MCXC-II catalogue into a NumPy structured array.
 
@@ -57,13 +57,24 @@ def load_mcxc_catalogue(fname="data/MCXCII_2024.fits"):
         if table.data is None:
             raise ValueError(f"HDU 1 in '{path}' is empty.")
 
-        # Convert the FITS_rec to a plain structured array so downstream code
-        # can rely on NumPy semantics only.
-        return np.array(table.data, dtype=table.data.dtype, copy=True)
+        data = np.array(table.data, dtype=table.data.dtype, copy=True)
+
+    if {"ERRPM500", "ERRMM500"}.issubset(data.dtype.names):
+        mask = (data["ERRPM500"] > 0.0) & (data["ERRMM500"] > 0.0)
+        if verbose:
+            removed = int(np.count_nonzero(~mask))
+            if removed:
+                print(
+                    f"Removing {removed} MCXC entries with non-positive "
+                    "mass uncertainties."
+                )
+        data = data[mask]
+
+    return data
 
 
 def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
-                         verbose=False):
+                         verbose=True):
     """
     Load the eRASS1 cluster catalogue into a NumPy structured array.
 
