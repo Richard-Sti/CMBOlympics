@@ -33,6 +33,14 @@ __all__ = (
 )
 
 
+def _scale_fields(data, fields, factor):
+    """Scale numeric structured-array fields in-place."""
+    names = data.dtype.names or ()
+    for field in fields:
+        if field in names and np.issubdtype(data[field].dtype, np.number):
+            np.multiply(data[field], factor, out=data[field], casting="unsafe")
+
+
 def load_mcxc_catalogue(fname="data/MCXCII_2024.fits", verbose=True):
     """
     Load the MCXC-II catalogue into a NumPy structured array.
@@ -70,6 +78,8 @@ def load_mcxc_catalogue(fname="data/MCXCII_2024.fits", verbose=True):
                 )
         data = data[mask]
 
+    _scale_fields(data, ("M500", "ERRMM500", "ERRPM500"), 1.0e14)
+
     return data
 
 
@@ -103,6 +113,9 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
             if removed:
                 print(f"Removing {removed} eRASS entries with M500 = -1.")
         data = data[mask]
+
+    erass_fields = ("M500", "M500_L", "M500_H")
+    _scale_fields(data, erass_fields, 1.0e13)
 
     return data
 
