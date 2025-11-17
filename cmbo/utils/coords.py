@@ -75,6 +75,30 @@ def cz_to_comoving_distance(cz, h=1.0, Om0=0.3111):
     return out
 
 
+def radec_to_cartesian(ra_deg, dec_deg):
+    """
+    Convert RA, Dec to a Cartesian unit vector.
+
+    Parameters
+    ----------
+    ra_deg, dec_deg : array_like
+        RA, Dec (in degrees).
+
+    Returns
+    -------
+    pos : ndarray
+        Cartesian unit vectors of shape (N, 3).
+    """
+    ra = np.deg2rad(ra_deg)
+    dec = np.deg2rad(dec_deg)
+
+    x = np.cos(dec) * np.cos(ra)
+    y = np.cos(dec) * np.sin(ra)
+    z = np.sin(dec)
+
+    return np.stack([x, y, z], axis=-1)
+
+
 def cartesian_icrs_to_galactic_spherical(pos, center):
     """
     Convert ICRS Cartesian coordinates to Galactic spherical coordinates
