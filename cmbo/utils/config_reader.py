@@ -75,6 +75,10 @@ def apply_root_to_config_paths(cfg):
             (root_path / "data" / "observed_cluster_masses.toml").resolve()
         )
 
+    for key in ("MCXC_catalogue", "Planck_tSZ_catalogue", "eRASS_catalogue"):
+        if key in paths_cfg:
+            paths_cfg[key] = _resolve_with_root(root_path, paths_cfg[key])
+
     map_cfg = cfg.get("input_map", {})
     for key in ("signal_map", "random_pointing"):
         if key in map_cfg:
