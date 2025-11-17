@@ -23,7 +23,7 @@ from .pfeifer import MatchingProbability
 
 
 def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
-                                      mdef="500c", cosmo_params=None,
+                                      mdef=None, cosmo_params=None,
                                       verbose=True):
     """
     Compute match matrices for provided Cartesian positions.
@@ -37,8 +37,10 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
     box_size : float, optional
         Simulation box size in Mpc/h. When omitted, the function attempts to
         read ``optional_data['box_size']`` from the first association.
-    mdef
-        Mass definition for the halo mass function.
+    mdef : str, optional
+        Mass definition (e.g. ``"500c"``). When omitted, the function tries
+        to read ``optional_data['mass_definition']`` from the first
+        association.
     cosmo_params
         Cosmological parameters passed to MatchingProbability.
     verbose
@@ -65,18 +67,28 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
     if x_obs.ndim != 2 or x_obs.shape[1] != 3:
         raise ValueError("x_obs must have shape (n_obs, 3).")
 
-    if box_size is None:
+    if box_size is None or mdef is None:
         if not associations:
             raise ValueError(
-                "box_size must be provided when there are no associations."
+                "box_size and mdef must be provided when there are "
+                "no associations."
             )
         first = associations[0]
         opt = getattr(first, "optional_data", {}) or {}
-        if "box_size" not in opt:
-            raise ValueError(
-                "box_size not provided and missing from association "
-                "optional_data.")
-        box_size = float(opt["box_size"])
+        if box_size is None:
+            if "box_size" not in opt:
+                raise ValueError(
+                    "box_size not provided and missing from association "
+                    "optional_data."
+                )
+            box_size = float(opt["box_size"])
+        if mdef is None:
+            mdef = opt.get("mass_definition")
+            if mdef is None:
+                raise ValueError(
+                    "mdef not provided and missing from association "
+                    "optional_data."
+                )
 
     n_obs = x_obs.shape[0]
     associations = list(associations)
@@ -112,7 +124,7 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
 
 
 def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
-                                mdef="500c", cosmo_params=None,
+                                mdef=None, cosmo_params=None,
                                 verbose=True):
     """
     Wrapper around :func:`compute_matching_matrix_cartesian` that extracts
@@ -165,8 +177,8 @@ def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
     return pval_matrix, dist_matrix
 
 
-def greedy_global_matching(pval_matrix, dist_matrix, obs_clusters,
-                           associations, threshold=0.05, verbose=True):
+def greedy_global_matching(pval_matrix, dist_matrix, associations,
+                           obs_clusters=None, threshold=0.05, verbose=True):
     """
     Assign association-cluster matches using global greedy algorithm.
 
@@ -180,10 +192,10 @@ def greedy_global_matching(pval_matrix, dist_matrix, obs_clusters,
         Average p-value for each cluster-association pair.
     dist_matrix : ndarray of shape (n_obs_clusters, n_associations)
         Distance between association centroid and observed cluster position.
-    obs_clusters
-        Observed clusters with a `names` attribute.
     associations
         Iterable of associations.
+    obs_clusters, optional
+        Observed clusters with a `names` attribute.
     threshold : float, optional
         Maximum p-value to accept as a match. If None, matches all pairs.
     verbose : bool, optional
@@ -218,7 +230,7 @@ def greedy_global_matching(pval_matrix, dist_matrix, obs_clusters,
         pval[i, :] = np.inf
         pval[:, j] = np.inf
 
-        if verbose:
+        if verbose and obs_clusters is not None:
             # Check if any remaining clusters now have no good options
             for k in range(pval.shape[0]):
                 if k != i and k not in orphaned:
