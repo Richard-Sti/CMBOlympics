@@ -11,3 +11,4 @@ from .crossmatch import (  # noqa: F401
     crossmatch_erass,
 )
 from .pfeifer import MatchingProbability  # noqa: F401
+from .assignments import match_planck_catalog_to_associations  # noqa: F401
