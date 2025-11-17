@@ -34,10 +34,12 @@ from matplotlib.lines import Line2D
 from scipy.stats import combine_pvalues
 
 import cmbo
+from cmbo.match.cluster_matching import (
+    compute_matching_matrix_obs,
+    greedy_global_matching,
+)
 from cmbo.utils import (
     identify_halo_associations,
-    compute_matching_matrix,
-    greedy_global_matching,
     cartesian_icrs_to_galactic_spherical,
 )
 
@@ -312,10 +314,8 @@ def _attach_per_halo_data(
                 assoc.median_theta500 = np.nan
 
 
-def load_associations_and_matches(sim_key, cfg, obs_clusters, verbose=True):
-    """
-    Return halo associations, matches, and box size with per-halo tSZ p-values.
-    """
+def load_associations(sim_key, cfg, verbose=True):
+    """Identify halo associations and attach per-halo data."""
     halo_data = _load_simulation_halos(cfg, sim_key)
     if verbose:
         print(f"Loaded {len(halo_data['positions'])} simulation realisations.")
@@ -324,7 +324,6 @@ def load_associations_and_matches(sim_key, cfg, obs_clusters, verbose=True):
         radius_key: halo_data["r500"],
         "theta500_arcmin": halo_data["theta_arcmin"],
     }
-
     associations = identify_halo_associations(
         halo_data["positions"],
         halo_data["masses"],
@@ -332,23 +331,6 @@ def load_associations_and_matches(sim_key, cfg, obs_clusters, verbose=True):
     )
     if verbose:
         print(f"Identified {len(associations)} halo associations.")
-    if obs_clusters is None:
-        raise ValueError("obs_clusters must be provided.")
-    if verbose:
-        print(f"Using {len(obs_clusters)} observed clusters.")
-    pval_matrix, dist_matrix = compute_matching_matrix(
-        obs_clusters,
-        associations,
-        halo_data["box_size"],
-    )
-    matches = greedy_global_matching(
-        pval_matrix,
-        dist_matrix,
-        obs_clusters,
-        associations,
-        cfg["analysis"].get("matching_pvalue_threshold", 0.05),
-    )
-
     results_path = _results_path(cfg, sim_key)
     pval_lookup = _load_pval_lookup(
         results_path,
@@ -364,10 +346,7 @@ def load_associations_and_matches(sim_key, cfg, obs_clusters, verbose=True):
         if verbose:
             print("Loaded halo signal lookup tables from run_suite output.")
     elif verbose:
-        print(
-            "Halo signal datasets were not found in the run_suite output; "
-            "p-values only."
-        )
+        print("Halo signal datasets were not found in run_suite output.")
     theta_lookup = {
         sim_id: np.asarray(theta, dtype=float)
         for sim_id, theta in zip(
@@ -382,8 +361,36 @@ def load_associations_and_matches(sim_key, cfg, obs_clusters, verbose=True):
         signal_lookup,
         theta_lookup,
     )
+    for assoc in associations:
+        assoc.optional_data = assoc.optional_data or {}
+        assoc.optional_data.setdefault("box_size", halo_data["box_size"])
 
-    return associations, matches, halo_data["box_size"]
+    return associations
+
+
+def attach_associations_to_obs_clusters(
+    obs_clusters, associations, cfg, sim_key, verbose=True
+):
+    """Match associations to observed clusters via greedy matching."""
+    if obs_clusters is None:
+        raise ValueError("obs_clusters must be provided.")
+    if verbose:
+        print(f"Using {len(obs_clusters)} observed clusters.")
+    if not associations:
+        raise ValueError("No associations provided.")
+    pval_matrix, dist_matrix = compute_matching_matrix_obs(
+        obs_clusters,
+        associations,
+        box_size=None,
+    )
+    matches = greedy_global_matching(
+        pval_matrix,
+        dist_matrix,
+        obs_clusters,
+        associations,
+        cfg["analysis"].get("matching_pvalue_threshold", 0.05),
+    )
+    return matches
 
 
 def _observer_centre_from_cfg(cfg, sim_key=None):
