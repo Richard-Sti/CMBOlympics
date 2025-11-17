@@ -51,6 +51,7 @@ class ObservedCluster:
     cz_cmb_err: float | None
     map_fit: dict | None = None
     planck_match: dict | None = None
+    mcxc_match: dict | None = None
 
     @property
     def galactic_coordinates(self):
@@ -71,6 +72,7 @@ class ObservedCluster:
             "cz_cmb_err": self.cz_cmb_err,
             "map_fit": self.map_fit,
             "planck_match": self.planck_match,
+            "mcxc_match": self.mcxc_match,
         }
 
 

@@ -31,7 +31,10 @@ from .cluster_matching import (  # noqa: F401
     compute_matching_matrix,
     greedy_global_matching,
 )
-from .crossmatch import crossmatch_planck_catalog  # noqa: F401
+from .crossmatch import (  # noqa: F401
+    crossmatch_planck_catalog,
+    crossmatch_mcxc,
+)
 from .pfeifer import MatchingProbability  # noqa: F401
 from .smoothing import smooth_map_gaussian  # noqa: F401
 from .config_reader import (  # noqa: F401

@@ -24,7 +24,7 @@ from ..constants import SPEED_OF_LIGHT_KMS
 def crossmatch_planck_catalog(
     obs_clusters,
     planck_catalog,
-    max_sep_arcmin=3.0,
+    max_sep_arcmin=10.0,
     max_delta_cz=500.0,
 ):
     """
@@ -183,6 +183,153 @@ def crossmatch_planck_catalog(
             "redshift": match["redshift"],
             "wise_flag": match["wise_flag"],
             "validation": match["validation"],
+        }
+
+    return None
+
+
+def crossmatch_mcxc(
+    obs_clusters,
+    mcxc_catalogue,
+    max_sep_arcmin=10.0,
+    max_delta_cz=500.0,
+):
+    """
+    Cross-match observed clusters to the MCXC-II catalogue.
+    """
+    required = {
+        "RAJ2000",
+        "DEJ2000",
+        "GLON",
+        "GLAT",
+        "Z",
+        "Z_TYPE",
+        "M500",
+        "ERRPM500",
+        "ERRMM500",
+    }
+    names = mcxc_catalogue.dtype.names
+    if names is None or not required.issubset(names):
+        missing = sorted(required.difference(names or ()))
+        raise KeyError(f"MCXC catalogue missing fields: {missing}")
+
+    obs_ra = np.array(
+        [cluster.ra_deg for cluster in obs_clusters], dtype=float
+    )
+    obs_dec = np.array(
+        [cluster.dec_deg for cluster in obs_clusters], dtype=float
+    )
+    obs_z = obs_clusters.redshifts
+    obs_coord = SkyCoord(obs_ra * u.deg, obs_dec * u.deg)
+
+    mcxc_ra = np.asarray(mcxc_catalogue["RAJ2000"], dtype=float)
+    mcxc_dec = np.asarray(mcxc_catalogue["DEJ2000"], dtype=float)
+    mcxc_coord = SkyCoord(mcxc_ra * u.deg, mcxc_dec * u.deg)
+
+    idx_mcxc, idx_obs, sep2d, _ = obs_coord.search_around_sky(
+        mcxc_coord, max_sep_arcmin * u.arcmin
+    )
+
+    obs_cz = obs_z * SPEED_OF_LIGHT_KMS
+    mcxc_cz = np.asarray(mcxc_catalogue["Z"], dtype=float) * SPEED_OF_LIGHT_KMS
+
+    if max_delta_cz is None:
+        cz_mask = np.ones_like(idx_obs, dtype=bool)
+        dcz = np.full(idx_obs.size, np.nan, dtype=float)
+    else:
+        dcz = np.abs(obs_cz[idx_obs] - mcxc_cz[idx_mcxc])
+        cz_mask = np.isfinite(dcz) & (dcz <= float(max_delta_cz))
+
+    valid = cz_mask
+    matches = []
+    if np.any(valid):
+        obs_names = obs_clusters.names
+        mcxc_names = (
+            np.char.strip(mcxc_catalogue["NAME"].astype(str))
+            if "NAME" in mcxc_catalogue.dtype.names
+            else np.full(mcxc_ra.shape, "", dtype=str)
+        )
+        z_types = np.char.strip(mcxc_catalogue["Z_TYPE"].astype(str))
+        glon = np.asarray(mcxc_catalogue["GLON"], dtype=float)
+        glat = np.asarray(mcxc_catalogue["GLAT"], dtype=float)
+        m500 = np.asarray(mcxc_catalogue["M500"], dtype=float)
+        err_plus = np.asarray(mcxc_catalogue["ERRPM500"], dtype=float)
+        err_minus = np.asarray(mcxc_catalogue["ERRMM500"], dtype=float)
+        sym_err = 0.5 * (err_plus + err_minus)
+
+        best_by_obs: dict[int, dict] = {}
+        for obs_idx, mcxc_idx, sep, delta_cz in zip(
+            idx_obs[valid], idx_mcxc[valid], sep2d[valid], dcz[valid]
+        ):
+            sep_arcmin = float(sep.to_value(u.arcmin))
+            record = {
+                "obs_index": int(obs_idx),
+                "mcxc_index": int(mcxc_idx),
+                "obs_name": obs_names[obs_idx],
+                "mcxc_name": mcxc_names[mcxc_idx],
+                "separation_arcmin": sep_arcmin,
+                "delta_cz": float(delta_cz),
+                "RAJ2000": float(mcxc_ra[mcxc_idx]),
+                "DEJ2000": float(mcxc_dec[mcxc_idx]),
+                "GLON": float(glon[mcxc_idx]),
+                "GLAT": float(glat[mcxc_idx]),
+                "Z": float(mcxc_cz[mcxc_idx] / SPEED_OF_LIGHT_KMS),
+                "Z_TYPE": z_types[mcxc_idx],
+                "M500": float(m500[mcxc_idx]),
+                "ERRPM500": float(err_plus[mcxc_idx]),
+                "ERRMM500": float(err_minus[mcxc_idx]),
+                "M500_err": float(sym_err[mcxc_idx]),
+            }
+            if obs_idx not in best_by_obs or (
+                sep_arcmin < best_by_obs[obs_idx]["separation_arcmin"]
+            ):
+                best_by_obs[obs_idx] = record
+
+        matches = list(best_by_obs.values())
+
+    matched_obs_indices = np.sort(
+        np.array([m["obs_index"] for m in matches], dtype=int),
+    )
+
+    unmatched_obs = np.setdiff1d(
+        np.arange(len(obs_clusters), dtype=int),
+        matched_obs_indices,
+        assume_unique=True,
+    )
+
+    if unmatched_obs.size:
+        skipped = [obs_clusters.names[idx] for idx in unmatched_obs]
+        print(
+            "No MCXC match for {n} observed clusters: {names}".format(
+                n=unmatched_obs.size,
+                names=skipped,
+            )
+        )
+
+    empty = {
+        "mcxc_index": np.nan,
+        "mcxc_name": None,
+        "separation_arcmin": np.nan,
+        "delta_cz": np.nan,
+        "RAJ2000": np.nan,
+        "DEJ2000": np.nan,
+        "GLON": np.nan,
+        "GLAT": np.nan,
+        "Z": np.nan,
+        "Z_TYPE": None,
+        "M500": np.nan,
+        "ERRPM500": np.nan,
+        "ERRMM500": np.nan,
+        "M500_err": np.nan,
+    }
+
+    for idx in unmatched_obs:
+        obs_clusters.clusters[idx].mcxc_match = empty.copy()
+
+    for match in matches:
+        obs_idx = match["obs_index"]
+        obs_clusters.clusters[obs_idx].mcxc_match = {
+            key: match.get(key, empty[key]) for key in empty
         }
 
     return None
