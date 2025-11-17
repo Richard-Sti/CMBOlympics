@@ -52,6 +52,7 @@ class ObservedCluster:
     map_fit: dict | None = None
     planck_match: dict | None = None
     mcxc_match: dict | None = None
+    erass_match: dict | None = None
 
     @property
     def galactic_coordinates(self):
@@ -73,6 +74,7 @@ class ObservedCluster:
             "map_fit": self.map_fit,
             "planck_match": self.planck_match,
             "mcxc_match": self.mcxc_match,
+            "erass_match": self.erass_match,
         }
 
 
@@ -186,10 +188,16 @@ def _load_catalogue(path: Path):
         return toml_loader.loads(fixed)
 
 
-def load_observed_clusters(fname):
+def load_observed_clusters(fname, skip_names=None, verbose=True):
     """Return the full observed cluster catalogue."""
     path = Path(fname)
     raw = _load_catalogue(path)
+    skip_set = None
+    if skip_names:
+        skip_iter = (
+            [skip_names] if isinstance(skip_names, str) else skip_names
+        )
+        skip_set = {str(name).lower() for name in skip_iter}
 
     clusters = []
     for identifier, entries in raw.items():
@@ -201,6 +209,10 @@ def load_observed_clusters(fname):
             continue
 
         name = details.get("name", identifier)
+        if skip_set and name.lower() in skip_set:
+            if verbose:
+                print(f"Skipping observed cluster '{name}'.")
+            continue
         ra = float(details["ra"])
         dec = float(details["dec"])
         cz_cmb = details.get("cz_cmb")
