@@ -28,8 +28,87 @@ PLANCK_H = 0.7
 LOG10 = np.log(10.0)
 
 
-def _estimate_mass_ratio(log_a, log_err_a, log_b, log_err_b,
-                         n_samples=50000, rng=None):
+def extract_match_field(obs_clusters, match_attr, key):
+    """
+    Return an array with a field from Planck/MCXC/eRASS matches.
+
+    Parameters
+    ----------
+    obs_clusters
+        Iterable of ObservedCluster objects (or catalogue) with match data.
+    match_attr : str
+        Attribute name on ``ObservedCluster`` storing the match dictionary
+        (e.g. ``\"planck_match\"``).
+    key : str
+        Field to extract from the match dictionary (e.g. ``\"M500\"``).
+
+    Returns
+    -------
+    numpy.ndarray
+        One-dimensional float array; entries are NaN when the requested match
+        is missing for a cluster or when the key is absent/invalid.
+    """
+    if obs_clusters is None:
+        raise ValueError("obs_clusters cannot be None.")
+    clusters = list(obs_clusters)
+    values = np.full(len(clusters), np.nan, dtype=float)
+    for idx, cluster in enumerate(clusters):
+        match = getattr(cluster, match_attr, None)
+        if not match:
+            continue
+        if isinstance(match, dict):
+            value = match.get(key, np.nan)
+        else:
+            value = getattr(match, key, np.nan)
+        try:
+            values[idx] = float(value)
+        except (TypeError, ValueError):
+            values[idx] = np.nan
+    return values
+
+
+def match_angular_separation(obs_clusters, match_attr_a, match_attr_b):
+    """
+    Angular offsets between two match catalogues.
+
+    Returns an array (arcmin) of separations between the coordinates stored in
+    ``match_attr_a`` and ``match_attr_b`` for each ObservedCluster. Missing
+    matches or invalid coordinates yield NaN entries.
+    """
+    if obs_clusters is None:
+        raise ValueError("obs_clusters cannot be None.")
+
+    def _get(match, key):
+        if match is None:
+            return np.nan
+        if isinstance(match, dict):
+            return match.get(key, np.nan)
+        return getattr(match, key, np.nan)
+
+    clusters = list(obs_clusters)
+    offsets = np.full(len(clusters), np.nan, dtype=float)
+    for idx, cluster in enumerate(clusters):
+        match_a = getattr(cluster, match_attr_a, None)
+        match_b = getattr(cluster, match_attr_b, None)
+        if not match_a or not match_b:
+            continue
+        ra_a = float(_get(match_a, "RA"))
+        dec_a = float(_get(match_a, "DEC"))
+        ra_b = float(_get(match_b, "RA"))
+        dec_b = float(_get(match_b, "DEC"))
+        if not (
+            np.isfinite(ra_a) and np.isfinite(dec_a)
+            and np.isfinite(ra_b) and np.isfinite(dec_b)
+        ):
+            continue
+        coord_a = SkyCoord(ra_a * u.deg, dec_a * u.deg, frame="icrs")
+        coord_b = SkyCoord(ra_b * u.deg, dec_b * u.deg, frame="icrs")
+        offsets[idx] = coord_a.separation(coord_b).to_value(u.arcmin)
+    return offsets
+
+
+def estimate_mass_ratio_log(log_a, log_err_a, log_b, log_err_b,
+                            n_samples=50000, rng=None):
     """
     Return Monte-Carlo estimate of <M_B / M_A> using log-normal sampling.
     """
@@ -156,17 +235,15 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
         y_scaled = y_phys * Ez_factor
         y_scaled_err = y_phys_err * Ez_factor
 
-        msz = float(planck_match.get("msz", np.nan))
-        msz_err_up = float(planck_match.get("msz_err_up", np.nan))
-        msz_err_low = float(planck_match.get("msz_err_low", np.nan))
+        msz = float(planck_match.get("M500", np.nan))
+        msz_err = float(planck_match.get("M500_err", np.nan))
 
         if not (
             np.isfinite(y_phys)
             and np.isfinite(y_phys_err)
             and np.isfinite(Ez_factor)
             and np.isfinite(msz)
-            and np.isfinite(msz_err_up)
-            and np.isfinite(msz_err_low)
+            and np.isfinite(msz_err)
         ):
             continue
 
@@ -174,13 +251,12 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
             y_scaled <= 0
             or y_scaled_err <= 0
             or msz <= 0
-            or msz_err_up <= 0
-            or msz_err_low <= 0
+            or msz_err <= 0
         ):
             continue
 
-        msz_lower = msz - msz_err_low
-        msz_upper = msz + msz_err_up
+        msz_lower = msz - msz_err
+        msz_upper = msz + msz_err
         if msz_lower <= 0 or msz_upper <= 0:
             continue
 
@@ -303,7 +379,7 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
                 fontsize=7,
             )
         y_mass_err_sym = 0.5 * (y_mass_err_low + y_mass_err_up)
-        ratio_mean, ratio_std = _estimate_mass_ratio(
+        ratio_mean, ratio_std = estimate_mass_ratio_log(
             x, xerr, y_mass, y_mass_err_sym
         )
         ratio_label = (
@@ -329,6 +405,147 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
     plt.close()
 
     return fig, axes
+
+
+def plot_match_mass_comparison(
+    matches, obs_clusters, match_attr="planck_match", field="M500",
+    field_err="M500_err", mass_key="masses", sim_label="Manticore",
+):
+    """
+    Compare simulation mass estimates to external catalogue masses.
+
+    Parameters
+    ----------
+    matches
+        Iterable (same length as ``obs_clusters``) with HaloAssociation data.
+    obs_clusters
+        ObservedClusterCatalogue containing Planck/MCXC/eRASS matches.
+    match_attr : str, optional
+        Name of the match attribute to compare against (default: planck).
+    field : str, optional
+        Key within the match dict supplying the mass estimate (default: M500).
+    field_err : str, optional
+        Key supplying the symmetric uncertainty (default: M500_err). Set to
+        ``None`` to skip match errors.
+    mass_key : str, optional
+        Attribute on association providing the simulation masses (default:
+        ``masses``). If it is a sequence, its mean/std are used.
+    sim_label : str, optional
+        Label describing the simulation masses (default: "Manticore").
+    """
+    if obs_clusters is None or matches is None:
+        raise ValueError("obs_clusters and matches must be provided.")
+    if len(obs_clusters) != len(matches):
+        raise ValueError("obs_clusters and matches must have equal length.")
+
+    mass_sim = []
+    mass_sim_err = []
+    mass_match = []
+    mass_match_err = []
+    cluster_names = []
+
+    for cluster, assoc in zip(obs_clusters, matches):
+        if assoc is None:
+            continue
+        if isinstance(assoc, (tuple, list)):
+            assoc = assoc[0] if assoc else None
+        if assoc is None:
+            continue
+        masses = getattr(assoc, mass_key, None)
+        if masses is None:
+            continue
+        masses = np.asarray(masses, dtype=float)
+        mask = np.isfinite(masses) & (masses > 0)
+        if not np.any(mask):
+            continue
+        mean_mass = float(np.mean(masses[mask]))
+        std_mass = float(np.std(masses[mask]))
+        match = getattr(cluster, match_attr, None)
+        if not match:
+            continue
+        match_mass = match.get(field, np.nan)
+        match_err = match.get(field_err, np.nan) if field_err else np.nan
+        if not np.isfinite(match_mass) or match_mass <= 0:
+            continue
+        if field_err and (not np.isfinite(match_err) or match_err <= 0):
+            match_err = np.nan
+        mass_sim.append(mean_mass)
+        mass_sim_err.append(std_mass)
+        mass_match.append(match_mass)
+        mass_match_err.append(match_err)
+        cluster_names.append(cluster.name)
+
+    if not mass_sim:
+        raise ValueError("No overlapping clusters with finite masses.")
+
+    mass_sim = np.asarray(mass_sim, dtype=float)
+    mass_sim_err = np.asarray(mass_sim_err, dtype=float)
+    mass_match = np.asarray(mass_match, dtype=float)
+    mass_match_err = np.asarray(mass_match_err, dtype=float)
+    cluster_names = np.asarray(cluster_names, dtype=object)
+
+    mask = (
+        np.isfinite(mass_sim)
+        & np.isfinite(mass_match)
+        & np.isfinite(mass_sim_err)
+    )
+    mass_sim = mass_sim[mask]
+    mass_sim_err = mass_sim_err[mask]
+    mass_match = mass_match[mask]
+    mass_match_err = mass_match_err[mask]
+    cluster_names = cluster_names[mask]
+
+    if mass_sim.size == 0:
+        raise ValueError("All cluster entries failed the mass quality cuts.")
+
+    mass_scale = PLANCK_H
+    log_sim = np.log10(mass_sim * mass_scale)
+    err_sim = mass_sim_err / (mass_sim * LOG10)
+    log_match = np.log10(mass_match * mass_scale)
+    if field_err:
+        err_match = (
+            mass_match_err / (mass_match * LOG10)
+            if np.all(np.isfinite(mass_match_err))
+            else np.full_like(log_match, np.nan)
+        )
+    else:
+        err_match = np.full_like(log_match, np.nan)
+
+    sim_label_tex = sim_label.replace("_", r"\_").replace(" ", r"\ ")
+    match_label = match_attr.replace("_match", "").replace("_", r"\_")
+
+    with plt.style.context("science"):
+        fig, ax = plt.subplots(figsize=(5, 5))
+        ax.errorbar(
+            log_sim,
+            log_match,
+            xerr=err_sim,
+            yerr=err_match if field_err else None,
+            fmt="o",
+            color="C0",
+        )
+        anchor = (np.nanmedian(log_sim), np.nanmedian(log_match))
+        ax.axline(anchor, slope=1.0, color="k", linestyle="--", label="1:1")
+        ax.set_xlabel(
+            r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]\ (\mathrm{"
+            + sim_label_tex + "})$"
+        )
+        ax.set_ylabel(
+            r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]\ (\mathrm{"
+            + match_label + "})$"
+        )
+        for xi, yi, name in zip(log_sim, log_match, cluster_names):
+            ax.annotate(
+                name,
+                xy=(xi, yi),
+                xytext=(4, 4),
+                textcoords="offset points",
+                fontsize=7,
+            )
+        ax.legend(loc="lower right")
+
+    plt.close()
+    return fig, ax
 
 
 def tangent_offsets_arcmin(ell_deg, b_deg, ellc_deg, bc_deg):
@@ -804,7 +1021,7 @@ def plot_mass_comparison(matches_a, matches_b, obs_clusters,
                       "fc": "white", "ec": "none", "alpha": 0.4},
             )
         ax_scatter.legend(loc="lower right")
-        ratio_mean, ratio_std = _estimate_mass_ratio(
+        ratio_mean, ratio_std = estimate_mass_ratio_log(
             log_a, log_err_a, log_b, log_err_b
         )
         ratio_label = (
@@ -832,8 +1049,11 @@ def plot_mass_comparison(matches_a, matches_b, obs_clusters,
 
 
 __all__ = [
+    "extract_match_field",
+    "match_angular_separation",
     "tangent_offsets_arcmin",
     "plot_mass_y_scaling",
+    "plot_match_mass_comparison",
     "plot_mass_comparison",
     "plot_cluster_cutout",
     "plot_observed_cluster_cutout",
