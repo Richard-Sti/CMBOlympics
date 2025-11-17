@@ -45,8 +45,9 @@ def crossmatch_planck_catalog(
     Side effects
     ------------
     Annotates each ``ObservedCluster`` with a ``planck_match`` dictionary
-    containing the Planck match metadata. Unmatched clusters receive NaNs
-    in that dictionary, and their names are printed to stdout.
+    containing the Planck match metadata, including RA/Dec. Unmatched
+    clusters receive NaNs in that dictionary, and their names are printed to
+    stdout.
 
     Returns
     -------
@@ -65,9 +66,8 @@ def crossmatch_planck_catalog(
     planck_z = np.asarray(planck_catalog.get("redshift"), dtype=float)
     planck_y = np.asarray(planck_catalog["y5r500"], dtype=float)
     planck_yerr = np.asarray(planck_catalog["y5r500_err"], dtype=float)
-    planck_msz = np.asarray(planck_catalog["msz"], dtype=float)
-    planck_msz_err_up = np.asarray(planck_catalog["msz_err_up"], dtype=float)
-    planck_msz_err_low = np.asarray(planck_catalog["msz_err_low"], dtype=float)
+    planck_m500 = np.asarray(planck_catalog["msz"], dtype=float)
+    planck_m500_err = np.asarray(planck_catalog["msz_err"], dtype=float)
     planck_wise_flag = np.asarray(
         planck_catalog.get("wise_flag"), dtype=float
     )
@@ -110,11 +110,12 @@ def crossmatch_planck_catalog(
                 "planck_name": planck_names[planck_idx],
                 "separation_arcmin": sep_arcmin,
                 "delta_cz": float(delta_cz),
+                "RA": float(planck_ra[planck_idx]),
+                "DEC": float(planck_dec[planck_idx]),
                 "y5r500": float(planck_y[planck_idx]),
                 "y5r500_err": float(planck_yerr[planck_idx]),
-                "msz": float(planck_msz[planck_idx]),
-                "msz_err_up": float(planck_msz_err_up[planck_idx]),
-                "msz_err_low": float(planck_msz_err_low[planck_idx]),
+                "M500": float(planck_m500[planck_idx]),
+                "M500_err": float(planck_m500_err[planck_idx]),
                 "redshift": float(planck_z[planck_idx]),
                 "wise_flag": (
                     float(planck_wise_flag[planck_idx])
@@ -157,11 +158,12 @@ def crossmatch_planck_catalog(
             "planck_name": None,
             "separation_arcmin": np.nan,
             "delta_cz": np.nan,
+            "RA": np.nan,
+            "DEC": np.nan,
             "y5r500": np.nan,
             "y5r500_err": np.nan,
-            "msz": np.nan,
-            "msz_err_up": np.nan,
-            "msz_err_low": np.nan,
+            "M500": np.nan,
+            "M500_err": np.nan,
             "redshift": np.nan,
             "wise_flag": np.nan,
             "validation": np.nan,
@@ -175,11 +177,12 @@ def crossmatch_planck_catalog(
             "planck_name": match["planck_name"],
             "separation_arcmin": match["separation_arcmin"],
             "delta_cz": match["delta_cz"],
+            "RA": match["RA"],
+            "DEC": match["DEC"],
             "y5r500": match["y5r500"],
             "y5r500_err": match["y5r500_err"],
-            "msz": match["msz"],
-            "msz_err_up": match["msz_err_up"],
-            "msz_err_low": match["msz_err_low"],
+            "M500": match["M500"],
+            "M500_err": match["M500_err"],
             "redshift": match["redshift"],
             "wise_flag": match["wise_flag"],
             "validation": match["validation"],
@@ -195,7 +198,31 @@ def crossmatch_mcxc(
     max_delta_cz=500.0,
 ):
     """
-    Cross-match observed clusters to the MCXC-II catalogue.
+    Cross-match observed clusters to the MCXC-II catalogue and annotate
+    each ``ObservedCluster`` with the best MCXC counterpart.
+
+    Parameters
+    ----------
+    obs_clusters : ObservedClusterCatalogue
+        Catalogue providing at least RA/Dec and cz values per cluster.
+    mcxc_catalogue : numpy.ndarray
+        Structured array returned by :func:`cmbo.io.xray.load_mcxc_catalogue`.
+    max_sep_arcmin : float, optional
+        Maximum allowed angular separation for matches.
+    max_delta_cz : float or None, optional
+        Maximum |cz_obs - cz_mcxc| in km/s. Set to ``None`` to skip the
+        velocity consistency check.
+
+    Side Effects
+    ------------
+    Populates ``ObservedCluster.mcxc_match`` with a dictionary holding
+    RA/DEC, Galactic coordinates, redshift info, ``M500`` and its symmetric
+    uncertainty. Unmatched clusters receive NaN-filled entries and their
+    names are printed.
+
+    Returns
+    -------
+    None
     """
     required = {
         "RAJ2000",
@@ -269,8 +296,8 @@ def crossmatch_mcxc(
                 "mcxc_name": mcxc_names[mcxc_idx],
                 "separation_arcmin": sep_arcmin,
                 "delta_cz": float(delta_cz),
-                "RAJ2000": float(mcxc_ra[mcxc_idx]),
-                "DEJ2000": float(mcxc_dec[mcxc_idx]),
+                "RA": float(mcxc_ra[mcxc_idx]),
+                "DEC": float(mcxc_dec[mcxc_idx]),
                 "GLON": float(glon[mcxc_idx]),
                 "GLAT": float(glat[mcxc_idx]),
                 "Z": float(mcxc_cz[mcxc_idx] / SPEED_OF_LIGHT_KMS),
@@ -311,13 +338,11 @@ def crossmatch_mcxc(
         "mcxc_name": None,
         "separation_arcmin": np.nan,
         "delta_cz": np.nan,
-        "RAJ2000": np.nan,
-        "DEJ2000": np.nan,
+        "RA": np.nan,
+        "DEC": np.nan,
         "Z": np.nan,
         "Z_TYPE": None,
         "M500": np.nan,
-        "M500_upper_err": np.nan,
-        "M500_lower_err": np.nan,
         "M500_err": np.nan,
     }
 
@@ -340,7 +365,30 @@ def crossmatch_erass(
     max_delta_cz=500.0,
 ):
     """
-    Cross-match observed clusters to the eRASS catalogue.
+    Cross-match observed clusters to the eRASS catalogue and attach the
+    retained metadata to ``ObservedCluster.erass_match``.
+
+    Parameters
+    ----------
+    obs_clusters : ObservedClusterCatalogue
+        Catalogue with RA/Dec and cz information.
+    erass_catalogue : numpy.ndarray
+        Structured array returned by :func:`cmbo.io.xray.load_erass_catalogue`.
+    max_sep_arcmin : float, optional
+        Maximum angular separation between candidates.
+    max_delta_cz : float or None, optional
+        Maximum |cz_obs - cz_erass| in km/s. Use ``None`` to disable the
+        velocity cut.
+
+    Side Effects
+    ------------
+    Writes match metadata (RA/Dec, redshift type, ``M500`` and symmetric
+    errors) into ``ObservedCluster.erass_match``. Unmatched clusters
+    receive NaNs and their identifiers are printed.
+
+    Returns
+    -------
+    None
     """
     required = {"RA", "DEC", "BEST_Z", "BEST_Z_TYPE", "M500", "M500_L",
                 "M500_H"}
@@ -386,9 +434,9 @@ def crossmatch_erass(
         )
         z_type = np.char.strip(erass_catalogue["BEST_Z_TYPE"].astype(str))
         m500 = np.asarray(erass_catalogue["M500"], dtype=float)
-        err_plus = np.asarray(erass_catalogue["M500_H"], dtype=float)
-        err_minus = np.asarray(erass_catalogue["M500_L"], dtype=float)
-        sym_err = 0.5 * (err_plus + err_minus)
+        upper = np.asarray(erass_catalogue["M500_H"], dtype=float)
+        lower = np.asarray(erass_catalogue["M500_L"], dtype=float)
+        sym_err = 0.5 * (upper - lower)
 
         best_by_obs: dict[int, dict] = {}
         for obs_idx, erass_idx, sep, delta_cz in zip(
@@ -407,8 +455,6 @@ def crossmatch_erass(
                 "Z": float(erass_z[erass_idx]),
                 "Z_TYPE": z_type[erass_idx],
                 "M500": float(m500[erass_idx]),
-                "M500_upper_err": float(err_plus[erass_idx]),
-                "M500_lower_err": float(err_minus[erass_idx]),
                 "M500_err": float(sym_err[erass_idx]),
             }
             if obs_idx not in best_by_obs or (
@@ -447,8 +493,6 @@ def crossmatch_erass(
         "Z": np.nan,
         "Z_TYPE": None,
         "M500": np.nan,
-        "M500_upper_err": np.nan,
-        "M500_lower_err": np.nan,
         "M500_err": np.nan,
     }
 
