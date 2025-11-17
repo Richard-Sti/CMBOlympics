@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..constants import SPEED_OF_LIGHT_KMS
 from ..utils.coords import cz_to_comoving_distance, radec_to_galactic
 
 try:  # pragma: no cover - runtime import fallback for Python <3.11
@@ -36,9 +37,6 @@ if toml_loader is None:  # pragma: no cover - enforced via dependency list
         "tomli is required to load observed cluster catalogues "
         "(install with 'pip install tomli')."
     )
-
-
-_C_LIGHT_KMS = 299792.458
 
 
 @dataclass(slots=True)
@@ -118,7 +116,7 @@ class ObservedClusterCatalogue:
             cluster.cz_cmb if cluster.cz_cmb is not None else np.nan
             for cluster in self._clusters
         ], dtype=float)
-        return cz / _C_LIGHT_KMS
+        return cz / SPEED_OF_LIGHT_KMS
 
     @property
     def names(self):

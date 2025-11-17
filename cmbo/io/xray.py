@@ -21,6 +21,8 @@ import astropy.units as u
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
 
+from ..constants import SPEED_OF_LIGHT_KMS
+
 __all__ = (
     "load_mcxc_catalogue",
     "load_erass_catalogue",
@@ -29,8 +31,6 @@ __all__ = (
     "match_mcxc_to_erass",
     "build_matched_catalogues",
 )
-
-_C_LIGHT_KMS = 299792.458
 
 
 def load_mcxc_catalogue(fname="data/MCXCII_2024.fits", verbose=True):
@@ -142,8 +142,8 @@ def _match_catalogues(
     delta_cz = np.full(n_primary, np.nan, dtype=np.float64)
 
     if idx_primary.size:
-        primary_cz = primary_z * _C_LIGHT_KMS
-        secondary_cz = secondary_z * _C_LIGHT_KMS
+        primary_cz = primary_z * SPEED_OF_LIGHT_KMS
+        secondary_cz = secondary_z * SPEED_OF_LIGHT_KMS
         pcz = primary_cz[idx_primary]
         scz = secondary_cz[idx_secondary]
         valid = (

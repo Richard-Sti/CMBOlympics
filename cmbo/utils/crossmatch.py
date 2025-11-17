@@ -18,12 +18,14 @@ import numpy as np
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 
+from ..constants import SPEED_OF_LIGHT_KMS
+
 
 def crossmatch_planck_catalog(
     obs_clusters,
     planck_catalog,
     max_sep_arcmin=3.0,
-    max_delta_z=0.005,
+    max_delta_cz=500.0,
 ):
     """
     Cross-match observed clusters to the Planck PSZ2 union catalogue.
@@ -36,8 +38,9 @@ def crossmatch_planck_catalog(
         Output of ``read_Planck_cluster_catalog``.
     max_sep_arcmin : float, optional
         Maximum angular separation allowed between matches.
-    max_delta_z : float or None, optional
-        Maximum |z_obs - z_planck|. Set to None to skip the redshift check.
+    max_delta_cz : float or None, optional
+        Maximum |cz_obs - cz_planck| in km/s. Set to None to skip the velocity
+        check.
 
     Side effects
     ------------
@@ -80,21 +83,24 @@ def crossmatch_planck_catalog(
         max_sep_arcmin * u.arcmin,
     )
 
-    if max_delta_z is None:
-        redshift_mask = np.ones_like(idx_obs, dtype=bool)
-        dz = np.full(idx_obs.size, np.nan, dtype=float)
-    else:
-        dz = np.abs(obs_z[idx_obs] - planck_z[idx_planck])
-        redshift_mask = np.isfinite(dz) & (dz <= float(max_delta_z))
+    obs_cz = obs_z * SPEED_OF_LIGHT_KMS
+    planck_cz = planck_z * SPEED_OF_LIGHT_KMS
 
-    valid = redshift_mask
+    if max_delta_cz is None:
+        cz_mask = np.ones_like(idx_obs, dtype=bool)
+        dcz = np.full(idx_obs.size, np.nan, dtype=float)
+    else:
+        dcz = np.abs(obs_cz[idx_obs] - planck_cz[idx_planck])
+        cz_mask = np.isfinite(dcz) & (dcz <= float(max_delta_cz))
+
+    valid = cz_mask
     matches = []
     if np.any(valid):
         obs_names = obs_clusters.names
         planck_names = planck_catalog["name"]
         best_by_obs: dict[int, dict] = {}
-        for obs_idx, planck_idx, sep, delta_z in zip(
-            idx_obs[valid], idx_planck[valid], sep2d[valid], dz[valid]
+        for obs_idx, planck_idx, sep, delta_cz in zip(
+            idx_obs[valid], idx_planck[valid], sep2d[valid], dcz[valid]
         ):
             sep_arcmin = float(sep.to_value(u.arcmin))
             record = {
@@ -103,7 +109,7 @@ def crossmatch_planck_catalog(
                 "obs_name": obs_names[obs_idx],
                 "planck_name": planck_names[planck_idx],
                 "separation_arcmin": sep_arcmin,
-                "delta_z": float(delta_z),
+                "delta_cz": float(delta_cz),
                 "y5r500": float(planck_y[planck_idx]),
                 "y5r500_err": float(planck_yerr[planck_idx]),
                 "msz": float(planck_msz[planck_idx]),
@@ -150,7 +156,7 @@ def crossmatch_planck_catalog(
             "planck_index": np.nan,
             "planck_name": None,
             "separation_arcmin": np.nan,
-            "delta_z": np.nan,
+            "delta_cz": np.nan,
             "y5r500": np.nan,
             "y5r500_err": np.nan,
             "msz": np.nan,
@@ -168,7 +174,7 @@ def crossmatch_planck_catalog(
             "planck_index": planck_idx,
             "planck_name": match["planck_name"],
             "separation_arcmin": match["separation_arcmin"],
-            "delta_z": match["delta_z"],
+            "delta_cz": match["delta_cz"],
             "y5r500": match["y5r500"],
             "y5r500_err": match["y5r500_err"],
             "msz": match["msz"],

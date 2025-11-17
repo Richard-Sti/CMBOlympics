@@ -21,7 +21,7 @@ from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
 from astropy.cosmology import FlatLambdaCDM
 from tqdm import trange
 
-_C_LIGHT_KMS = 299792.458
+from ..constants import SPEED_OF_LIGHT_KMS
 
 
 def cartesian_to_r_theta_phi(x, y, z, center=[0.0, 0.0, 0.0]):
@@ -66,7 +66,7 @@ def cz_to_comoving_distance(cz, h=1.0, Om0=0.3111):
         return float(out[0]) if scalar_input else out
 
     cosmo_obj = FlatLambdaCDM(H0=100.0 * h, Om0=Om0)
-    redshift = cz_arr[mask] / _C_LIGHT_KMS
+    redshift = cz_arr[mask] / SPEED_OF_LIGHT_KMS
     distance = cosmo_obj.comoving_distance(redshift).value * cosmo_obj.h
 
     out[mask] = distance
