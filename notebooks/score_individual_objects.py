@@ -312,7 +312,7 @@ def _attach_per_halo_data(
                 assoc.median_theta500 = np.nan
 
 
-def load_associations_and_matches(sim_key, cfg, verbose=True):
+def load_associations_and_matches(sim_key, cfg, obs_clusters, verbose=True):
     """
     Return halo associations, matches, and box size with per-halo tSZ p-values.
     """
@@ -332,16 +332,10 @@ def load_associations_and_matches(sim_key, cfg, verbose=True):
     )
     if verbose:
         print(f"Identified {len(associations)} halo associations.")
-    if not associations:
-        raise ValueError(
-            "No halo associations were found for the selected simulation."
-        )
-
-    obs_clusters = cmbo.io.load_observed_clusters(
-        cfg["paths"]["observed_clusters"]
-    )
+    if obs_clusters is None:
+        raise ValueError("obs_clusters must be provided.")
     if verbose:
-        print(f"Loaded {len(obs_clusters)} observed clusters.")
+        print(f"Using {len(obs_clusters)} observed clusters.")
     pval_matrix, dist_matrix = compute_matching_matrix(
         obs_clusters,
         associations,
@@ -388,11 +382,6 @@ def load_associations_and_matches(sim_key, cfg, verbose=True):
         signal_lookup,
         theta_lookup,
     )
-
-    # _annotate_theta_and_signals(
-    #     associations,
-    #     halo_data["centre"],
-    # )
 
     return associations, matches, halo_data["box_size"]
 
