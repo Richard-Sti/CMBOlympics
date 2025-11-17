@@ -62,6 +62,9 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
     def _as_str(col):
         return np.char.strip(table[col].astype(str))
 
+    msz_err_up = _as_float("MSZ_ERR_UP", dtype=np.float32) * 1e14
+    msz_err_low = _as_float("MSZ_ERR_LOW", dtype=np.float32) * 1e14
+
     catalog = {
         "index": _as_int("INDEX"),
         "name": _as_str("NAME"),
@@ -77,9 +80,7 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
         "redshift": _as_float("REDSHIFT", dtype=np.float32),
         "y5r500": _as_float("Y5R500", dtype=np.float32),
         "y5r500_err": _as_float("Y5R500_ERR", dtype=np.float32),
-        "msz": _as_float("MSZ", dtype=np.float32),
-        "msz_err_up": _as_float("MSZ_ERR_UP", dtype=np.float32),
-        "msz_err_low": _as_float("MSZ_ERR_LOW", dtype=np.float32),
+        "msz": _as_float("MSZ", dtype=np.float32) * 1e14,
         "validation": _as_int("VALIDATION"),
         "psz": _as_int("PSZ"),
         "pccs2": _as_int("PCCS2"),
@@ -92,4 +93,6 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
         "wise_flag": _as_int("WISE_FLAG"),
         "comment": _as_str("COMMENT"),
     }
+
+    catalog["msz_err"] = 0.5 * (msz_err_up + msz_err_low)
     return catalog
