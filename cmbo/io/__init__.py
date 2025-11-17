@@ -41,6 +41,11 @@ from .tsz_mass_bins import (  # noqa
 
 from .xray import (  # noqa
     load_mcxc_catalogue,  # noqa
+    load_erass_catalogue,  # noqa
+    match_planck_to_mcxc,  # noqa
+    match_planck_to_erass,  # noqa
+    match_mcxc_to_erass,  # noqa
+    build_matched_catalogues,  # noqa
 )
 
 from h5py import File
