@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 from tqdm import tqdm
 
-from .pfeifer import MatchingProbability
+from cmbo.match.pfeifer import MatchingProbability
 
 
 def compute_matching_matrix(obs_clusters, associations, box_size, mdef="200c",
