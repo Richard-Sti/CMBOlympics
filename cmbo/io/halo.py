@@ -21,8 +21,7 @@ flipping and consistent mass unit conversion.
 import numpy as np
 from h5py import File
 
-from ..utils import fprint
-
+from ..utils.logging import fprint
 
 class FoFHaloReader:
     """Reader exposing FoF halo fields through dictionary-style access."""
