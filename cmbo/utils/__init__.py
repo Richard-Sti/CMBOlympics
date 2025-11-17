@@ -13,6 +13,9 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+import numpy as np
+from scipy.stats import norm
+
 from .coords import (  # noqa: F401
     build_mass_bins,
     cartesian_icrs_to_galactic,
@@ -38,17 +41,7 @@ from .config_reader import (  # noqa: F401
     load_config,
     apply_root_to_config_paths,
 )
-
-from datetime import datetime
-import numpy as np
-from scipy.stats import norm
-
-
-def fprint(*args, verbose=True, **kwargs):
-    """Prints a message with a timestamp prepended."""
-    if verbose:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S%f")[:-6]
-        print(f"{timestamp}", *args, **kwargs)
+from .logging import fprint  # noqa: F401
 
 
 def pvalue_to_sigma(pval):
