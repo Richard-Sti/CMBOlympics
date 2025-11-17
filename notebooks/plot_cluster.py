@@ -260,7 +260,7 @@ def plot_mass_y_scaling(matches, obs_clusters, Om, sim_label="Manticore"):
         if msz_lower <= 0 or msz_upper <= 0:
             continue
 
-        mass_scale = 1e14 * PLANCK_H
+        mass_scale = PLANCK_H
         log_msz = np.log10(msz * mass_scale)
         err_low_log = (np.log10(msz * mass_scale)
                        - np.log10(msz_lower * mass_scale))
@@ -438,10 +438,10 @@ def plot_match_mass_comparison(
     if len(obs_clusters) != len(matches):
         raise ValueError("obs_clusters and matches must have equal length.")
 
-    mass_sim = []
-    mass_sim_err = []
-    mass_match = []
-    mass_match_err = []
+    log_mass_sim = []
+    log_mass_sim_err = []
+    log_mass_match = []
+    log_mass_match_err = []
     cluster_names = []
 
     for cluster, assoc in zip(obs_clusters, matches):
@@ -458,8 +458,9 @@ def plot_match_mass_comparison(
         mask = np.isfinite(masses) & (masses > 0)
         if not np.any(mask):
             continue
-        mean_mass = float(np.mean(masses[mask]))
-        std_mass = float(np.std(masses[mask]))
+        log_masses = np.log10(masses[mask])
+        mean_log_mass = float(np.mean(log_masses))
+        std_log_mass = float(np.std(log_masses))
         match = getattr(cluster, match_attr, None)
         if not match:
             continue
@@ -467,49 +468,38 @@ def plot_match_mass_comparison(
         match_err = match.get(field_err, np.nan) if field_err else np.nan
         if not np.isfinite(match_mass) or match_mass <= 0:
             continue
-        if field_err and (not np.isfinite(match_err) or match_err <= 0):
-            match_err = np.nan
-        mass_sim.append(mean_mass)
-        mass_sim_err.append(std_mass)
-        mass_match.append(match_mass)
-        mass_match_err.append(match_err)
+        log_match_mass = float(np.log10(match_mass * PLANCK_H))
+        log_match_err = np.nan
+        if field_err and np.isfinite(match_err) and match_err > 0:
+            log_match_err = float(match_err / (match_mass * LOG10))
+        log_mass_sim.append(mean_log_mass)
+        log_mass_sim_err.append(std_log_mass)
+        log_mass_match.append(log_match_mass)
+        log_mass_match_err.append(log_match_err)
         cluster_names.append(cluster.name)
 
-    if not mass_sim:
+    if not log_mass_sim:
         raise ValueError("No overlapping clusters with finite masses.")
 
-    mass_sim = np.asarray(mass_sim, dtype=float)
-    mass_sim_err = np.asarray(mass_sim_err, dtype=float)
-    mass_match = np.asarray(mass_match, dtype=float)
-    mass_match_err = np.asarray(mass_match_err, dtype=float)
+    log_mass_sim = np.asarray(log_mass_sim, dtype=float)
+    log_mass_sim_err = np.asarray(log_mass_sim_err, dtype=float)
+    log_mass_match = np.asarray(log_mass_match, dtype=float)
+    log_mass_match_err = np.asarray(log_mass_match_err, dtype=float)
     cluster_names = np.asarray(cluster_names, dtype=object)
 
     mask = (
-        np.isfinite(mass_sim)
-        & np.isfinite(mass_match)
-        & np.isfinite(mass_sim_err)
+        np.isfinite(log_mass_sim)
+        & np.isfinite(log_mass_match)
+        & np.isfinite(log_mass_sim_err)
     )
-    mass_sim = mass_sim[mask]
-    mass_sim_err = mass_sim_err[mask]
-    mass_match = mass_match[mask]
-    mass_match_err = mass_match_err[mask]
+    log_mass_sim = log_mass_sim[mask]
+    log_mass_sim_err = log_mass_sim_err[mask]
+    log_mass_match = log_mass_match[mask]
+    log_mass_match_err = log_mass_match_err[mask]
     cluster_names = cluster_names[mask]
 
-    if mass_sim.size == 0:
+    if log_mass_sim.size == 0:
         raise ValueError("All cluster entries failed the mass quality cuts.")
-
-    mass_scale = PLANCK_H
-    log_sim = np.log10(mass_sim * mass_scale)
-    err_sim = mass_sim_err / (mass_sim * LOG10)
-    log_match = np.log10(mass_match * mass_scale)
-    if field_err:
-        err_match = (
-            mass_match_err / (mass_match * LOG10)
-            if np.all(np.isfinite(mass_match_err))
-            else np.full_like(log_match, np.nan)
-        )
-    else:
-        err_match = np.full_like(log_match, np.nan)
 
     sim_label_tex = sim_label.replace("_", r"\_").replace(" ", r"\ ")
     match_label = match_attr.replace("_match", "").replace("_", r"\_")
@@ -517,14 +507,14 @@ def plot_match_mass_comparison(
     with plt.style.context("science"):
         fig, ax = plt.subplots(figsize=(5, 5))
         ax.errorbar(
-            log_sim,
-            log_match,
-            xerr=err_sim,
-            yerr=err_match if field_err else None,
+            log_mass_sim,
+            log_mass_match,
+            xerr=log_mass_sim_err,
+            yerr=log_mass_match_err if field_err else None,
             fmt="o",
             color="C0",
         )
-        anchor = (np.nanmedian(log_sim), np.nanmedian(log_match))
+        anchor = (np.nanmedian(log_mass_sim), np.nanmedian(log_mass_sim))
         ax.axline(anchor, slope=1.0, color="k", linestyle="--", label="1:1")
         ax.set_xlabel(
             r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]\ (\mathrm{"
@@ -534,7 +524,7 @@ def plot_match_mass_comparison(
             r"$\log M_{500\mathrm{c}}\,[h^{-1}M_\odot]\ (\mathrm{"
             + match_label + "})$"
         )
-        for xi, yi, name in zip(log_sim, log_match, cluster_names):
+        for xi, yi, name in zip(log_mass_sim, log_mass_match, cluster_names):
             ax.annotate(
                 name,
                 xy=(xi, yi),
@@ -543,6 +533,12 @@ def plot_match_mass_comparison(
                 fontsize=7,
             )
         ax.legend(loc="lower right")
+        xmin, xmax = ax.get_xlim()
+        ymin, ymax = ax.get_ylim()
+        lo = min(xmin, ymin)
+        hi = max(xmax, ymax)
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(lo, hi)
 
     plt.close()
     return fig, ax
