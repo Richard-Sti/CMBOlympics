@@ -178,13 +178,20 @@ def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
 
 
 def greedy_global_matching(pval_matrix, dist_matrix, associations,
-                           obs_clusters=None, threshold=0.05, verbose=True):
+                           obs_clusters=None, threshold=0.05,
+                           mass_preference_threshold=None, verbose=True):
     """
     Assign association-cluster matches using global greedy algorithm.
 
     Iteratively selects the pair with the lowest p-value, assigns the match,
     and removes both from further consideration. Continues until all pairs
     are matched or the threshold is exceeded.
+
+    When `mass_preference_threshold` is set, the algorithm prioritizes massive
+    associations among good matches: if multiple pairs have p-values below this
+    threshold, it selects the pair with the most massive association (by mean
+    log mass). If no pairs satisfy this criterion, it falls back to selecting
+    the lowest p-value pair.
 
     Parameters
     ----------
@@ -198,6 +205,10 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
         Observed clusters with a `names` attribute.
     threshold : float, optional
         Maximum p-value to accept as a match. If None, matches all pairs.
+    mass_preference_threshold : float, optional
+        When set, among pairs with p-value below this threshold, prefer the
+        association with the highest mean log mass. If None, always pick the
+        lowest p-value pair (default behavior).
     verbose : bool, optional
         If True, print matching progress and eliminated clusters.
 
@@ -214,9 +225,26 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
     matches = [None] * n_obs
     orphaned = set()
 
+    if mass_preference_threshold is not None:
+        assoc_mean_log_mass = np.array([np.mean(np.log10(assoc.masses))
+                                        for assoc in associations])
+
     while True:
-        i, j = np.unravel_index(np.argmin(pval), pval.shape)
-        i, j = int(i), int(j)
+        if mass_preference_threshold is not None:
+            good_matches = pval < mass_preference_threshold
+            if np.any(good_matches):
+                good_indices = np.where(good_matches)
+                j_candidates = good_indices[1]
+                best_mass_idx = np.argmax(assoc_mean_log_mass[j_candidates])
+                i = int(good_indices[0][best_mass_idx])
+                j = int(j_candidates[best_mass_idx])
+            else:
+                i, j = np.unravel_index(np.argmin(pval), pval.shape)
+                i, j = int(i), int(j)
+        else:
+            i, j = np.unravel_index(np.argmin(pval), pval.shape)
+            i, j = int(i), int(j)
+
         min_pval = float(pval[i, j])
 
         if threshold is not None and min_pval > threshold:

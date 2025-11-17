@@ -19,6 +19,7 @@ def match_catalogue_to_associations(
     dec_key,
     redshift_key,
     match_threshold=0.05,
+    mass_preference_threshold=None,
     cosmo_params=None,
     verbose=True,
 ):
@@ -35,6 +36,10 @@ def match_catalogue_to_associations(
         Keys selecting RA, Dec (degrees) and redshift columns.
     match_threshold : float, optional
         Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
+    mass_preference_threshold : float, optional
+        When set, prefer associations with higher mean log mass among pairs
+        with p-value below this threshold. Forwarded to
+        :func:`greedy_global_matching`.
     cosmo_params : dict, optional
         Cosmological parameters for Pfeifer matching.
     verbose : bool, optional
@@ -76,6 +81,7 @@ def match_catalogue_to_associations(
         dist_matrix,
         associations,
         threshold=match_threshold,
+        mass_preference_threshold=mass_preference_threshold,
         verbose=verbose,
     )
 
@@ -116,6 +122,7 @@ def match_planck_catalog_to_associations(
     z_max=0.05,
     msz_min=1.0e14,
     match_threshold=0.05,
+    mass_preference_threshold=None,
     cosmo_params=None,
     verbose=True,
 ):
@@ -134,6 +141,10 @@ def match_planck_catalog_to_associations(
         Minimum Planck SZ mass proxy (Msun/h) considered (default 1e14).
     match_threshold : float, optional
         Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
+    mass_preference_threshold : float, optional
+        When set, prefer associations with higher mean log mass among pairs
+        with p-value below this threshold. Forwarded to
+        :func:`match_catalogue_to_associations`.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -158,6 +169,7 @@ def match_planck_catalog_to_associations(
         dec_key="dec_deg",
         redshift_key="redshift",
         match_threshold=match_threshold,
+        mass_preference_threshold=mass_preference_threshold,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
