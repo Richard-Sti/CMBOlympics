@@ -36,6 +36,7 @@ def match_catalogue_to_associations(
     redshift_key,
     match_threshold=0.05,
     mass_preference_threshold=None,
+    use_median_mass=False,
     cosmo_params=None,
     verbose=True,
 ):
@@ -56,6 +57,9 @@ def match_catalogue_to_associations(
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Forwarded to
         :func:`greedy_global_matching`.
+    use_median_mass
+        If True, all associations use the median of mean log masses instead
+        of their own masses, giving each association equal weight.
     cosmo_params : dict, optional
         Cosmological parameters for Pfeifer matching.
     verbose : bool, optional
@@ -90,6 +94,7 @@ def match_catalogue_to_associations(
         box_size=None,
         mdef=None,
         cosmo_params=cosmo_params,
+        use_median_mass=use_median_mass,
         verbose=verbose,
     )
     matches_local = greedy_global_matching(
@@ -143,6 +148,7 @@ def match_planck_catalog_to_associations(
     m500_min=1.0e14,
     match_threshold=0.05,
     mass_preference_threshold=None,
+    use_median_mass=False,
     cosmo_params=None,
     verbose=True,
 ):
@@ -165,6 +171,9 @@ def match_planck_catalog_to_associations(
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Forwarded to
         :func:`match_catalogue_to_associations`.
+    use_median_mass
+        If True, all associations use the median of mean log masses instead
+        of their own masses, giving each association equal weight.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -190,6 +199,7 @@ def match_planck_catalog_to_associations(
         redshift_key="redshift",
         match_threshold=match_threshold,
         mass_preference_threshold=mass_preference_threshold,
+        use_median_mass=use_median_mass,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
@@ -202,6 +212,7 @@ def match_mcxc_catalog_to_associations(
     m500_min=1.0e14,
     match_threshold=0.05,
     mass_preference_threshold=None,
+    use_median_mass=False,
     cosmo_params=None,
     verbose=True,
 ):
@@ -225,6 +236,9 @@ def match_mcxc_catalog_to_associations(
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Forwarded to
         :func:`match_catalogue_to_associations`.
+    use_median_mass
+        If True, all associations use the median of mean log masses instead
+        of their own masses, giving each association equal weight.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -249,6 +263,7 @@ def match_mcxc_catalog_to_associations(
         redshift_key="Z",
         match_threshold=match_threshold,
         mass_preference_threshold=mass_preference_threshold,
+        use_median_mass=use_median_mass,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
@@ -261,6 +276,7 @@ def match_erass_catalog_to_associations(
     m500_min=1.0e14,
     match_threshold=0.05,
     mass_preference_threshold=None,
+    use_median_mass=False,
     cosmo_params=None,
     verbose=True,
 ):
@@ -283,6 +299,9 @@ def match_erass_catalog_to_associations(
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Forwarded to
         :func:`match_catalogue_to_associations`.
+    use_median_mass
+        If True, all associations use the median of mean log masses instead
+        of their own masses, giving each association equal weight.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -307,6 +326,7 @@ def match_erass_catalog_to_associations(
         redshift_key="BEST_Z",
         match_threshold=match_threshold,
         mass_preference_threshold=mass_preference_threshold,
+        use_median_mass=use_median_mass,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
