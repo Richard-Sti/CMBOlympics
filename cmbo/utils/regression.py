@@ -185,6 +185,108 @@ class LinearRoxyFitter:
         else:
             print("Warning: NumPyro samples not found in result object.")
 
+    def get_slope_intercept_significance(self, point):
+        """
+        Compute the significance level at which a point is consistent
+        with the 2D Gaussian posterior of slope and intercept.
+
+        Parameters
+        ----------
+        point : array-like
+            The point to test, as [slope, intercept].
+
+        Returns
+        -------
+        pval : float
+            The p-value.
+        sigma : float
+            The significance level in terms of Gaussian sigma.
+        """
+        try:
+            from scipy.stats import chi2, norm
+        except ImportError as e:
+            raise ImportError(
+                "scipy is required for get_slope_intercept_significance. "
+                "Install it with: pip install scipy"
+            ) from e
+
+        if self._result is None:
+            raise ValueError("Must call fit() first")
+
+        samples_dict = self._result
+
+        if 'slope' not in samples_dict or 'intercept' not in samples_dict:
+            raise ValueError("Slope or intercept not found in MCMC samples.")
+
+        slope_samples = samples_dict['slope']
+        intercept_samples = samples_dict['intercept']
+
+        samples = np.vstack([slope_samples, intercept_samples]).T
+
+        # Compute mean and covariance
+        mean = np.mean(samples, axis=0)
+        cov = np.cov(samples, rowvar=False)
+        inv_cov = np.linalg.inv(cov)
+
+        # Calculate Mahalanobis distance squared
+        delta = np.array(point) - mean
+        mahal_dist_sq = delta @ inv_cov @ delta
+
+        # Calculate p-value from chi-squared distribution with 2 dof
+        pval = 1 - chi2.cdf(mahal_dist_sq, df=2)
+
+        # Convert p-value to sigma
+        sigma = norm.ppf(1 - pval / 2)
+
+        return pval, sigma
+
+    def get_slope_significance(self, slope_value):
+        """
+        Compute the significance level at which a slope value is
+        consistent with the 1D Gaussian posterior of the slope.
+
+        Parameters
+        ----------
+        slope_value : float
+            The slope value to test.
+
+        Returns
+        -------
+        pval : float
+            The two-sided p-value.
+        sigma : float
+            The significance level in terms of Gaussian sigma.
+        """
+        try:
+            from scipy.stats import norm
+        except ImportError as e:
+            raise ImportError(
+                "scipy is required for get_slope_significance. "
+                "Install it with: pip install scipy"
+            ) from e
+
+        if self._result is None:
+            raise ValueError("Must call fit() first")
+
+        samples_dict = self._result
+
+        if 'slope' not in samples_dict:
+            raise ValueError("Slope not found in MCMC samples.")
+
+        slope_samples = samples_dict['slope']
+
+        # Compute mean and standard deviation
+        mean_slope = np.mean(slope_samples)
+        std_slope = np.std(slope_samples)
+
+        # Calculate how many sigmas away the point is
+        sigma = np.abs(slope_value - mean_slope) / std_slope
+
+        # Calculate two-sided p-value
+        pval = 2 * (1 - norm.cdf(sigma))
+
+        return pval, sigma
+
     def plot_corner(self, truths=None, quantiles=[0.16, 0.5, 0.84],
                     show_titles=True, title_fmt='.2f', **kwargs):
         """
