@@ -398,7 +398,7 @@ class LinearPPTxtrue:
         self.n_calib_samples = len(self.calib_samples['slope'])
 
     def _model(self, x_obs, y_obs, x_err, y_err, x_true_prior_range):
-        with plate("xtrue_plate", x_obs.shape[0]):
+        with plate("xtrue_plate", len(x_obs)):
             xtrue = sample("xtrue", dist.Uniform(*x_true_prior_range))
 
         # Log-density of the shape (nsamples, ncalibration_samples)
@@ -410,17 +410,18 @@ class LinearPPTxtrue:
             xtrue[:, None], x_err[:, None]).log_prob(x_obs[:, None])
 
         # Given xtrue, computes the ytrue
-        y_true = (self.calib_samples["slope"][None, :] * xtrue[:, None]
-                  + self.calib_samples["intercept"][None, :])
+        ypred = (self.calib_samples["slope"][None, :] * xtrue[:, None]
+                 + self.calib_samples["intercept"][None, :])
 
         log_density += dist.Normal(
-            y_true,
+            ypred,
             jnp.sqrt(
                 y_err[:, None]**2 + self.calib_samples["sig"][None, :]**2)
             ).log_prob(y_obs[:, None])
 
         log_density = logsumexp(
             log_density, axis=-1) - jnp.log(self.n_calib_samples)
+
         factor("log_density", log_density)
 
     def sample(self, x_obs, y_obs, x_err, y_err,
@@ -451,8 +452,11 @@ class LinearPPTxtrue:
         -------
         mcmc_samples : dict
             A dictionary containing the MCMC samples for the parameters in
-            the model (e.g., 'xtrue'). It also includes the calculated
-            'discrepancy_sigma' and 'discrepancy_pval' for each observation.
+            the model (e.g., 'xtrue'). It also includes:
+            - 'xtrue_discrepancy_sigma': discrepancy between xtrue posterior
+              and x_obs.
+            - 'ytrue_discrepancy_sigma': discrepancy between y_obs and the
+              predicted y from median xtrue, slope, and intercept.
         """
         kernel = NUTS(self._model)
         mcmc = MCMC(
@@ -471,57 +475,71 @@ class LinearPPTxtrue:
 
         mcmc_samples = mcmc.get_samples()
 
-        # Calculate discrepancy for all observations at once
-        sigma = self.compute_xtrue_discrepancy(
+        # Calculate xtrue discrepancy
+        xtrue_sigma = self.compute_x_discrepancy(
             mcmc_samples['xtrue'], x_obs_pivoted, x_err)
+        mcmc_samples['xtrue_discrepancy_sigma'] = xtrue_sigma
 
-        mcmc_samples['x_discrepancy_sigma'] = sigma
+        # Calculate ytrue discrepancy
+        ytrue_sigma = self.compute_y_discrepancy(
+            mcmc_samples['xtrue'], y_obs_pivoted, y_err)
+        mcmc_samples['ytrue_discrepancy_sigma'] = ytrue_sigma
 
         return mcmc_samples
 
-    @staticmethod
-    def compute_xtrue_discrepancy(xtrue_samples, x_obs, x_err):
+    def compute_x_discrepancy(self, xtrue_samples, x_obs, x_err):
         """
-        Computes the discrepancy between the posterior distribution of xtrue
-        and observed x values, accounting for measurement error.
-
-        This method is vectorized to handle multiple observations at once.
+        Computes the discrepancy between xtrue posterior and x_obs,
+        averaged over MCMC samples.
 
         Parameters
         ----------
         xtrue_samples : ndarray
-            MCMC samples for the true x value (xtrue).
-            Shape: (num_samples, num_observations) or (num_samples,) for a
-            single observation.
-        x_obs : ndarray or float
-            The observed x values for each object.
-        x_err : ndarray or float
-            The measurement error (standard deviation) on x_obs.
+            MCMC samples for xtrue. Shape: (n_samples, n_obs).
+        x_obs : ndarray
+            Observed x values. Shape: (n_obs,).
+        x_err : ndarray
+            Measurement errors on x_obs. Shape: (n_obs,).
 
         Returns
         -------
-        sigma : ndarray
-            The significance of the discrepancy in terms of Gaussian sigma.
+        stat : ndarray
+            Averaged discrepancy in units of sigma. Shape: (n_obs,).
         """
-        # Ensure inputs are arrays to handle single observation case
-        x_obs = np.atleast_1d(x_obs)
-        x_err = np.atleast_1d(x_err)
-        if xtrue_samples.ndim == 1:
-            xtrue_samples = xtrue_samples[:, np.newaxis]
+        # (n_samples, n_obs)
+        stat = (xtrue_samples - x_obs[None, :]) / x_err[None, :]
+        # Average over MCMC samples
+        stat = np.abs(np.mean(stat, axis=0))
+        return stat
 
-        # Mean and variance of the xtrue posterior distribution
-        mean_xtrue = np.mean(xtrue_samples, axis=0)
-        var_xtrue = np.var(xtrue_samples, axis=0)
+    def compute_y_discrepancy(self, xtrue_samples, y_obs, y_err):
+        """
+        Computes the discrepancy between y_obs and predicted y from xtrue,
+        averaged over MCMC samples and calibration samples.
 
-        # The variance of the posterior predictive distribution for x_obs is
-        # the sum of the variance of the xtrue posterior and the measurement
-        # variance.
-        total_var = var_xtrue + x_err**2
-        total_std = np.sqrt(total_var)
+        Parameters
+        ----------
+        xtrue_samples : ndarray
+            MCMC samples for xtrue. Shape: (n_samples, n_obs).
+        y_obs : ndarray
+            Observed y values. Shape: (n_obs,).
+        y_err : ndarray
+            Measurement errors on y_obs. Shape: (n_obs,).
 
-        # The mean of the posterior predictive distribution is the mean of
-        # xtrue.
-        mean_pred = mean_xtrue
+        Returns
+        -------
+        stat : ndarray
+            Averaged discrepancy in units of sigma. Shape: (n_obs,).
+        """
+        # (n_samples, n_obs, n_calib_samples)
+        y_pred = (self.calib_samples["slope"][None, None, :]
+                  * xtrue_samples[:, :, None]
+                  + self.calib_samples["intercept"][None, None, :])
 
-        # Calculate the significance (sigma)
-        return np.abs(x_obs - mean_pred) / total_std
+        stat = ((y_pred - y_obs[None, :, None])
+                / np.sqrt(y_err[None, :, None]**2
+                          + self.calib_samples["sig"][None, None, :]**2))
+
+        # Average over MCMC samples (axis 0) and calibration samples (axis 2)
+        stat = np.abs(np.mean(stat, axis=(0, 2)))
+        return stat
