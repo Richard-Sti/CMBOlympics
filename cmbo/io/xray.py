@@ -118,7 +118,7 @@ def load_mcxc_catalogue(fname="data/MCXCII_2024.fits", verbose=True):
 
 
 def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
-                         verbose=True):
+                         verbose=True, max_m500=3e15):
     """
     Load the eRASS1 cluster catalogue into a NumPy structured array.
 
@@ -132,6 +132,9 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
         FITS file containing the eRASS1 catalogue.
     verbose : bool, optional
         If True, print how many invalid rows were removed.
+    max_m500 : float, optional
+        Maximum M500 threshold in units of Msol. Clusters above
+        this threshold will be removed.
 
     Returns
     -------
@@ -165,6 +168,17 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
 
     erass_fields = ("M500", "M500_L", "M500_H", "eM500")
     _scale_fields(data, erass_fields, 1.0e13)
+
+    if max_m500 is not None and "M500" in data.dtype.names:
+        mask = data["M500"] <= max_m500
+        if verbose:
+            removed = int(np.count_nonzero(~mask))
+            if removed:
+                print(
+                    f"Removing {removed} eRASS entries with M500 > "
+                    f"{max_m500:.2e} Msol."
+                )
+        data = data[mask]
 
     return data
 
