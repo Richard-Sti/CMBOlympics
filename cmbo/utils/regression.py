@@ -18,10 +18,10 @@ import jax.numpy as jnp
 import numpy as np
 import numpyro.distributions as dist
 from jax import random
-from matplotlib import pyplot as plt
-from numpyro.infer import MCMC, NUTS
-from numpyro import plate, sample, factor
 from jax.scipy.special import logsumexp
+from matplotlib import pyplot as plt
+from numpyro import factor, plate, sample
+from numpyro.infer import MCMC, NUTS
 
 
 class LinearRoxyFitter:
@@ -363,7 +363,14 @@ class LinearRoxyFitter:
 
 class LinearPPTxtrue:
     """
-    Samples true values for a single observation given a previous roxy fit.
+    Samples true values (x_true, y_true) for a single observation,
+    given a previous Bayesian linear regression fit performed by roxy.
+
+    This class uses the posterior samples from a roxy fit (which includes
+    slope, intercept, intrinsic scatter, and parameters for the true x
+    distribution) to infer the true underlying x and y values for new
+    observations. It accounts for errors in both observed x and y,
+    and handles the pivoting of observed data as performed by roxy.
     """
 
     def __init__(self, posterior_samples):
@@ -399,7 +406,8 @@ class LinearPPTxtrue:
             self.calib_samples["mu_gauss"][None, :],
             self.calib_samples["w_gauss"][None, :]).log_prob(xtrue[:, None])
 
-        log_density += dist.Normal(xtrue[:, None], x_err[:, None]).log_prob(x_obs[:, None])
+        log_density += dist.Normal(
+            xtrue[:, None], x_err[:, None]).log_prob(x_obs[:, None])
 
         # Given xtrue, computes the ytrue
         y_true = (self.calib_samples["slope"][None, :] * xtrue[:, None]
@@ -409,7 +417,7 @@ class LinearPPTxtrue:
             y_true,
             jnp.sqrt(
                 y_err[:, None]**2 + self.calib_samples["sig"][None, :]**2)
-            ).log_prob(y_obs)[:, None]
+            ).log_prob(y_obs[:, None])
 
         log_density = logsumexp(
             log_density, axis=-1) - jnp.log(self.n_calib_samples)
@@ -417,14 +425,15 @@ class LinearPPTxtrue:
 
     def sample(self, x_obs, y_obs, x_err, y_err,
                x_true_prior_range=(-10, 10),
-               n_warmup=500, n_samples=1000, seed=0):
+               n_warmup=500, n_samples=1000, seed=0,
+               x_pivot=0.0, y_pivot=0.0):
         """
-        Sample from the posterior of true values for a single observation.
+        Sample from the posterior of true values for each observation.
 
         Parameters
         ----------
-        x_obs, y_obs, x_err, y_err : float
-            The observed values and their errors for a single data point.
+        x_obs, y_obs, x_err, y_err : array-like
+            The observed values and their errors for each data point.
         x_true_prior_range : tuple, optional
             The range [low, high] for the uniform prior on x_true.
         n_warmup : int, optional
@@ -433,11 +442,17 @@ class LinearPPTxtrue:
             Number of samples to draw.
         seed : int, optional
             Random seed for numpyro's PRNG.
+        x_pivot : float
+            Pivot point for x normalization.
+        y_pivot : float
+            Pivot point for y normalization.
 
         Returns
         -------
-        x_true_samples, y_true_samples : tuple of ndarray
-            Samples from the posterior distribution of x_true and y_true.
+        mcmc_samples : dict
+            A dictionary containing the MCMC samples for the parameters in
+            the model (e.g., 'xtrue'). It also includes the calculated
+            'discrepancy_sigma' and 'discrepancy_pval' for each observation.
         """
         kernel = NUTS(self._model)
         mcmc = MCMC(
@@ -447,10 +462,66 @@ class LinearPPTxtrue:
         )
 
         key = random.PRNGKey(seed)
-        mcmc.run(key, x_obs, y_obs, x_err, y_err, x_true_prior_range)
+        # Apply pivoting here
+        x_obs_pivoted = x_obs - x_pivot
+        y_obs_pivoted = y_obs - y_pivot
+
+        mcmc.run(key, x_obs_pivoted, y_obs_pivoted, x_err, y_err,
+                 x_true_prior_range)
 
         mcmc_samples = mcmc.get_samples()
 
+        # Calculate discrepancy for all observations at once
+        sigma = self.compute_xtrue_discrepancy(
+            mcmc_samples['xtrue'], x_obs_pivoted, x_err)
+
+        mcmc_samples['x_discrepancy_sigma'] = sigma
+
         return mcmc_samples
 
+    @staticmethod
+    def compute_xtrue_discrepancy(xtrue_samples, x_obs, x_err):
+        """
+        Computes the discrepancy between the posterior distribution of xtrue
+        and observed x values, accounting for measurement error.
 
+        This method is vectorized to handle multiple observations at once.
+
+        Parameters
+        ----------
+        xtrue_samples : ndarray
+            MCMC samples for the true x value (xtrue).
+            Shape: (num_samples, num_observations) or (num_samples,) for a
+            single observation.
+        x_obs : ndarray or float
+            The observed x values for each object.
+        x_err : ndarray or float
+            The measurement error (standard deviation) on x_obs.
+
+        Returns
+        -------
+        sigma : ndarray
+            The significance of the discrepancy in terms of Gaussian sigma.
+        """
+        # Ensure inputs are arrays to handle single observation case
+        x_obs = np.atleast_1d(x_obs)
+        x_err = np.atleast_1d(x_err)
+        if xtrue_samples.ndim == 1:
+            xtrue_samples = xtrue_samples[:, np.newaxis]
+
+        # Mean and variance of the xtrue posterior distribution
+        mean_xtrue = np.mean(xtrue_samples, axis=0)
+        var_xtrue = np.var(xtrue_samples, axis=0)
+
+        # The variance of the posterior predictive distribution for x_obs is
+        # the sum of the variance of the xtrue posterior and the measurement
+        # variance.
+        total_var = var_xtrue + x_err**2
+        total_std = np.sqrt(total_var)
+
+        # The mean of the posterior predictive distribution is the mean of
+        # xtrue.
+        mean_pred = mean_xtrue
+
+        # Calculate the significance (sigma)
+        return np.abs(x_obs - mean_pred) / total_std
