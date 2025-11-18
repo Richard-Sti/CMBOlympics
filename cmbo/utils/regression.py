@@ -153,13 +153,6 @@ class LinearRoxyFitter:
 
         return y_pred
 
-    @property
-    def chain(self):
-        """MCMC chain."""
-        if self._result is None:
-            raise ValueError("Must call fit() first")
-        return self._result['chain']
-
     def print_summary(self, prob=0.95):
         """
         Print NumPyro MCMC summary statistics.
