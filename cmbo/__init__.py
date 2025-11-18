@@ -18,6 +18,7 @@ __version__ = "0.1.0"
 from cmbo import (                                                              # noqa
     corr,                                                                       # noqa
     io,                                                                         # noqa
+    match,                                                                      # noqa
     projection,                                                                 # noqa
     utils,                                                                      # noqa
     )                                                                           # noqa
