@@ -140,14 +140,14 @@ def match_planck_catalog_to_associations(
     data_tsz,
     associations,
     z_max=0.05,
-    msz_min=1.0e14,
+    m500_min=1.0e14,
     match_threshold=0.05,
     mass_preference_threshold=None,
     cosmo_params=None,
     verbose=True,
 ):
     """
-    Match a Planck tSZ catalogue to halo associations (z/Msz cuts applied).
+    Match a Planck tSZ catalogue to halo associations (z/M500 cuts applied).
 
     Parameters
     ----------
@@ -157,8 +157,8 @@ def match_planck_catalog_to_associations(
         Associations returned by :func:`cmbo.match.load_associations`.
     z_max : float, optional
         Maximum redshift passed to the matcher (default 0.05).
-    msz_min : float, optional
-        Minimum Planck SZ mass proxy (Msun/h) considered (default 1e14).
+    m500_min : float, optional
+        Minimum Planck M500 mass (Msun/h) considered (default 1e14).
     match_threshold : float, optional
         Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
     mass_preference_threshold : float, optional
@@ -177,17 +177,134 @@ def match_planck_catalog_to_associations(
     """
 
     redshift = np.asarray(data_tsz["redshift"], dtype=float)
-    msz = np.asarray(data_tsz["msz"], dtype=float)
-    selection = (redshift < z_max) & (msz > msz_min)
+    m500 = np.asarray(data_tsz["M500"], dtype=float)
+    selection = (redshift < z_max) & (m500 > m500_min)
 
     filtered_data = mask_structured_array(data_tsz, selection)
 
     return match_catalogue_to_associations(
         filtered_data,
         associations,
-        ra_key="ra_deg",
-        dec_key="dec_deg",
+        ra_key="RA",
+        dec_key="DEC",
         redshift_key="redshift",
+        match_threshold=match_threshold,
+        mass_preference_threshold=mass_preference_threshold,
+        cosmo_params=cosmo_params,
+        verbose=verbose,
+    )
+
+
+def match_mcxc_catalog_to_associations(
+    data_mcxc,
+    associations,
+    z_max=0.05,
+    m500_min=1.0e14,
+    match_threshold=0.05,
+    mass_preference_threshold=None,
+    cosmo_params=None,
+    verbose=True,
+):
+    """
+    Match an MCXC-II X-ray catalogue to halo associations (z/M500 cuts
+    applied).
+
+    Parameters
+    ----------
+    data_mcxc : mapping
+        Output of :func:`cmbo.io.load_mcxc_catalogue`.
+    associations : sequence
+        Associations returned by :func:`cmbo.match.load_associations`.
+    z_max : float, optional
+        Maximum redshift passed to the matcher (default 0.05).
+    m500_min : float, optional
+        Minimum MCXC M500 mass (Msun/h) considered (default 1e14).
+    match_threshold : float, optional
+        Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
+    mass_preference_threshold : float, optional
+        When set, prefer associations with higher mean log mass among pairs
+        with p-value below this threshold. Forwarded to
+        :func:`match_catalogue_to_associations`.
+    cosmo_params : dict, optional
+        Cosmological parameters forwarded to the matcher.
+    verbose : bool, optional
+        If True, print diagnostic information.
+
+    Returns
+    -------
+    matched_catalogue, matched_associations, pvals, distances :
+        See :func:`match_catalogue_to_associations`.
+    """
+    redshift = np.asarray(data_mcxc["Z"], dtype=float)
+    m500 = np.asarray(data_mcxc["M500"], dtype=float)
+    selection = (redshift < z_max) & (m500 > m500_min)
+
+    filtered_data = mask_structured_array(data_mcxc, selection)
+
+    return match_catalogue_to_associations(
+        filtered_data,
+        associations,
+        ra_key="RA",
+        dec_key="DEC",
+        redshift_key="Z",
+        match_threshold=match_threshold,
+        mass_preference_threshold=mass_preference_threshold,
+        cosmo_params=cosmo_params,
+        verbose=verbose,
+    )
+
+
+def match_erass_catalog_to_associations(
+    data_erass,
+    associations,
+    z_max=0.05,
+    m500_min=1.0e14,
+    match_threshold=0.05,
+    mass_preference_threshold=None,
+    cosmo_params=None,
+    verbose=True,
+):
+    """
+    Match an eRASS X-ray catalogue to halo associations (z/M500 cuts applied).
+
+    Parameters
+    ----------
+    data_erass : mapping
+        Output of :func:`cmbo.io.load_erass_catalogue`.
+    associations : sequence
+        Associations returned by :func:`cmbo.match.load_associations`.
+    z_max : float, optional
+        Maximum redshift passed to the matcher (default 0.05).
+    m500_min : float, optional
+        Minimum eRASS M500 mass (Msun/h) considered (default 1e14).
+    match_threshold : float, optional
+        Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
+    mass_preference_threshold : float, optional
+        When set, prefer associations with higher mean log mass among pairs
+        with p-value below this threshold. Forwarded to
+        :func:`match_catalogue_to_associations`.
+    cosmo_params : dict, optional
+        Cosmological parameters forwarded to the matcher.
+    verbose : bool, optional
+        If True, print diagnostic information.
+
+    Returns
+    -------
+    matched_catalogue, matched_associations, pvals, distances :
+        See :func:`match_catalogue_to_associations`.
+    """
+    redshift = np.asarray(data_erass["BEST_Z"], dtype=float)
+    m500 = np.asarray(data_erass["M500"], dtype=float)
+    selection = (redshift < z_max) & (m500 > m500_min)
+
+    filtered_data = mask_structured_array(data_erass, selection)
+
+    return match_catalogue_to_associations(
+        filtered_data,
+        associations,
+        ra_key="RA",
+        dec_key="DEC",
+        redshift_key="BEST_Z",
         match_threshold=match_threshold,
         mass_preference_threshold=mass_preference_threshold,
         cosmo_params=cosmo_params,
