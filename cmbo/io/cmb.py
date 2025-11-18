@@ -15,7 +15,12 @@
 """Various CMB readers."""
 
 from astropy.io import fits
+from astropy.cosmology import FlatLambdaCDM
 import numpy as np
+
+from ..utils import E_z
+
+ARCMIN2_TO_SR = (np.pi / (180.0 * 60.0))**2
 
 
 def read_Planck_comptonSZ(fname, which="FULL"):
@@ -35,13 +40,22 @@ def read_Planck_comptonSZ(fname, which="FULL"):
     return np.asarray(column, dtype=np.float32)
 
 
-def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
+def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION", Om=0.306,
+                                verbose=True):
     """
     Load the Planck PSZ2 union cluster catalogue.
+
+    Filters out clusters with invalid redshifts (z <= 0 or NaN).
 
     Returns M500 (from MSZ field, scaled by 1e14) and eM500 (symmetric error
     computed from MSZ_ERR_UP and MSZ_ERR_LOW). Coordinates are stored in
     'RA' and 'DEC' fields (in degrees).
+
+    Converts Y5R500 to physical units:
+    - 'Y500': physical integrated Compton-y parameter
+    - 'eY500': error on Y500
+    - 'Y500_scaled': Y500 scaled by E(z)^(-2/3)
+    - 'eY500_scaled': error on Y500_scaled
 
     Parameters
     ----------
@@ -49,14 +63,30 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
         Path to the Planck PSZ2 union FITS catalogue.
     extname
         Name of the binary table extension containing the catalogue.
+    Om : float, optional
+        Matter density parameter for flat LCDM cosmology (default: 0.306).
+    verbose : bool, optional
+        If True, print diagnostic information about removed entries.
 
     Returns
     -------
     dict
         Dictionary with key astrophysical quantities for each cluster.
-        Coordinates in 'RA'/'DEC', mass in 'M500', error in 'eM500'.
+        Only clusters with valid redshifts (z > 0) are included.
+        Coordinates in 'RA'/'DEC', mass in 'M500', error in 'eM500',
+        physical Y500 parameters.
     """
     table = fits.getdata(fname, extname=extname)
+
+    # Filter out clusters with invalid redshifts
+    redshift_raw = np.asarray(table["REDSHIFT"], dtype=float)
+    valid_z = np.isfinite(redshift_raw) & (redshift_raw > 0)
+    if verbose:
+        removed = int(np.count_nonzero(~valid_z))
+        if removed:
+            print(f"Removing {removed} Planck clusters with invalid "
+                  "redshifts (z <= 0 or NaN).")
+    table = table[valid_z]
 
     def _as_float(col, dtype=np.float64):
         return np.asarray(table[col], dtype=dtype)
@@ -100,4 +130,33 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
     }
 
     catalog["eM500"] = 0.5 * (msz_err_up + msz_err_low)
+
+    # Convert Y5R500 to physical units (all redshifts are valid at this point)
+    y5r500_arcmin2 = catalog["y5r500"]
+    y5r500_err_arcmin2 = catalog["y5r500_err"]
+    z = catalog["redshift"]
+
+    # Convert Y5R500 to Y500 using spherical profile assumption
+    y_arcmin2 = y5r500_arcmin2 / 1.81 * 1e-3
+    y_err_arcmin2 = y5r500_err_arcmin2 / 1.81 * 1e-3
+
+    # Use FlatLambdaCDM cosmology with h=1
+    cosmo = FlatLambdaCDM(H0=100.0, Om0=Om)
+    da_mpc = cosmo.angular_diameter_distance(z).value
+
+    # Convert to physical units
+    conversion = ARCMIN2_TO_SR * (da_mpc**2)
+    y_phys = y_arcmin2 * conversion
+    y_phys_err = y_err_arcmin2 * conversion
+
+    # Apply E(z) scaling
+    Ez_factor = E_z(z, Om)**(-2.0 / 3.0)
+    y_scaled = y_phys * Ez_factor
+    y_scaled_err = y_phys_err * Ez_factor
+
+    catalog["Y500"] = y_phys
+    catalog["eY500"] = y_phys_err
+    catalog["Y500_scaled"] = y_scaled
+    catalog["eY500_scaled"] = y_scaled_err
+
     return catalog
