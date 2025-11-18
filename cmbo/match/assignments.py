@@ -21,6 +21,7 @@ import numpy as np
 
 from ..constants import SPEED_OF_LIGHT_KMS
 from ..utils.arrays import mask_structured_array
+from ..utils.associations import HaloAssociationList
 from ..utils.logging import fprint
 from ..utils.coords import cz_to_comoving_distance, radec_to_cartesian
 from .cluster_matching import (compute_matching_matrix_cartesian,
@@ -64,8 +65,8 @@ def match_catalogue_to_associations(
     -------
     matched_catalogue : structured ndarray
         Catalogue containing only successfully matched entries.
-    association_indices : ndarray
-        Index of the matched association for each entry.
+    matched_associations : HaloAssociationList
+        List of matched associations (same length as matched_catalogue).
     pvals : ndarray
         Pfeifer p-values for each match.
     distances : ndarray
@@ -126,8 +127,12 @@ def match_catalogue_to_associations(
                f"({100*n_matched/len(ra):.1f}%)")
 
     filtered_catalogue = mask_structured_array(catalogue, matched_mask)
+    matched_assoc_indices = assoc_indices[matched_mask]
+    matched_associations = HaloAssociationList(
+        [associations[i] for i in matched_assoc_indices]
+    )
 
-    return (filtered_catalogue, assoc_indices[matched_mask],
+    return (filtered_catalogue, matched_associations,
             pvals[matched_mask], distances[matched_mask])
 
 
@@ -167,7 +172,7 @@ def match_planck_catalog_to_associations(
 
     Returns
     -------
-    matched_catalogue, association_indices, pvals, distances :
+    matched_catalogue, matched_associations, pvals, distances :
         See :func:`match_catalogue_to_associations`.
     """
 

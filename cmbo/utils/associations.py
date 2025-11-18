@@ -276,6 +276,25 @@ class HaloAssociation:
         self.halo_pvals = halo_pvals
 
 
+class HaloAssociationList(list):
+    """
+    List-like container for HaloAssociation objects with convenience methods.
+
+    Behaves like a regular list but provides properties for computing
+    statistics across all associations.
+    """
+
+    @property
+    def mean_log_mass(self):
+        """Mean log mass for each association."""
+        return np.array([np.log10(assoc.masses).mean() for assoc in self])
+
+    @property
+    def std_log_mass(self):
+        """Standard deviation of log mass for each association."""
+        return np.array([np.log10(assoc.masses).std() for assoc in self])
+
+
 def compute_association_signals(associations, profiler, obs_pos,
                                 theta_rand, map_rand,
                                 r_key="Group_R_Crit500",
@@ -338,8 +357,8 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
 
     Returns
     -------
-    list[HaloAssociation]
-        List of surviving associations sorted by cluster label.
+    HaloAssociationList
+        List-like container of surviving associations sorted by cluster label.
     """
 
     if len(positions) != len(masses):
@@ -375,7 +394,7 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
 
     counts = [pos.shape[0] for pos in pos_arrays]
     if not counts or sum(counts) == 0:
-        return []
+        return HaloAssociationList()
 
     real_ids = np.concatenate(
         [np.full(count, idx, dtype=int) for idx, count in enumerate(counts)]
@@ -394,7 +413,7 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
     finite_mask = np.isfinite(all_masses).astype(bool)
     finite_mask &= np.all(np.isfinite(all_positions), axis=1)
     if not np.any(finite_mask):
-        return []
+        return HaloAssociationList()
 
     all_positions = all_positions[finite_mask]
     all_masses = all_masses[finite_mask]
@@ -487,4 +506,4 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
             )
         )
 
-    return associations
+    return HaloAssociationList(associations)
