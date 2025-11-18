@@ -1,6 +1,9 @@
 """Utilities for identifying halo associations across realisations."""
 
 from dataclasses import dataclass, field
+from pathlib import Path
+import re
+import h5py
 import numpy as np
 import astropy.units as u
 from astropy.cosmology import z_at_value, FlatLambdaCDM
@@ -507,3 +510,374 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         )
 
     return HaloAssociationList(associations)
+
+
+def _infer_mass_definition(mass_key):
+    """Infer mass definition (e.g. 500c) from a halo mass key."""
+    key = mass_key.lower()
+    match = re.search(r"m\s*(\d+)([cm])", key)
+    if match:
+        if match.group(1) not in ("200", "500"):
+            raise ValueError(
+                f"Unsupported mass scale '{match.group(1)}' in '{mass_key}'.")
+        if match.group(2) != "c":
+            raise ValueError(f"Mass definition must be 'c' (critical), got '{match.group(2)}'.")
+        return f"{match.group(1)}c"
+    match = re.search(r"(crit|mean)\s*(\d+)", key)
+    if match:
+        if match.group(2) not in ("200", "500"):
+            raise ValueError(f"Unsupported mass scale '{match.group(2)}' in '{mass_key}'.")
+        if match.group(1) != "crit":
+            raise ValueError(
+                f"Mass definition must be critical, got '{match.group(1)}'.")
+        return f"{match.group(2)}c"
+    raise ValueError(
+        f"Cannot infer mass definition from mass key '{mass_key}'. "
+        "Expected patterns like 'M200c' or 'Group_M_Crit500'."
+    )
+
+
+def _load_simulation_halos(cfg, sim_key):
+    """Return filtered halo data across all realisations."""
+    import cmbo
+
+    try:
+        catalogue_cfg = cfg["halo_catalogues"][sim_key]
+    except KeyError as exc:
+        raise ValueError(
+            f"Simulation '{sim_key}' not defined in config."
+        ) from exc
+
+    fname = catalogue_cfg["fname"]
+    position_key = catalogue_cfg["position_key"]
+    mass_key = catalogue_cfg["mass_key"]
+    radius_key = catalogue_cfg["radius_key"]
+    box_size = float(catalogue_cfg["box_size"])
+    centre = np.array(catalogue_cfg.get(
+        "observer_position",
+        [box_size / 2.0, box_size / 2.0, box_size / 2.0],
+    ), dtype=float)
+    if centre.shape != (3,):
+        raise ValueError("observer_position must be a 3-element sequence.")
+
+    sim_ids = cmbo.io.list_simulations_hdf5(fname)
+    if not sim_ids:
+        raise ValueError(f"No simulations found in {fname}.")
+
+    mass_floor = cfg["halo_catalogues"].get(
+        "min_association_mass", 0.0
+    )
+    positions_all = []
+    masses_all = []
+    r500_all = []
+    theta_all = []
+    selection_all = []
+    catalogue_sizes = []
+    theta_catalogues = []
+    sim_ids_kept = []
+
+    for sim_id in sim_ids:
+        reader = cmbo.io.SimulationHaloReader(fname, sim_id)
+        pos = np.asarray(reader[position_key], dtype=float)
+        mass = np.asarray(reader[mass_key], dtype=float)
+        r500 = np.asarray(reader[radius_key], dtype=float)
+        indices = np.arange(pos.shape[0], dtype=int)
+
+        r, ell, b = cartesian_icrs_to_galactic_spherical(pos, centre)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.divide(r500, r, out=np.zeros_like(r500), where=r > 0)
+            theta_arcmin = np.rad2deg(np.arctan(ratio)) * 60.0
+
+        mask = np.isfinite(mass)
+        mask &= mass > 0
+        mask &= np.isfinite(r)
+        mask &= np.isfinite(theta_arcmin)
+        mask &= mass >= mass_floor
+
+        if not np.any(mask):
+            continue
+
+        positions_all.append(pos[mask])
+        masses_all.append(mass[mask])
+        r500_all.append(r500[mask])
+        theta_masked = theta_arcmin[mask]
+        theta_all.append(theta_masked)
+        selection_all.append(indices[mask])
+        catalogue_sizes.append(pos.shape[0])
+        theta_catalogues.append(theta_arcmin)
+        sim_ids_kept.append(str(sim_id))
+
+    if not positions_all:
+        raise ValueError(
+            "No haloes survive the selection cuts across any simulation."
+        )
+
+    mass_definition = _infer_mass_definition(mass_key)
+
+    data = {
+        "positions": positions_all,
+        "masses": masses_all,
+        "r500": r500_all,
+        "theta_arcmin": theta_all,
+        "selection_indices": selection_all,
+        "sim_ids": sim_ids_kept,
+        "catalogue_sizes": catalogue_sizes,
+        "theta_catalogues": theta_catalogues,
+        "box_size": box_size,
+        "centre": centre,
+        "mass_definition": mass_definition,
+    }
+    return data
+
+
+def _results_path(cfg, sim_key):
+    analysis_cfg = cfg["analysis"]
+    output_dir = Path(analysis_cfg.get("output_folder", "."))
+    tag = analysis_cfg.get("output_tag")
+    stem = sim_key if not tag else f"{sim_key}_{tag}"
+    return (output_dir / f"{stem}.hdf5").resolve()
+
+
+def _load_original_order_dataset(
+    results_path,
+    sim_ids,
+    catalogue_sizes,
+    dataset_names,
+    required=True,
+):
+    results_path = Path(results_path)
+    if not results_path.exists():
+        raise FileNotFoundError(
+            f"Results file '{results_path}' not found. "
+            "Run scripts/run_suite.py first."
+        )
+
+    if len(sim_ids) != len(catalogue_sizes):
+        raise ValueError(
+            "sim_ids and catalogue_sizes must have the same length."
+        )
+
+    if isinstance(dataset_names, str):
+        dataset_names = (dataset_names,)
+    elif not dataset_names:
+        raise ValueError("dataset_names must not be empty.")
+
+    lookups = {}
+    with h5py.File(results_path, "r") as h5:
+        for sim_id, n_obj in zip(sim_ids, catalogue_sizes):
+            sim_id = str(sim_id)
+            if sim_id not in h5:
+                raise KeyError(
+                    f"Simulation group '{sim_id}' missing from {results_path}."
+                )
+            halos = h5[sim_id]["halos"]
+            try:
+                catalogue_idx = np.asarray(
+                    halos["catalogue_index_original"][...],
+                    dtype=int,
+                )
+            except KeyError as exc:
+                raise KeyError(
+                    "Result file missing 'catalogue_index_original' dataset."
+                ) from exc
+
+            dataset = None
+            dataset_name = None
+            for candidate in dataset_names:
+                if candidate in halos:
+                    dataset = np.asarray(halos[candidate][...], dtype=float)
+                    dataset_name = candidate
+                    break
+            if dataset is None:
+                if required:
+                    raise KeyError(
+                        f"Dataset(s) {dataset_names} missing for simulation "
+                        f"{sim_id} in {results_path}."
+                    )
+                continue
+
+            if catalogue_idx.shape != dataset.shape:
+                raise ValueError(
+                    f"Dataset '{dataset_name}' mis-sized for simulation {sim_id}."
+                )
+
+            if np.any(catalogue_idx < 0) or np.any(catalogue_idx >= n_obj):
+                raise ValueError(
+                    f"Catalogue indices out of bounds for simulation {sim_id}."
+                )
+
+            array = np.full(n_obj, np.nan, dtype=float)
+            array[catalogue_idx] = dataset
+            lookups[sim_id] = array
+
+    return lookups
+
+
+def _load_pval_lookup(results_path, sim_ids, catalogue_sizes):
+    return _load_original_order_dataset(
+        results_path,
+        sim_ids,
+        catalogue_sizes,
+        dataset_names="pval_original_order",
+        required=True,
+    )
+
+
+def _load_signal_lookup(results_path, sim_ids, catalogue_sizes):
+    return _load_original_order_dataset(
+        results_path,
+        sim_ids,
+        catalogue_sizes,
+        dataset_names=(
+            "signal_original_order",
+            "halo_signal_original",
+        ),
+        required=False,
+    )
+
+
+def _attach_per_halo_data(
+    associations,
+    selection_indices,
+    sim_ids,
+    pval_lookup,
+    signal_lookup,
+    theta_lookup,
+):
+    for assoc in associations:
+        n_members = assoc.member_indices.shape[0]
+        member_pvals = np.full(n_members, np.nan, dtype=float)
+        member_signals = (
+            np.full(n_members, np.nan, dtype=float)
+            if signal_lookup
+            else None
+        )
+        member_theta = (
+            np.full(n_members, np.nan, dtype=float)
+            if theta_lookup
+            else None
+        )
+        for i, (real_idx, local_idx) in enumerate(assoc.member_indices):
+            try:
+                per_real_indices = selection_indices[real_idx]
+            except IndexError as exc:
+                raise IndexError(
+                    "Association references unknown realisation index "
+                    f"{real_idx}."
+                ) from exc
+            if local_idx >= per_real_indices.size:
+                raise IndexError(
+                    f"Local halo index {local_idx} out of range for "
+                    f"realisation {real_idx}."
+                )
+            catalogue_idx = int(per_real_indices[local_idx])
+            sim_id = sim_ids[real_idx]
+            per_sim_lookup = pval_lookup.get(sim_id)
+            if per_sim_lookup is None:
+                continue
+            if catalogue_idx < per_sim_lookup.size:
+                member_pvals[i] = per_sim_lookup[catalogue_idx]
+            if member_signals is not None:
+                per_sim_signals = signal_lookup.get(sim_id)
+                if (
+                    per_sim_signals is not None
+                    and catalogue_idx < per_sim_signals.size
+                ):
+                    member_signals[i] = per_sim_signals[catalogue_idx]
+            if member_theta is not None:
+                per_sim_theta = theta_lookup.get(sim_id)
+                if (
+                    per_sim_theta is not None
+                    and catalogue_idx < per_sim_theta.size
+                ):
+                    member_theta[i] = per_sim_theta[catalogue_idx]
+        assoc.halo_pvals = member_pvals
+        if member_pvals.size and np.any(np.isfinite(member_pvals)):
+            assoc.median_pval = float(np.nanmedian(member_pvals))
+        else:
+            assoc.median_pval = np.nan
+        if member_signals is not None:
+            assoc.halo_signals = member_signals
+            if member_signals.size and np.any(np.isfinite(member_signals)):
+                assoc.median_signal = float(np.nanmedian(member_signals))
+            else:
+                assoc.median_signal = np.nan
+        if member_theta is not None:
+            assoc.halo_theta500 = member_theta
+            if member_theta.size and np.any(np.isfinite(member_theta)):
+                assoc.median_theta500 = float(np.nanmedian(member_theta))
+            else:
+                assoc.median_theta500 = np.nan
+
+
+def load_associations(sim_key, cfg, verbose=True):
+    """
+    Identify halo associations and attach per-halo data.
+
+    Parameters
+    ----------
+    sim_key
+        Simulation key from the config's halo_catalogues section.
+    cfg
+        CMBO configuration dictionary.
+    verbose
+        Print progress messages.
+
+    Returns
+    -------
+    HaloAssociationList
+        List of associations with attached p-values and signals.
+    """
+    halo_data = _load_simulation_halos(cfg, sim_key)
+    if verbose:
+        print(f"Loaded {len(halo_data['positions'])} simulation realisations.")
+    radius_key = cfg["halo_catalogues"][sim_key]["radius_key"]
+    optional = {
+        radius_key: halo_data["r500"],
+        "theta500_arcmin": halo_data["theta_arcmin"],
+    }
+    associations = identify_halo_associations(
+        halo_data["positions"],
+        halo_data["masses"],
+        optional_data=optional,
+    )
+    if verbose:
+        print(f"Identified {len(associations)} halo associations.")
+    results_path = _results_path(cfg, sim_key)
+    pval_lookup = _load_pval_lookup(
+        results_path,
+        halo_data["sim_ids"],
+        halo_data["catalogue_sizes"],
+    )
+    signal_lookup = _load_signal_lookup(
+        results_path,
+        halo_data["sim_ids"],
+        halo_data["catalogue_sizes"],
+    )
+    if signal_lookup:
+        if verbose:
+            print("Loaded halo signal lookup tables from run_suite output.")
+    elif verbose:
+        print("Halo signal datasets were not found in run_suite output.")
+    theta_lookup = {
+        sim_id: np.asarray(theta, dtype=float)
+        for sim_id, theta in zip(
+            halo_data["sim_ids"], halo_data["theta_catalogues"]
+        )
+    }
+    _attach_per_halo_data(
+        associations,
+        halo_data["selection_indices"],
+        halo_data["sim_ids"],
+        pval_lookup,
+        signal_lookup,
+        theta_lookup,
+    )
+    for assoc in associations:
+        assoc.optional_data = assoc.optional_data or {}
+        assoc.optional_data.setdefault("box_size", halo_data["box_size"])
+        assoc.optional_data.setdefault(
+            "mass_definition", halo_data["mass_definition"]
+        )
+
+    return associations

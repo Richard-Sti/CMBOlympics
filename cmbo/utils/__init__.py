@@ -29,6 +29,7 @@ from .associations import (  # noqa: F401
     HaloAssociation,
     identify_halo_associations,
     compute_association_signals,
+    load_associations,
 )
 # Re-export matching helpers from the dedicated match package                   # noqa
 from ..match.crossmatch import (  # noqa: F401
