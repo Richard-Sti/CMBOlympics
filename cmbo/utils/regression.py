@@ -14,14 +14,8 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Regression utilities using roxy for errors-in-variables fitting."""
 
-import jax.numpy as jnp
 import numpy as np
-import numpyro.distributions as dist
-from jax import random
-from jax.scipy.special import logsumexp
 from matplotlib import pyplot as plt
-from numpyro import factor, plate, sample
-from numpyro.infer import MCMC, NUTS
 from scipy.stats import chi2, norm
 
 
@@ -55,8 +49,6 @@ class LinearRoxyFitter:
 
         self._regressor = None
         self._result = None
-        self._result_with_outliers = None
-        self._outlier_mask = None
         self._x_pivot = None
         self._y_pivot = None
 
@@ -65,19 +57,8 @@ class LinearRoxyFitter:
         """Linear model: y = theta[0] * x + theta[1]."""
         return theta[0] * x + theta[1]
 
-    @property
-    def result_with_outliers(self):
-        """Result from fit before outlier rejection (if applicable)."""
-        return self._result_with_outliers
-
-    @property
-    def outlier_mask(self):
-        """Boolean mask indicating outliers (if outlier rejection was used)."""
-        return self._outlier_mask
-
     def fit(self, x, y, xerr, yerr, nwarm=500, nsamp=5000, method='mnr',
-            x_pivot=0, y_pivot=0, reject_outliers=False, outlier_sigma=2.0,
-            ppt_nwarm=500, ppt_nsamp=1000):
+            x_pivot=0, y_pivot=0):
         """
         Fit the linear model with MCMC.
 
@@ -104,52 +85,17 @@ class LinearRoxyFitter:
         y_pivot : float
             Pivot point for y normalization. If 0 (default), no normalization
             is applied. Otherwise y_pivot is subtracted from y.
-        reject_outliers : bool
-            If True, perform outlier rejection after initial fit and refit.
-        outlier_sigma : float
-            Sigma threshold for outlier rejection.
-        ppt_nwarm : int
-            Number of warmup steps for LinearPPTxtrue sampling.
-        ppt_nsamp : int
-            Number of samples for LinearPPTxtrue sampling.
 
         Returns
         -------
         result : dict
-            MCMC result from roxy (after outlier rejection if enabled).
+            MCMC result from roxy.
         """
         self._x_pivot = x_pivot
         self._y_pivot = y_pivot
 
-        # Initial fit
         self._result = self._do_fit(x, y, xerr, yerr, nwarm, nsamp, method,
                                     x_pivot, y_pivot)
-
-        if reject_outliers:
-            # Store initial result
-            self._result_with_outliers = self._result.copy()
-
-            # Identify outliers using LinearPPTxtrue
-            self._outlier_mask = self._identify_outliers(
-                x, y, xerr, yerr, x_pivot, y_pivot, outlier_sigma,
-                ppt_nwarm, ppt_nsamp)
-
-            n_outliers = np.sum(self._outlier_mask)
-            if n_outliers > 0:
-                print(f"Identified {n_outliers} outliers, refitting...")
-
-                # Remove outliers
-                x_clean = x[~self._outlier_mask]
-                y_clean = y[~self._outlier_mask]
-                xerr_clean = xerr[~self._outlier_mask]
-                yerr_clean = yerr[~self._outlier_mask]
-
-                # Refit
-                self._result = self._do_fit(
-                    x_clean, y_clean, xerr_clean, yerr_clean,
-                    nwarm, nsamp, method, x_pivot, y_pivot)
-            else:
-                print("No outliers identified.")
 
         return self._result
 
@@ -178,50 +124,6 @@ class LinearRoxyFitter:
 
         return result
 
-    def _identify_outliers(self, x, y, xerr, yerr, x_pivot, y_pivot,
-                           sigma_threshold, ppt_nwarm, ppt_nsamp):
-        """
-        Identify outliers based on x and y discrepancies using LinearPPTxtrue.
-
-        Parameters
-        ----------
-        x, y, xerr, yerr : ndarray
-            Observed data and errors.
-        x_pivot, y_pivot : float
-            Pivot points for normalization.
-        sigma_threshold : float
-            Threshold in units of sigma for outlier identification.
-        ppt_nwarm : int
-            Number of warmup steps for LinearPPTxtrue.
-        ppt_nsamp : int
-            Number of samples for LinearPPTxtrue.
-
-        Returns
-        -------
-        outlier_mask : ndarray
-            Boolean mask where True indicates an outlier.
-        """
-        # Use LinearPPTxtrue to sample true x values and compute discrepancies
-        ppt = LinearPPTxtrue(self._result)
-        xrange = (np.min(x - x_pivot) - 5, np.max(x - x_pivot) + 5)
-        mcmc_samples = ppt.sample(
-            x, y, xerr, yerr,
-            x_true_prior_range=xrange,
-            n_warmup=ppt_nwarm,
-            n_samples=ppt_nsamp,
-            x_pivot=x_pivot,
-            y_pivot=y_pivot
-        )
-
-        x_discrepancy = mcmc_samples['xtrue_discrepancy_sigma']
-        y_discrepancy = mcmc_samples['ytrue_discrepancy_sigma']
-
-        # Mark as outlier if either x or y exceeds threshold
-        outlier_mask = ((x_discrepancy > sigma_threshold)
-                        | (y_discrepancy > sigma_threshold))
-
-        return outlier_mask
-
     def predict(self, x, percentiles=[16, 50, 84]):
         """
         Predict y values at given x with uncertainty.
@@ -244,9 +146,8 @@ class LinearRoxyFitter:
 
         xobs = x - self._x_pivot
 
-        chain = self._result['chain']
-        slope_samples = chain[:, 0]
-        intercept_samples = chain[:, 1]
+        slope_samples = self._result['slope']
+        intercept_samples = self._result['intercept']
 
         y_samples = (
             slope_samples[:, None] * xobs[None, :]
@@ -445,186 +346,63 @@ class LinearRoxyFitter:
         plt.close()
         return fig
 
-
-class LinearPPTxtrue:
-    """
-    Samples true values (x_true, y_true) for a single observation,
-    given a previous Bayesian linear regression fit performed by roxy.
-
-    This class uses the posterior samples from a roxy fit (which includes
-    slope, intercept, intrinsic scatter, and parameters for the true x
-    distribution) to infer the true underlying x and y values for new
-    observations. It accounts for errors in both observed x and y,
-    and handles the pivoting of observed data as performed by roxy.
-    """
-
-    def __init__(self, posterior_samples):
+    def plot_fit(self, x, y, xerr, yerr, figsize=(6, 4), n_pred=1000,
+                 add_one_to_one=False):
         """
-        Parameters
-        ----------
-        posterior_samples : dict
-            A dictionary of posterior samples from a roxy fit.
-        """
-        required_params = ['slope', 'intercept', 'sig', 'mu_gauss', 'w_gauss']
-        if not all(k in posterior_samples for k in required_params):
-            raise ValueError(
-                f"Required parameters {required_params} not found in "
-                f"posterior Available keys: {list(posterior_samples.keys())}"
-            )
-
-        # Map the new names to the internal names used in the model
-        self.calib_samples = {
-            'slope': jnp.array(posterior_samples['slope']),
-            'intercept': jnp.array(posterior_samples['intercept']),
-            'sig': jnp.array(posterior_samples['sig']),
-            'mu_gauss': jnp.array(posterior_samples['mu_gauss']),
-            'w_gauss': jnp.array(posterior_samples['w_gauss']),
-        }
-        self.n_calib_samples = len(self.calib_samples['slope'])
-
-    def _model(self, x_obs, y_obs, x_err, y_err, x_true_prior_range):
-        with plate("xtrue_plate", len(x_obs)):
-            xtrue = sample("xtrue", dist.Uniform(*x_true_prior_range))
-
-        # Log-density of the shape (nsamples, ncalibration_samples)
-        log_density = dist.Normal(
-            self.calib_samples["mu_gauss"][None, :],
-            self.calib_samples["w_gauss"][None, :]).log_prob(xtrue[:, None])
-
-        log_density += dist.Normal(
-            xtrue[:, None], x_err[:, None]).log_prob(x_obs[:, None])
-
-        # Given xtrue, computes the ytrue
-        ypred = (self.calib_samples["slope"][None, :] * xtrue[:, None]
-                 + self.calib_samples["intercept"][None, :])
-
-        log_density += dist.Normal(
-            ypred,
-            jnp.sqrt(
-                y_err[:, None]**2 + self.calib_samples["sig"][None, :]**2)
-            ).log_prob(y_obs[:, None])
-
-        log_density = logsumexp(
-            log_density, axis=-1) - jnp.log(self.n_calib_samples)
-
-        factor("log_density", log_density)
-
-    def sample(self, x_obs, y_obs, x_err, y_err,
-               x_true_prior_range=(-10, 10),
-               n_warmup=500, n_samples=1000, seed=0,
-               x_pivot=0.0, y_pivot=0.0):
-        """
-        Sample from the posterior of true values for each observation.
+        Plot the data with errorbars and show the 16th-84th percentile
+        uncertainty band of the fit.
 
         Parameters
         ----------
-        x_obs, y_obs, x_err, y_err : array-like
-            The observed values and their errors for each data point.
-        x_true_prior_range : tuple, optional
-            The range [low, high] for the uniform prior on x_true.
-        n_warmup : int, optional
-            Number of warmup steps for the MCMC sampler.
-        n_samples : int, optional
-            Number of samples to draw.
-        seed : int, optional
-            Random seed for numpyro's PRNG.
-        x_pivot : float
-            Pivot point for x normalization.
-        y_pivot : float
-            Pivot point for y normalization.
+        x : ndarray
+            X data.
+        y : ndarray
+            Y data.
+        xerr : ndarray
+            X errors.
+        yerr : ndarray
+            Y errors.
+        figsize : tuple
+            Figure size.
+        n_pred : int
+            Number of points for prediction line.
 
         Returns
         -------
-        mcmc_samples : dict
-            A dictionary containing the MCMC samples for the parameters in
-            the model (e.g., 'xtrue'). It also includes:
-            - 'xtrue_discrepancy_sigma': discrepancy between xtrue posterior
-              and x_obs.
-            - 'ytrue_discrepancy_sigma': discrepancy between y_obs and the
-              predicted y from median xtrue, slope, and intercept.
+        fig : matplotlib.figure.Figure
+            The figure object.
+        ax : matplotlib.axes.Axes
+            The axes object.
         """
-        kernel = NUTS(self._model)
-        mcmc = MCMC(
-            kernel,
-            num_warmup=n_warmup,
-            num_samples=n_samples,
-        )
+        if self._result is None:
+            raise ValueError("Must call fit() first")
 
-        key = random.PRNGKey(seed)
-        # Apply pivoting here
-        x_obs_pivoted = x_obs - x_pivot
-        y_obs_pivoted = y_obs - y_pivot
+        try:
+            with plt.style.context('science'):
+                fig, ax = plt.subplots(figsize=figsize)
+        except OSError:
+            fig, ax = plt.subplots(figsize=figsize)
 
-        mcmc.run(key, x_obs_pivoted, y_obs_pivoted, x_err, y_err,
-                 x_true_prior_range)
+        # Plot all data with errorbars
+        ax.errorbar(x, y, xerr=xerr, yerr=yerr,
+                    fmt='o', capsize=3, label='Data', zorder=2)
 
-        mcmc_samples = mcmc.get_samples()
+        # Generate prediction band
+        xlim = ax.get_xlim()
+        x_pred = np.linspace(*xlim, n_pred)
+        y_pred = self.predict(x_pred, percentiles=[16, 50, 84])
 
-        # Calculate xtrue discrepancy
-        xtrue_sigma = self.compute_x_discrepancy(
-            mcmc_samples['xtrue'], x_obs_pivoted, x_err)
-        mcmc_samples['xtrue_discrepancy_sigma'] = xtrue_sigma
+        ax.fill_between(x_pred, y_pred[16], y_pred[84], alpha=0.4,
+                        label='Linear fit', zorder=0, color="#1B5299")
+        ax.set_xlim(xlim)
 
-        # Calculate ytrue discrepancy
-        ytrue_sigma = self.compute_y_discrepancy(
-            mcmc_samples['xtrue'], y_obs_pivoted, y_err)
-        mcmc_samples['ytrue_discrepancy_sigma'] = ytrue_sigma
+        if add_one_to_one:
+            xmed = np.median(x)
+            ax.axline([xmed, xmed], slope=1, color='black', linestyle='--',
+                      label='1:1 line', zorder=0)
 
-        return mcmc_samples
+        ax.legend()
+        plt.tight_layout()
+        plt.close()
 
-    def compute_x_discrepancy(self, xtrue_samples, x_obs, x_err):
-        """
-        Computes the discrepancy between xtrue posterior and x_obs,
-        averaged over MCMC samples.
-
-        Parameters
-        ----------
-        xtrue_samples : ndarray
-            MCMC samples for xtrue. Shape: (n_samples, n_obs).
-        x_obs : ndarray
-            Observed x values. Shape: (n_obs,).
-        x_err : ndarray
-            Measurement errors on x_obs. Shape: (n_obs,).
-
-        Returns
-        -------
-        stat : ndarray
-            Averaged discrepancy in units of sigma. Shape: (n_obs,).
-        """
-        # (n_samples, n_obs)
-        stat = (xtrue_samples - x_obs[None, :]) / x_err[None, :]
-        # Average over MCMC samples
-        stat = np.abs(np.mean(stat, axis=0))
-        return stat
-
-    def compute_y_discrepancy(self, xtrue_samples, y_obs, y_err):
-        """
-        Computes the discrepancy between y_obs and predicted y from xtrue,
-        averaged over MCMC samples and calibration samples.
-
-        Parameters
-        ----------
-        xtrue_samples : ndarray
-            MCMC samples for xtrue. Shape: (n_samples, n_obs).
-        y_obs : ndarray
-            Observed y values. Shape: (n_obs,).
-        y_err : ndarray
-            Measurement errors on y_obs. Shape: (n_obs,).
-
-        Returns
-        -------
-        stat : ndarray
-            Averaged discrepancy in units of sigma. Shape: (n_obs,).
-        """
-        # (n_samples, n_obs, n_calib_samples)
-        y_pred = (self.calib_samples["slope"][None, None, :]
-                  * xtrue_samples[:, :, None]
-                  + self.calib_samples["intercept"][None, None, :])
-
-        stat = ((y_pred - y_obs[None, :, None])
-                / np.sqrt(y_err[None, :, None]**2
-                          + self.calib_samples["sig"][None, None, :]**2))
-
-        # Average over MCMC samples (axis 0) and calibration samples (axis 2)
-        stat = np.abs(np.mean(stat, axis=(0, 2)))
-        return stat
+        return fig, ax
