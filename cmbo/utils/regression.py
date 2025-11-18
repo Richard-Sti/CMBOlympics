@@ -186,7 +186,7 @@ class LinearRoxyFitter:
             print("Warning: NumPyro samples not found in result object.")
 
     def plot_corner(self, truths=None, quantiles=[0.16, 0.5, 0.84],
-                    show_titles=True, title_fmt='.3f', **kwargs):
+                    show_titles=True, title_fmt='.2f', **kwargs):
         """
         Plot corner plot of posterior distributions for slope, intercept,
         and intrinsic scatter using corner.py.
@@ -247,7 +247,9 @@ class LinearRoxyFitter:
         fig = corner.corner(
             np.array([samples_dict[p] for p in params_to_plot]).T,
             labels=[latex_labels[p] for p in params_to_plot],
+            smooth=1,
             truths=truths,
+            truth_color='red',
             quantiles=quantiles,
             show_titles=show_titles,
             title_fmt=title_fmt,
