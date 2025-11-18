@@ -42,6 +42,7 @@ from .config_reader import (  # noqa: F401
     apply_root_to_config_paths,
 )
 from .logging import fprint  # noqa: F401
+from .regression import LinearRoxyFitter, LinearPPTxtrue  # noqa: F401
 
 
 def pvalue_to_sigma(pval):
