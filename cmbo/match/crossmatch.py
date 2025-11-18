@@ -61,13 +61,13 @@ def crossmatch_planck_catalog(
     )
     obs_z = obs_clusters.redshifts
 
-    planck_ra = np.asarray(planck_catalog["ra_deg"], dtype=float)
-    planck_dec = np.asarray(planck_catalog["dec_deg"], dtype=float)
+    planck_ra = np.asarray(planck_catalog["RA"], dtype=float)
+    planck_dec = np.asarray(planck_catalog["DEC"], dtype=float)
     planck_z = np.asarray(planck_catalog.get("redshift"), dtype=float)
     planck_y = np.asarray(planck_catalog["y5r500"], dtype=float)
     planck_yerr = np.asarray(planck_catalog["y5r500_err"], dtype=float)
-    planck_m500 = np.asarray(planck_catalog["msz"], dtype=float)
-    planck_m500_err = np.asarray(planck_catalog["msz_err"], dtype=float)
+    planck_m500 = np.asarray(planck_catalog["M500"], dtype=float)
+    planck_m500_err = np.asarray(planck_catalog["eM500"], dtype=float)
     planck_wise_flag = np.asarray(
         planck_catalog.get("wise_flag"), dtype=float
     )
@@ -217,23 +217,22 @@ def crossmatch_mcxc(
     ------------
     Populates ``ObservedCluster.mcxc_match`` with a dictionary holding
     RA/DEC, Galactic coordinates, redshift info, ``M500`` and its symmetric
-    uncertainty. Unmatched clusters receive NaN-filled entries and their
-    names are printed.
+    uncertainty (eM500). Unmatched clusters receive NaN-filled entries and
+    their names are printed.
 
     Returns
     -------
     None
     """
     required = {
-        "RAJ2000",
-        "DEJ2000",
+        "RA",
+        "DEC",
         "GLON",
         "GLAT",
         "Z",
         "Z_TYPE",
         "M500",
-        "ERRPM500",
-        "ERRMM500",
+        "eM500",
     }
     names = mcxc_catalogue.dtype.names
     if names is None or not required.issubset(names):
@@ -249,8 +248,8 @@ def crossmatch_mcxc(
     obs_z = obs_clusters.redshifts
     obs_coord = SkyCoord(obs_ra * u.deg, obs_dec * u.deg)
 
-    mcxc_ra = np.asarray(mcxc_catalogue["RAJ2000"], dtype=float)
-    mcxc_dec = np.asarray(mcxc_catalogue["DEJ2000"], dtype=float)
+    mcxc_ra = np.asarray(mcxc_catalogue["RA"], dtype=float)
+    mcxc_dec = np.asarray(mcxc_catalogue["DEC"], dtype=float)
     mcxc_coord = SkyCoord(mcxc_ra * u.deg, mcxc_dec * u.deg)
 
     idx_mcxc, idx_obs, sep2d, _ = obs_coord.search_around_sky(
@@ -280,9 +279,7 @@ def crossmatch_mcxc(
         glon = np.asarray(mcxc_catalogue["GLON"], dtype=float)
         glat = np.asarray(mcxc_catalogue["GLAT"], dtype=float)
         m500 = np.asarray(mcxc_catalogue["M500"], dtype=float)
-        err_plus = np.asarray(mcxc_catalogue["ERRPM500"], dtype=float)
-        err_minus = np.asarray(mcxc_catalogue["ERRMM500"], dtype=float)
-        sym_err = 0.5 * (err_plus + err_minus)
+        m500_err = np.asarray(mcxc_catalogue["eM500"], dtype=float)
 
         best_by_obs: dict[int, dict] = {}
         for obs_idx, mcxc_idx, sep, delta_cz in zip(
@@ -303,9 +300,7 @@ def crossmatch_mcxc(
                 "Z": float(mcxc_cz[mcxc_idx] / SPEED_OF_LIGHT_KMS),
                 "Z_TYPE": z_types[mcxc_idx],
                 "M500": float(m500[mcxc_idx]),
-                "ERRPM500": float(err_plus[mcxc_idx]),
-                "ERRMM500": float(err_minus[mcxc_idx]),
-                "M500_err": float(sym_err[mcxc_idx]),
+                "M500_err": float(m500_err[mcxc_idx]),
             }
             if obs_idx not in best_by_obs or (
                 sep_arcmin < best_by_obs[obs_idx]["separation_arcmin"]
@@ -383,15 +378,14 @@ def crossmatch_erass(
     Side Effects
     ------------
     Writes match metadata (RA/Dec, redshift type, ``M500`` and symmetric
-    errors) into ``ObservedCluster.erass_match``. Unmatched clusters
-    receive NaNs and their identifiers are printed.
+    uncertainty eM500) into ``ObservedCluster.erass_match``. Unmatched
+    clusters receive NaNs and their identifiers are printed.
 
     Returns
     -------
     None
     """
-    required = {"RA", "DEC", "BEST_Z", "BEST_Z_TYPE", "M500", "M500_L",
-                "M500_H"}
+    required = {"RA", "DEC", "BEST_Z", "BEST_Z_TYPE", "M500", "eM500"}
     names = erass_catalogue.dtype.names
     if names is None or not required.issubset(names):
         missing = sorted(required.difference(names or ()))
@@ -434,9 +428,7 @@ def crossmatch_erass(
         )
         z_type = np.char.strip(erass_catalogue["BEST_Z_TYPE"].astype(str))
         m500 = np.asarray(erass_catalogue["M500"], dtype=float)
-        upper = np.asarray(erass_catalogue["M500_H"], dtype=float)
-        lower = np.asarray(erass_catalogue["M500_L"], dtype=float)
-        sym_err = 0.5 * (upper - lower)
+        m500_err = np.asarray(erass_catalogue["eM500"], dtype=float)
 
         best_by_obs: dict[int, dict] = {}
         for obs_idx, erass_idx, sep, delta_cz in zip(
@@ -455,7 +447,7 @@ def crossmatch_erass(
                 "Z": float(erass_z[erass_idx]),
                 "Z_TYPE": z_type[erass_idx],
                 "M500": float(m500[erass_idx]),
-                "M500_err": float(sym_err[erass_idx]),
+                "M500_err": float(m500_err[erass_idx]),
             }
             if obs_idx not in best_by_obs or (
                 sep_arcmin < best_by_obs[obs_idx]["separation_arcmin"]
