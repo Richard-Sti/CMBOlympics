@@ -22,6 +22,7 @@ from astropy.io import fits
 from astropy.coordinates import SkyCoord
 
 from ..constants import SPEED_OF_LIGHT_KMS
+from ..utils.arrays import add_field, rename_field
 
 __all__ = (
     "load_mcxc_catalogue",
@@ -45,10 +46,25 @@ def load_mcxc_catalogue(fname="data/MCXCII_2024.fits", verbose=True):
     """
     Load the MCXC-II catalogue into a NumPy structured array.
 
+    Adds computed fields:
+    - 'eM500': symmetric mass error (average of ERRPM500 and ERRMM500)
+    - 'eL500': symmetric luminosity error (average of ERRPL500 and ERRML500)
+
+    Mass fields (M500, ERRMM500, ERRPM500, eM500) are scaled by 1e14.
+    Luminosity fields (L500, ERRML500, ERRPL500, eL500) are scaled by 1e44.
+    Renames RAJ2000/DEJ2000 to RA/DEC for consistency with other catalogues.
+
     Parameters
     ----------
     fname : str or path-like
         FITS file containing the MCXC-II binary table.
+    verbose : bool, optional
+        If True, print diagnostic information about removed entries.
+
+    Returns
+    -------
+    data : structured ndarray
+        MCXC-II catalogue with 'eM500', 'eL500' fields and RA/DEC renamed.
     """
     path = Path(fname)
     if not path.exists():
@@ -78,7 +94,25 @@ def load_mcxc_catalogue(fname="data/MCXCII_2024.fits", verbose=True):
                 )
         data = data[mask]
 
-    _scale_fields(data, ("M500", "ERRMM500", "ERRPM500"), 1.0e14)
+    if {"ERRPM500", "ERRMM500"}.issubset(data.dtype.names):
+        err_plus = np.asarray(data["ERRPM500"], dtype=float)
+        err_minus = np.asarray(data["ERRMM500"], dtype=float)
+        eM500 = 0.5 * (err_plus + err_minus)
+        data = add_field(data, "eM500", eM500, dtype=float)
+
+    if {"ERRPL500", "ERRML500"}.issubset(data.dtype.names):
+        err_plus_l = np.asarray(data["ERRPL500"], dtype=float)
+        err_minus_l = np.asarray(data["ERRML500"], dtype=float)
+        eL500 = 0.5 * (err_plus_l + err_minus_l)
+        data = add_field(data, "eL500", eL500, dtype=float)
+
+    _scale_fields(data, ("M500", "ERRMM500", "ERRPM500", "eM500"), 1.0e14)
+    _scale_fields(data, ("L500", "ERRML500", "ERRPL500", "eL500"), 1.0e44)
+
+    if "RAJ2000" in data.dtype.names:
+        data = rename_field(data, "RAJ2000", "RA")
+    if "DEJ2000" in data.dtype.names:
+        data = rename_field(data, "DEJ2000", "DEC")
 
     return data
 
@@ -88,12 +122,21 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
     """
     Load the eRASS1 cluster catalogue into a NumPy structured array.
 
+    Adds a computed 'eM500' field containing the symmetric mass error
+    (average of the upper and lower bounds). Mass fields (M500, M500_L,
+    M500_H, eM500) are scaled by 1e13.
+
     Parameters
     ----------
     fname : str or path-like
         FITS file containing the eRASS1 catalogue.
     verbose : bool, optional
         If True, print how many invalid rows were removed.
+
+    Returns
+    -------
+    data : structured ndarray
+        eRASS1 catalogue with an added 'eM500' field.
     """
     path = Path(fname)
     if not path.exists():
@@ -114,7 +157,13 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
                 print(f"Removing {removed} eRASS entries with M500 = -1.")
         data = data[mask]
 
-    erass_fields = ("M500", "M500_L", "M500_H")
+    if {"M500_H", "M500_L"}.issubset(data.dtype.names):
+        upper = np.asarray(data["M500_H"], dtype=float)
+        lower = np.asarray(data["M500_L"], dtype=float)
+        eM500 = 0.5 * (upper - lower)
+        data = add_field(data, "eM500", eM500, dtype=float)
+
+    erass_fields = ("M500", "M500_L", "M500_H", "eM500")
     _scale_fields(data, erass_fields, 1.0e13)
 
     return data
@@ -191,8 +240,8 @@ def match_planck_to_mcxc(
     return _match_catalogues(
         planck_catalog,
         mcxc_catalogue,
-        {"ra": "ra_deg", "dec": "dec_deg", "z": "redshift"},
-        {"ra": "RAJ2000", "dec": "DEJ2000", "z": "Z"},
+        {"ra": "RA", "dec": "DEC", "z": "redshift"},
+        {"ra": "RA", "dec": "DEC", "z": "Z"},
         max_sep_arcmin,
         max_cz_diff_kms,
     )
@@ -208,7 +257,7 @@ def match_planck_to_erass(
     return _match_catalogues(
         planck_catalog,
         erass_catalogue,
-        {"ra": "ra_deg", "dec": "dec_deg", "z": "redshift"},
+        {"ra": "RA", "dec": "DEC", "z": "redshift"},
         {"ra": "RA", "dec": "DEC", "z": "BEST_Z"},
         max_sep_arcmin,
         max_cz_diff_kms,
@@ -225,7 +274,7 @@ def match_mcxc_to_erass(
     return _match_catalogues(
         mcxc_catalogue,
         erass_catalogue,
-        {"ra": "RAJ2000", "dec": "DEJ2000", "z": "Z"},
+        {"ra": "RA", "dec": "DEC", "z": "Z"},
         {"ra": "RA", "dec": "DEC", "z": "BEST_Z"},
         max_sep_arcmin,
         max_cz_diff_kms,

@@ -39,6 +39,10 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
     """
     Load the Planck PSZ2 union cluster catalogue.
 
+    Returns M500 (from MSZ field, scaled by 1e14) and eM500 (symmetric error
+    computed from MSZ_ERR_UP and MSZ_ERR_LOW). Coordinates are stored in
+    'RA' and 'DEC' fields (in degrees).
+
     Parameters
     ----------
     fname
@@ -50,6 +54,7 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
     -------
     dict
         Dictionary with key astrophysical quantities for each cluster.
+        Coordinates in 'RA'/'DEC', mass in 'M500', error in 'eM500'.
     """
     table = fits.getdata(fname, extname=extname)
 
@@ -70,8 +75,8 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
         "name": _as_str("NAME"),
         "glon_deg": _as_float("GLON"),
         "glat_deg": _as_float("GLAT"),
-        "ra_deg": _as_float("RA"),
-        "dec_deg": _as_float("DEC"),
+        "RA": _as_float("RA"),
+        "DEC": _as_float("DEC"),
         "pos_err_arcmin": _as_float("POS_ERR"),
         "snr": _as_float("SNR", dtype=np.float32),
         "pipeline": _as_int("PIPELINE"),
@@ -80,7 +85,7 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
         "redshift": _as_float("REDSHIFT", dtype=np.float32),
         "y5r500": _as_float("Y5R500", dtype=np.float32),
         "y5r500_err": _as_float("Y5R500_ERR", dtype=np.float32),
-        "msz": _as_float("MSZ", dtype=np.float32) * 1e14,
+        "M500": _as_float("MSZ", dtype=np.float32) * 1e14,
         "validation": _as_int("VALIDATION"),
         "psz": _as_int("PSZ"),
         "pccs2": _as_int("PCCS2"),
@@ -94,5 +99,5 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION"):
         "comment": _as_str("COMMENT"),
     }
 
-    catalog["msz_err"] = 0.5 * (msz_err_up + msz_err_low)
+    catalog["eM500"] = 0.5 * (msz_err_up + msz_err_low)
     return catalog
