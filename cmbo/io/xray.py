@@ -122,9 +122,12 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
     """
     Load the eRASS1 cluster catalogue into a NumPy structured array.
 
-    Adds a computed 'eM500' field containing the symmetric mass error
-    (average of the upper and lower bounds). Mass fields (M500, M500_L,
-    M500_H, eM500) are scaled by 1e13.
+    Adds computed fields:
+    - 'eM500': symmetric mass error (average of the upper and lower bounds)
+    - 'eL500': symmetric luminosity error (average of the upper and lower bounds)
+
+    Mass fields (M500, M500_L, M500_H, eM500) are scaled by 1e13.
+    Luminosity fields (L500, L500_L, L500_H, eL500) are scaled by 1e44.
 
     Parameters
     ----------
@@ -139,7 +142,7 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
     Returns
     -------
     data : structured ndarray
-        eRASS1 catalogue with an added 'eM500' field.
+        eRASS1 catalogue with added 'eM500' and 'eL500' fields.
     """
     path = Path(fname)
     if not path.exists():
@@ -166,8 +169,14 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
         eM500 = 0.5 * (upper - lower)
         data = add_field(data, "eM500", eM500, dtype=float)
 
-    erass_fields = ("M500", "M500_L", "M500_H", "eM500")
-    _scale_fields(data, erass_fields, 1.0e13)
+    if {"L500_H", "L500_L"}.issubset(data.dtype.names):
+        upper = np.asarray(data["L500_H"], dtype=float)
+        lower = np.asarray(data["L500_L"], dtype=float)
+        eL500 = 0.5 * (upper - lower)
+        data = add_field(data, "eL500", eL500, dtype=float)
+
+    _scale_fields(data, ("M500", "M500_L", "M500_H", "eM500"), 1.0e13)
+    _scale_fields(data, ("L500", "L500_L", "L500_H", "eL500"), 1.0e44)
 
     if max_m500 is not None and "M500" in data.dtype.names:
         mask = data["M500"] <= max_m500
