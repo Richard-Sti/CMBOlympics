@@ -22,6 +22,7 @@ from jax.scipy.special import logsumexp
 from matplotlib import pyplot as plt
 from numpyro import factor, plate, sample
 from numpyro.infer import MCMC, NUTS
+from scipy.stats import chi2, norm
 
 
 class LinearRoxyFitter:
@@ -54,6 +55,8 @@ class LinearRoxyFitter:
 
         self._regressor = None
         self._result = None
+        self._result_with_outliers = None
+        self._outlier_mask = None
         self._x_pivot = None
         self._y_pivot = None
 
@@ -62,8 +65,19 @@ class LinearRoxyFitter:
         """Linear model: y = theta[0] * x + theta[1]."""
         return theta[0] * x + theta[1]
 
-    def fit(self, x, y, xerr, yerr, nwarm=500, nsamp=20000, method='mnr',
-            x_pivot=0, y_pivot=0):
+    @property
+    def result_with_outliers(self):
+        """Result from fit before outlier rejection (if applicable)."""
+        return self._result_with_outliers
+
+    @property
+    def outlier_mask(self):
+        """Boolean mask indicating outliers (if outlier rejection was used)."""
+        return self._outlier_mask
+
+    def fit(self, x, y, xerr, yerr, nwarm=500, nsamp=5000, method='mnr',
+            x_pivot=0, y_pivot=0, reject_outliers=False, outlier_sigma=2.0,
+            ppt_nwarm=500, ppt_nsamp=1000):
         """
         Fit the linear model with MCMC.
 
@@ -90,12 +104,58 @@ class LinearRoxyFitter:
         y_pivot : float
             Pivot point for y normalization. If 0 (default), no normalization
             is applied. Otherwise y_pivot is subtracted from y.
+        reject_outliers : bool
+            If True, perform outlier rejection after initial fit and refit.
+        outlier_sigma : float
+            Sigma threshold for outlier rejection.
+        ppt_nwarm : int
+            Number of warmup steps for LinearPPTxtrue sampling.
+        ppt_nsamp : int
+            Number of samples for LinearPPTxtrue sampling.
 
         Returns
         -------
         result : dict
-            MCMC result from roxy.
+            MCMC result from roxy (after outlier rejection if enabled).
         """
+        self._x_pivot = x_pivot
+        self._y_pivot = y_pivot
+
+        # Initial fit
+        self._result = self._do_fit(x, y, xerr, yerr, nwarm, nsamp, method,
+                                    x_pivot, y_pivot)
+
+        if reject_outliers:
+            # Store initial result
+            self._result_with_outliers = self._result.copy()
+
+            # Identify outliers using LinearPPTxtrue
+            self._outlier_mask = self._identify_outliers(
+                x, y, xerr, yerr, x_pivot, y_pivot, outlier_sigma,
+                ppt_nwarm, ppt_nsamp)
+
+            n_outliers = np.sum(self._outlier_mask)
+            if n_outliers > 0:
+                print(f"Identified {n_outliers} outliers, refitting...")
+
+                # Remove outliers
+                x_clean = x[~self._outlier_mask]
+                y_clean = y[~self._outlier_mask]
+                xerr_clean = xerr[~self._outlier_mask]
+                yerr_clean = yerr[~self._outlier_mask]
+
+                # Refit
+                self._result = self._do_fit(
+                    x_clean, y_clean, xerr_clean, yerr_clean,
+                    nwarm, nsamp, method, x_pivot, y_pivot)
+            else:
+                print("No outliers identified.")
+
+        return self._result
+
+    def _do_fit(self, x, y, xerr, yerr, nwarm, nsamp, method, x_pivot,
+                y_pivot):
+        """Perform a single MCMC fit."""
         try:
             from roxy.regressor import RoxyRegressor
         except ImportError as e:
@@ -104,22 +164,63 @@ class LinearRoxyFitter:
                 "Install it with: pip install roxy"
             ) from e
 
-        self._x_pivot = x_pivot
-        self._y_pivot = y_pivot
-
         xobs = x - x_pivot
         yobs = y - y_pivot
 
-        self._regressor = RoxyRegressor(
+        regressor = RoxyRegressor(
             self.model, self.param_names, self.theta0, self.param_prior
         )
 
-        self._result = self._regressor.mcmc(
+        result = regressor.mcmc(
             self.param_names, xobs, yobs, [xerr, yerr],
             nwarm, nsamp, method=method
         )
 
-        return self._result
+        return result
+
+    def _identify_outliers(self, x, y, xerr, yerr, x_pivot, y_pivot,
+                           sigma_threshold, ppt_nwarm, ppt_nsamp):
+        """
+        Identify outliers based on x and y discrepancies using LinearPPTxtrue.
+
+        Parameters
+        ----------
+        x, y, xerr, yerr : ndarray
+            Observed data and errors.
+        x_pivot, y_pivot : float
+            Pivot points for normalization.
+        sigma_threshold : float
+            Threshold in units of sigma for outlier identification.
+        ppt_nwarm : int
+            Number of warmup steps for LinearPPTxtrue.
+        ppt_nsamp : int
+            Number of samples for LinearPPTxtrue.
+
+        Returns
+        -------
+        outlier_mask : ndarray
+            Boolean mask where True indicates an outlier.
+        """
+        # Use LinearPPTxtrue to sample true x values and compute discrepancies
+        ppt = LinearPPTxtrue(self._result)
+        xrange = (np.min(x - x_pivot) - 5, np.max(x - x_pivot) + 5)
+        mcmc_samples = ppt.sample(
+            x, y, xerr, yerr,
+            x_true_prior_range=xrange,
+            n_warmup=ppt_nwarm,
+            n_samples=ppt_nsamp,
+            x_pivot=x_pivot,
+            y_pivot=y_pivot
+        )
+
+        x_discrepancy = mcmc_samples['xtrue_discrepancy_sigma']
+        y_discrepancy = mcmc_samples['ytrue_discrepancy_sigma']
+
+        # Mark as outlier if either x or y exceeds threshold
+        outlier_mask = ((x_discrepancy > sigma_threshold)
+                        | (y_discrepancy > sigma_threshold))
+
+        return outlier_mask
 
     def predict(self, x, percentiles=[16, 50, 84]):
         """
@@ -201,14 +302,6 @@ class LinearRoxyFitter:
         sigma : float
             The significance level in terms of Gaussian sigma.
         """
-        try:
-            from scipy.stats import chi2, norm
-        except ImportError as e:
-            raise ImportError(
-                "scipy is required for get_slope_intercept_significance. "
-                "Install it with: pip install scipy"
-            ) from e
-
         if self._result is None:
             raise ValueError("Must call fit() first")
 
@@ -256,14 +349,6 @@ class LinearRoxyFitter:
         sigma : float
             The significance level in terms of Gaussian sigma.
         """
-        try:
-            from scipy.stats import norm
-        except ImportError as e:
-            raise ImportError(
-                "scipy is required for get_slope_significance. "
-                "Install it with: pip install scipy"
-            ) from e
-
         if self._result is None:
             raise ValueError("Must call fit() first")
 
