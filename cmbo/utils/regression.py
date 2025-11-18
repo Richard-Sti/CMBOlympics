@@ -14,8 +14,14 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Regression utilities using roxy for errors-in-variables fitting."""
 
+import jax.numpy as jnp
 import numpy as np
+import numpyro.distributions as dist
+from jax import random
 from matplotlib import pyplot as plt
+from numpyro.infer import MCMC, NUTS
+from numpyro import plate, sample, factor
+from jax.scipy.special import logsumexp
 
 
 class LinearRoxyFitter:
@@ -353,3 +359,98 @@ class LinearRoxyFitter:
 
         plt.close()
         return fig
+
+
+class LinearPPTxtrue:
+    """
+    Samples true values for a single observation given a previous roxy fit.
+    """
+
+    def __init__(self, posterior_samples):
+        """
+        Parameters
+        ----------
+        posterior_samples : dict
+            A dictionary of posterior samples from a roxy fit.
+        """
+        required_params = ['slope', 'intercept', 'sig', 'mu_gauss', 'w_gauss']
+        if not all(k in posterior_samples for k in required_params):
+            raise ValueError(
+                f"Required parameters {required_params} not found in "
+                f"posterior Available keys: {list(posterior_samples.keys())}"
+            )
+
+        # Map the new names to the internal names used in the model
+        self.calib_samples = {
+            'slope': jnp.array(posterior_samples['slope']),
+            'intercept': jnp.array(posterior_samples['intercept']),
+            'sig': jnp.array(posterior_samples['sig']),
+            'mu_gauss': jnp.array(posterior_samples['mu_gauss']),
+            'w_gauss': jnp.array(posterior_samples['w_gauss']),
+        }
+        self.n_calib_samples = len(self.calib_samples['slope'])
+
+    def _model(self, x_obs, y_obs, x_err, y_err, x_true_prior_range):
+        with plate("xtrue_plate", x_obs.shape[0]):
+            xtrue = sample("xtrue", dist.Uniform(*x_true_prior_range))
+
+        # Log-density of the shape (nsamples, ncalibration_samples)
+        log_density = dist.Normal(
+            self.calib_samples["mu_gauss"][None, :],
+            self.calib_samples["w_gauss"][None, :]).log_prob(xtrue[:, None])
+
+        log_density += dist.Normal(xtrue[:, None], x_err[:, None]).log_prob(x_obs[:, None])
+
+        # Given xtrue, computes the ytrue
+        y_true = (self.calib_samples["slope"][None, :] * xtrue[:, None]
+                  + self.calib_samples["intercept"][None, :])
+
+        log_density += dist.Normal(
+            y_true,
+            jnp.sqrt(
+                y_err[:, None]**2 + self.calib_samples["sig"][None, :]**2)
+            ).log_prob(y_obs)[:, None]
+
+        log_density = logsumexp(
+            log_density, axis=-1) - jnp.log(self.n_calib_samples)
+        factor("log_density", log_density)
+
+    def sample(self, x_obs, y_obs, x_err, y_err,
+               x_true_prior_range=(-10, 10),
+               n_warmup=500, n_samples=1000, seed=0):
+        """
+        Sample from the posterior of true values for a single observation.
+
+        Parameters
+        ----------
+        x_obs, y_obs, x_err, y_err : float
+            The observed values and their errors for a single data point.
+        x_true_prior_range : tuple, optional
+            The range [low, high] for the uniform prior on x_true.
+        n_warmup : int, optional
+            Number of warmup steps for the MCMC sampler.
+        n_samples : int, optional
+            Number of samples to draw.
+        seed : int, optional
+            Random seed for numpyro's PRNG.
+
+        Returns
+        -------
+        x_true_samples, y_true_samples : tuple of ndarray
+            Samples from the posterior distribution of x_true and y_true.
+        """
+        kernel = NUTS(self._model)
+        mcmc = MCMC(
+            kernel,
+            num_warmup=n_warmup,
+            num_samples=n_samples,
+        )
+
+        key = random.PRNGKey(seed)
+        mcmc.run(key, x_obs, y_obs, x_err, y_err, x_true_prior_range)
+
+        mcmc_samples = mcmc.get_samples()
+
+        return mcmc_samples
+
+
