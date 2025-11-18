@@ -124,7 +124,8 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
 
     Adds computed fields:
     - 'eM500': symmetric mass error (average of the upper and lower bounds)
-    - 'eL500': symmetric luminosity error (average of the upper and lower bounds)
+    - 'eL500': symmetric luminosity error (average of the upper and lower
+               bounds)
 
     Mass fields (M500, M500_L, M500_H, eM500) are scaled by 1e13.
     Luminosity fields (L500, L500_L, L500_H, eL500) are scaled by 1e44.
@@ -312,8 +313,7 @@ def _dict_to_structured(data):
     lengths = {arr.shape[0] for arr in arrays}
     if len(lengths) != 1:
         raise ValueError("All dictionary fields must share the same length.")
-    return np.rec.array(
-        np.core.records.fromarrays(arrays, names=",".join(keys)))
+    return np.rec.fromarrays(arrays, names=",".join(keys))
 
 
 def _as_structured(catalogue):
