@@ -16,7 +16,71 @@
 
 import numpy as np
 from matplotlib import pyplot as plt
-from scipy.stats import chi2, norm
+from scipy.stats import chi2, norm, pearsonr, spearmanr
+from tqdm import trange
+
+
+def correlation_with_errors(x, y, xerr, yerr, n_samples=1000, seed=None,
+                            verbose=True):
+    """
+    Compute Pearson and Spearman correlation coefficients accounting for errors
+    via resampling.
+
+    Parameters
+    ----------
+    x : ndarray
+        X data.
+    y : ndarray
+        Y data.
+    xerr : ndarray
+        X errors (standard deviations).
+    yerr : ndarray
+        Y errors (standard deviations).
+    n_samples : int
+        Number of bootstrap samples.
+    seed : int, optional
+        Random seed for reproducibility.
+    verbose
+        If True, show progress bar.
+
+    Returns
+    -------
+    result : dict
+        Dictionary with keys:
+        - 'pearson': median Pearson r
+        - 'pearson_err': std of Pearson r
+        - 'spearman': median Spearman rho
+        - 'spearman_err': std of Spearman rho
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    xerr = np.asarray(xerr, dtype=float)
+    yerr = np.asarray(yerr, dtype=float)
+
+    if len(x) != len(y) or len(x) != len(xerr) or len(x) != len(yerr):
+        raise ValueError("x, y, xerr, yerr must have the same length")
+
+    rng = np.random.default_rng(seed)
+
+    pearson_samples = np.empty(n_samples)
+    spearman_samples = np.empty(n_samples)
+
+    iterator = trange(n_samples) if verbose else range(n_samples)
+    for i in iterator:
+        x_resample = rng.normal(x, xerr)
+        y_resample = rng.normal(y, yerr)
+
+        pearson_samples[i] = pearsonr(x_resample, y_resample)[0]
+        spearman_samples[i] = spearmanr(x_resample, y_resample)[0]
+
+    result = {
+        'pearson': np.median(pearson_samples),
+        'pearson_err': np.std(pearson_samples),
+        'spearman': np.median(spearman_samples),
+        'spearman_err': np.std(spearman_samples),
+    }
+
+    return result
 
 
 class LinearRoxyFitter:
