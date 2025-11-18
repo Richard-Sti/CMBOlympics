@@ -24,7 +24,7 @@ from .pfeifer import MatchingProbability
 
 def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
                                       mdef=None, cosmo_params=None,
-                                      verbose=True):
+                                      use_median_mass=False, verbose=True):
     """
     Compute match matrices for provided Cartesian positions.
 
@@ -43,6 +43,9 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
         association.
     cosmo_params
         Cosmological parameters passed to MatchingProbability.
+    use_median_mass
+        If True, all associations use the median of mean log masses instead
+        of their own masses, giving each association equal weight.
     verbose
         If True, print clusters with no good match (min p-value > 0.05).
 
@@ -97,9 +100,16 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
     pval_matrix = np.empty((n_obs, n_assoc))
     dist_matrix = np.empty((n_obs, n_assoc))
 
+    if use_median_mass:
+        median_log_mass = np.median([np.mean(np.log10(a.masses))
+                                      for a in associations])
+
     for j, assoc in tqdm(enumerate(associations), total=n_assoc):
         halo_pos = assoc.positions - box_size / 2
-        halo_log_mass = np.log10(assoc.masses)
+        if use_median_mass:
+            halo_log_mass = np.full(len(assoc.masses), median_log_mass)
+        else:
+            halo_log_mass = np.log10(assoc.masses)
         centroid = np.mean(halo_pos, axis=0)
 
         matcher = MatchingProbability(
@@ -125,7 +135,7 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
 
 def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
                                 mdef=None, cosmo_params=None,
-                                verbose=True):
+                                use_median_mass=False, verbose=True):
     """
     Wrapper around :func:`compute_matching_matrix_cartesian` that extracts
     Cartesian positions from an ``ObservedCluster`` catalogue.
@@ -145,6 +155,9 @@ def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
     cosmo_params : dict, optional
         Cosmological parameters for :class:`MatchingProbability`. When omitted
         the default LCDM parameters are used.
+    use_median_mass
+        If True, all associations use the median of mean log masses instead
+        of their own masses, giving each association equal weight.
     verbose : bool, optional
         If True, print observed cluster names whose minimum p-value exceeds
         0.05 indicating a poor match.
@@ -163,6 +176,7 @@ def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
         box_size,
         mdef=mdef,
         cosmo_params=cosmo_params,
+        use_median_mass=use_median_mass,
         verbose=False,
     )
 
