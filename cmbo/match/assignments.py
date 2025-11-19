@@ -42,6 +42,7 @@ def match_catalogue_to_associations(
     matching_method='greedy',
     median_halo_tsz_pval_max=None,
     use_median_halo_tsz_pval=False,
+    min_member_fraction=0.5,
     max_angular_sep=30.0,
     max_delta_cz=500.0,
     cosmo_params=None,
@@ -77,6 +78,9 @@ def match_catalogue_to_associations(
     use_median_halo_tsz_pval : bool, optional
         If True, classical matching selects matches by minimising median
         halo_pval instead of 3D distance after angular/redshift filtering.
+    min_member_fraction : float, optional
+        Minimum fraction of member haloes that must satisfy angular/redshift
+        cuts in classical matching.
     max_angular_sep : float, optional
         Maximum angular separation in arcminutes for classical matching
         (default 30.0). Only used with 'classical' matching method.
@@ -126,6 +130,7 @@ def match_catalogue_to_associations(
             max_delta_cz=max_delta_cz,
             median_halo_tsz_pval_max=median_halo_tsz_pval_max,
             use_median_halo_tsz_pval=use_median_halo_tsz_pval,
+            min_member_fraction=min_member_fraction,
             cosmo_params=cosmo_params,
             verbose=verbose,
         )
@@ -178,10 +183,13 @@ def match_catalogue_to_associations(
                 "Matched association not found in the associations list."
             )
         assoc_indices[i] = assoc_idx
-        pvals[i] = pval
+        pvals[i] = np.nan if matching_method == 'classical' else pval
         distances[i] = distance
 
-    matched_mask = ~np.isnan(pvals)
+    if matching_method == 'classical':
+        matched_mask = assoc_indices != -1
+    else:
+        matched_mask = ~np.isnan(pvals)
     n_matched = np.sum(matched_mask)
     n_total = len(ra)
 
@@ -211,6 +219,7 @@ def match_planck_catalog_to_associations(
     matching_method='greedy',
     median_halo_tsz_pval_max=None,
     use_median_halo_tsz_pval=False,
+    min_member_fraction=0.5,
     max_angular_sep=30.0,
     max_delta_cz=500.0,
     cosmo_params=None,
@@ -248,6 +257,9 @@ def match_planck_catalog_to_associations(
     use_median_halo_tsz_pval : bool, optional
         If True, classical matching selects matches by minimising median
         halo_pval instead of 3D distance.
+    min_member_fraction : float, optional
+        Minimum fraction of member haloes that must satisfy angular/redshift
+        cuts in classical matching.
     max_angular_sep : float, optional
         Maximum angular separation in arcminutes for classical matching.
     max_delta_cz : float, optional
@@ -282,6 +294,7 @@ def match_planck_catalog_to_associations(
         matching_method=matching_method,
         median_halo_tsz_pval_max=median_halo_tsz_pval_max,
         use_median_halo_tsz_pval=use_median_halo_tsz_pval,
+        min_member_fraction=min_member_fraction,
         max_angular_sep=max_angular_sep,
         max_delta_cz=max_delta_cz,
         cosmo_params=cosmo_params,
@@ -302,6 +315,7 @@ def match_mcxc_catalog_to_associations(
     max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
+    min_member_fraction=0.5,
     **kwargs,
 ):
     """
@@ -338,6 +352,9 @@ def match_mcxc_catalog_to_associations(
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
         If True, print diagnostic information.
+    min_member_fraction : float, optional
+        Minimum fraction of member haloes that must satisfy angular/redshift
+        cuts in classical matching.
     **kwargs
         Additional arguments are ignored (e.g. classical_median_pval_max,
         classical_use_median_pval) to keep the function signature forgiving.
@@ -371,6 +388,7 @@ def match_mcxc_catalog_to_associations(
         matching_method=matching_method,
         max_angular_sep=max_angular_sep,
         max_delta_cz=max_delta_cz,
+        min_member_fraction=min_member_fraction,
         cosmo_params=cosmo_params,
         verbose=verbose,
         **kwargs,
@@ -390,6 +408,7 @@ def match_erass_catalog_to_associations(
     max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
+    min_member_fraction=0.5,
     **kwargs,
 ):
     """
@@ -425,6 +444,9 @@ def match_erass_catalog_to_associations(
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
         If True, print diagnostic information.
+    min_member_fraction : float, optional
+        Minimum fraction of member haloes that must satisfy angular/redshift
+        cuts in classical matching.
     **kwargs
         Additional arguments are ignored (e.g. classical_median_pval_max,
         classical_use_median_pval) to keep the function signature forgiving.
@@ -458,6 +480,7 @@ def match_erass_catalog_to_associations(
         matching_method=matching_method,
         max_angular_sep=max_angular_sep,
         max_delta_cz=max_delta_cz,
+        min_member_fraction=min_member_fraction,
         cosmo_params=cosmo_params,
         verbose=verbose,
         **kwargs,
