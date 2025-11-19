@@ -108,6 +108,7 @@ max_angular_sep = 180.0         # Classical matching: max angular separation [ar
 max_delta_cz = 1000.0           # Classical matching: max |cz| difference [km/s]
 median_halo_tsz_pval_max = 0.1  # Classical matching: max median halo pval (optional)
 use_median_halo_tsz_pval = false # Classical matching: minimise median halo pval instead of distance
+min_member_fraction = 0.5       # Classical matching: minimum member fraction passing angular/redshift cuts
 h = 0.681                       # Hubble parameter for unit conversion
 x_pivot = 14.0                  # x-axis pivot for regression (log10 scale)
 y_pivot_M500 = 14.0             # y-axis pivot for M500 regression (log10 scale)
