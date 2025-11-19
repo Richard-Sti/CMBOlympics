@@ -113,6 +113,9 @@ def match_catalogue_to_associations(
             f"got '{matching_method}'"
         )
 
+    print("median_halo_tsz_pval_max:", median_halo_tsz_pval_max)
+    print("use_median_halo_tsz_pval:", use_median_halo_tsz_pval)
+
     ra = np.asarray(catalogue[ra_key], dtype=float)
     dec = np.asarray(catalogue[dec_key], dtype=float)
     redshift = np.asarray(catalogue[redshift_key], dtype=float)
@@ -355,8 +358,8 @@ def match_mcxc_catalog_to_associations(
     filtered_data = mask_structured_array(data_mcxc, selection)
 
     # Drop legacy classical args that are unsupported here.
-    kwargs.pop("classical_median_pval_max", None)
-    kwargs.pop("classical_use_median_pval", None)
+    kwargs.pop("median_halo_tsz_pval_max", None)
+    kwargs.pop("use_median_halo_tsz_pval", None)
 
     return match_catalogue_to_associations(
         filtered_data,
@@ -441,8 +444,8 @@ def match_erass_catalog_to_associations(
     filtered_data = mask_structured_array(data_erass, selection)
 
     # Drop legacy classical args that are unsupported here.
-    kwargs.pop("classical_median_pval_max", None)
-    kwargs.pop("classical_use_median_pval", None)
+    kwargs.pop("median_halo_tsz_pval_max", None)
+    kwargs.pop("use_median_halo_tsz_pval", None)
 
     return match_catalogue_to_associations(
         filtered_data,
@@ -460,3 +463,130 @@ def match_erass_catalog_to_associations(
         verbose=verbose,
         **kwargs,
     )
+
+
+# def match_planck_and_xray_joint(
+#     data_tsz,
+#     data_xray,
+#     associations,
+#     xray_kind='mcxc',
+#     planck_kwargs=None,
+#     xray_kwargs=None,
+#     verbose=True,
+# ):
+#     """
+#     Match Planck tSZ catalogue, then re-match the same associations with an
+#     X-ray catalogue (MCXC or eROSITA), keeping only associations matched in
+#     both. Returns the jointly matched catalogues.
+
+#     Parameters
+#     ----------
+#     data_tsz : mapping
+#         Planck catalogue passed to :func:`match_planck_catalog_to_associations`.  # noqa
+#     data_xray : mapping
+#         MCXC or eROSITA catalogue.
+#     associations : sequence
+#         Associations returned by :func:`cmbo.match.load_associations`.
+#     xray_kind : {'mcxc', 'erass'}, optional
+#         Which X-ray matcher to use (default 'mcxc').
+#     planck_kwargs : dict, optional
+#         Extra keyword arguments forwarded to
+#         :func:`match_planck_catalog_to_associations`.
+#     xray_kwargs : dict, optional
+#         Extra keyword arguments forwarded to the X-ray matcher.
+#     verbose : bool, optional
+#         If True, print diagnostic information.
+
+#     Returns
+#     -------
+#     planck_cat_joint, planck_assocs_joint, planck_pvals_joint,
+#     planck_dists_joint, xray_cat_joint, xray_assocs_joint,
+#     xray_pvals_joint, xray_dists_joint, n_joint :
+#         Jointly matched Planck and X-ray catalogues and counts.
+#     """
+#     planck_kwargs = planck_kwargs or {}
+#     xray_kwargs = xray_kwargs or {}
+
+#     planck_match = match_planck_catalog_to_associations(
+#         data_tsz,
+#         associations,
+#         verbose=verbose,
+#         **planck_kwargs,
+#     )
+#     (planck_cat, planck_assocs, planck_pvals,
+#      planck_dists, n_planck, n_planck_total) = planck_match
+
+#     planck_assoc_ids = {id(a) for a in planck_assocs}
+#     assoc_subset = HaloAssociationList(
+#         [a for a in associations if id(a) in planck_assoc_ids]
+#     )
+#     if not assoc_subset:
+#         if verbose:
+#             fprint("Planck matching produced no associations; stopping.")
+#         return (mask_structured_array(planck_cat, []),
+#                 HaloAssociationList(),
+#                 np.array([]),
+#                 np.array([]),
+#                 mask_structured_array(data_xray, []),
+#                 HaloAssociationList(),
+#                 np.array([]),
+#                 np.array([]),
+#                 0)
+
+#     if xray_kind == 'mcxc':
+#         xray_match = match_mcxc_catalog_to_associations(
+#             data_xray,
+#             assoc_subset,
+#             verbose=verbose,
+#             **xray_kwargs,
+#         )
+#     elif xray_kind == 'erass':
+#         xray_match = match_erass_catalog_to_associations(
+#             data_xray,
+#             assoc_subset,
+#             verbose=verbose,
+#             **xray_kwargs,
+#         )
+#     else:
+#         raise ValueError("xray_kind must be 'mcxc' or 'erass'.")
+
+#     (xray_cat, xray_assocs, xray_pvals,
+#      xray_dists, n_xray, n_xray_total) = xray_match
+
+#     xray_assoc_ids = {id(a) for a in xray_assocs}
+#     joint_ids = planck_assoc_ids & xray_assoc_ids
+
+#     planck_joint_mask = np.array([id(a) in joint_ids for a in planck_assocs],
+#                                  dtype=bool)
+#     xray_joint_mask = np.array([id(a) in joint_ids for a in xray_assocs],
+#                                dtype=bool)
+
+#     planck_cat_joint = mask_structured_array(planck_cat, planck_joint_mask)
+#     xray_cat_joint = mask_structured_array(xray_cat, xray_joint_mask)
+#     planck_pvals_joint = np.asarray(planck_pvals)[planck_joint_mask]
+#     planck_dists_joint = np.asarray(planck_dists)[planck_joint_mask]
+#     xray_pvals_joint = np.asarray(xray_pvals)[xray_joint_mask]
+#     xray_dists_joint = np.asarray(xray_dists)[xray_joint_mask]
+
+#     planck_assocs_joint = HaloAssociationList(
+#         [a for a in planck_assocs if id(a) in joint_ids]
+#     )
+#     xray_assocs_joint = HaloAssociationList(
+#         [a for a in xray_assocs if id(a) in joint_ids]
+#     )
+
+#     n_joint = len(planck_assocs_joint)
+
+#     if verbose:
+#         fprint(
+#             "Joint matching: "
+#             f"{n_planck}/{n_planck_total} Planck matched, "
+#             f"{n_xray}/{n_xray_total} {xray_kind} matched, "
+#             f"{n_joint} in intersection."
+#         )
+
+#     return (planck_cat_joint, planck_assocs_joint,
+#             planck_pvals_joint, planck_dists_joint,
+#             xray_cat_joint, xray_assocs_joint,
+#             xray_pvals_joint, xray_dists_joint,
+#             n_joint)

@@ -16,4 +16,5 @@ from .assignments import (  # noqa: F401
     match_planck_catalog_to_associations,
     match_mcxc_catalog_to_associations,
     match_erass_catalog_to_associations,
+    match_planck_and_xray_joint,
 )
