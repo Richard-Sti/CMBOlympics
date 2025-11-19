@@ -720,11 +720,8 @@ def _plot_cutout_on_axis(ax, obs_cluster, association=None,
 
     # Mark association halo positions if provided
     if association is not None:
-        if obs_pos is None:
-            raise ValueError(
-                "obs_pos must be provided when association is given."
-            )
-        r, ell_halos, b_halos = association.to_galactic_angular(obs_pos)
+        gal = association.galactic_angular
+        ell_halos, b_halos = gal[:, 0], gal[:, 1]
         x_halos, y_halos = tangent_offsets_arcmin(
             ell_halos, b_halos, ellc, bc
         )
