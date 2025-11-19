@@ -56,9 +56,9 @@ def attach_associations_to_obs_clusters(
     matches = greedy_global_matching(
         pval_matrix,
         dist_matrix,
-        obs_clusters,
         associations,
-        cfg["analysis"].get("matching_pvalue_threshold", 0.05),
+        obs_clusters=obs_clusters,
+        threshold=cfg["analysis"].get("matching_pvalue_threshold", 0.05),
     )
     return matches
 
