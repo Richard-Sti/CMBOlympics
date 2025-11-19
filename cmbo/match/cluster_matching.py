@@ -391,7 +391,7 @@ def hungarian_global_matching(pval_matrix, dist_matrix, associations,
 
 def compute_angular_separation(ra1, dec1, ra2, dec2):
     """
-    Compute angular separation between two points on the sky using Astropy.
+    Compute angular separation between two points on the.
 
     Parameters
     ----------
