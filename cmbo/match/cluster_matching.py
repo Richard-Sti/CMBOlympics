@@ -24,6 +24,7 @@ from tqdm import tqdm
 
 from ..constants import SPEED_OF_LIGHT_KMS
 from ..utils.coords import cz_to_comoving_distance, radec_to_cartesian
+from ..utils.associations import HaloAssociationList
 from .pfeifer import MatchingProbability
 
 
@@ -414,6 +415,8 @@ def compute_angular_separation(ra1, dec1, ra2, dec2):
 
 def classical_matching(ra_obs, dec_obs, z_obs, associations,
                        max_angular_sep=30.0, max_delta_cz=500.0,
+                       median_halo_tsz_pval_max=None,
+                       use_median_halo_tsz_pval=False,
                        cosmo_params=None, verbose=True):
     """
     Match clusters using classical angular separation + redshift criteria.
@@ -438,6 +441,12 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
         Maximum angular separation in arcminutes (default 30.0).
     max_delta_cz : float, optional
         Maximum velocity difference in km/s (default 500.0).
+    median_halo_tsz_pval_max : float, optional
+        When set, associations with median halo_pval >= this value are
+        excluded before matching.
+    use_median_halo_tsz_pval : bool, optional
+        If True, among valid pairs select matches by minimising median
+        halo_pval instead of 3D distance.
     cosmo_params : dict, optional
         Cosmological parameters for distance calculations.
     verbose : bool, optional
@@ -451,8 +460,40 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
         - None if not matched
     """
     n_obs = len(ra_obs)
-    assoc_container = associations
     associations = list(associations)
+
+    median_pvals = None
+    if median_halo_tsz_pval_max is not None or use_median_halo_tsz_pval:
+        median_pvals = np.array(
+            [getattr(a, "median_pval", np.nan) for a in associations],
+            dtype=float
+        )
+        if median_halo_tsz_pval_max is not None:
+            keep = (
+                np.isfinite(median_pvals)
+                & (median_pvals < median_halo_tsz_pval_max)
+            )
+            if verbose:
+                removed = len(associations) - int(np.sum(keep))
+                print(
+                    "Classical matching: filtered "
+                    f"{removed} associations with median halo_tsz pval "
+                    f">= {median_halo_tsz_pval_max}"
+                )
+            associations = [a for k, a in zip(keep, associations) if k]
+            if median_pvals.size:
+                median_pvals = median_pvals[keep]
+            if not associations:
+                raise ValueError(
+                    "No associations remain after applying "
+                    "median_halo_tsz_pval_max."
+                )
+
+    assoc_container = (
+        associations if isinstance(associations, HaloAssociationList)
+        else HaloAssociationList(associations)
+    )
+    associations = list(assoc_container)
     n_assoc = len(associations)
 
     if verbose:
@@ -460,6 +501,11 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
               "associations")
         print(f"  Filters: angular_sep <= {max_angular_sep:.1f} arcmin, "
               f"delta_cz <= {max_delta_cz:.1f} km/s")
+        if use_median_halo_tsz_pval:
+            print("  Selection: minimise median halo_tsz pval among valid "
+                  "pairs")
+        else:
+            print("  Selection: minimise 3D distance among valid pairs")
 
     # Compute association centroids, RA/Dec, and redshifts using object methods
     # Associations automatically use their stored cosmology/box metadata
@@ -499,17 +545,30 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
         n_valid_pairs = np.sum(valid_matrix)
         print(f"  {n_valid_pairs} candidate pairs pass filters")
 
-    # Set invalid distances to inf for greedy matching
-    dist_matrix_filtered = dist_matrix_3d.copy()
-    dist_matrix_filtered[~valid_matrix] = np.inf
+    # Build scoring matrix used for greedy selection
+    if use_median_halo_tsz_pval:
+        if median_pvals is None:
+            median_pvals = np.array(
+                [getattr(a, "median_pval", np.nan) for a in associations],
+                dtype=float
+            )
+        score_matrix = np.broadcast_to(median_pvals, (n_obs, n_assoc)).copy()
+        score_matrix[~valid_matrix] = np.inf
+        score_matrix[~np.isfinite(score_matrix)] = np.inf
+        tie_break_matrix = dist_matrix_3d
+    else:
+        score_matrix = dist_matrix_3d.copy()
+        score_matrix[~valid_matrix] = np.inf
+        tie_break_matrix = dist_matrix_3d
 
-    # Greedy matching on 3D distance
+    # Greedy matching on chosen score
     matches = [None] * n_obs
     used_associations = set()
 
     while True:
-        # Find minimum distance among remaining valid pairs
-        min_dist = np.inf
+        # Find minimum score among remaining valid pairs
+        min_score = np.inf
+        min_tie_break = np.inf
         best_i, best_j = -1, -1
 
         for i in range(n_obs):
@@ -518,11 +577,18 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
             for j in range(n_assoc):
                 if j in used_associations:
                     continue
-                if dist_matrix_filtered[i, j] < min_dist:
-                    min_dist = dist_matrix_filtered[i, j]
+                current_score = score_matrix[i, j]
+                if current_score < min_score:
+                    min_score = current_score
+                    min_tie_break = tie_break_matrix[i, j]
                     best_i, best_j = i, j
+                elif current_score == min_score:
+                    # Prefer smaller 3D distance as a tie-breaker
+                    if tie_break_matrix[i, j] < min_tie_break:
+                        min_tie_break = tie_break_matrix[i, j]
+                        best_i, best_j = i, j
 
-        if not np.isfinite(min_dist):
+        if not np.isfinite(min_score):
             break
 
         # Assign match
@@ -532,6 +598,7 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
             float(dist_matrix_3d[best_i, best_j])
         )
         used_associations.add(best_j)
+        score_matrix[:, best_j] = np.inf
 
     if verbose:
         n_matched = sum(1 for m in matches if m is not None)

@@ -40,6 +40,8 @@ def match_catalogue_to_associations(
     mass_preference_threshold=None,
     use_median_mass=False,
     matching_method='greedy',
+    median_halo_tsz_pval_max=None,
+    use_median_halo_tsz_pval=False,
     max_angular_sep=30.0,
     max_delta_cz=500.0,
     cosmo_params=None,
@@ -69,6 +71,12 @@ def match_catalogue_to_associations(
     matching_method : str, optional
         Algorithm for global matching: 'greedy' (default), 'hungarian', or
         'classical'.
+    median_halo_tsz_pval_max : float, optional
+        When set, classical matching only considers associations whose
+        median halo_pval falls below this threshold.
+    use_median_halo_tsz_pval : bool, optional
+        If True, classical matching selects matches by minimising median
+        halo_pval instead of 3D distance after angular/redshift filtering.
     max_angular_sep : float, optional
         Maximum angular separation in arcminutes for classical matching
         (default 30.0). Only used with 'classical' matching method.
@@ -116,6 +124,8 @@ def match_catalogue_to_associations(
             associations,
             max_angular_sep=max_angular_sep,
             max_delta_cz=max_delta_cz,
+            median_halo_tsz_pval_max=median_halo_tsz_pval_max,
+            use_median_halo_tsz_pval=use_median_halo_tsz_pval,
             cosmo_params=cosmo_params,
             verbose=verbose,
         )
@@ -199,6 +209,8 @@ def match_planck_catalog_to_associations(
     mass_preference_threshold=None,
     use_median_mass=False,
     matching_method='greedy',
+    median_halo_tsz_pval_max=None,
+    use_median_halo_tsz_pval=False,
     max_angular_sep=30.0,
     max_delta_cz=500.0,
     cosmo_params=None,
@@ -230,6 +242,12 @@ def match_planck_catalog_to_associations(
     matching_method : str, optional
         Algorithm for global matching: 'greedy' (default), 'hungarian', or
         'classical'.
+    median_halo_tsz_pval_max : float, optional
+        When set, classical matching only considers associations with median
+        halo_pval below this value.
+    use_median_halo_tsz_pval : bool, optional
+        If True, classical matching selects matches by minimising median
+        halo_pval instead of 3D distance.
     max_angular_sep : float, optional
         Maximum angular separation in arcminutes for classical matching.
     max_delta_cz : float, optional
@@ -262,6 +280,8 @@ def match_planck_catalog_to_associations(
         mass_preference_threshold=mass_preference_threshold,
         use_median_mass=use_median_mass,
         matching_method=matching_method,
+        median_halo_tsz_pval_max=median_halo_tsz_pval_max,
+        use_median_halo_tsz_pval=use_median_halo_tsz_pval,
         max_angular_sep=max_angular_sep,
         max_delta_cz=max_delta_cz,
         cosmo_params=cosmo_params,
@@ -282,6 +302,7 @@ def match_mcxc_catalog_to_associations(
     max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
+    **kwargs,
 ):
     """
     Match an MCXC-II X-ray catalogue to halo associations (z/M500 cuts
@@ -317,6 +338,9 @@ def match_mcxc_catalog_to_associations(
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
         If True, print diagnostic information.
+    **kwargs
+        Additional arguments are ignored (e.g. classical_median_pval_max,
+        classical_use_median_pval) to keep the function signature forgiving.
 
     Returns
     -------
@@ -329,6 +353,10 @@ def match_mcxc_catalog_to_associations(
     selection = (redshift < z_max) & (m500 > m500_min)
 
     filtered_data = mask_structured_array(data_mcxc, selection)
+
+    # Drop legacy classical args that are unsupported here.
+    kwargs.pop("classical_median_pval_max", None)
+    kwargs.pop("classical_use_median_pval", None)
 
     return match_catalogue_to_associations(
         filtered_data,
@@ -344,6 +372,7 @@ def match_mcxc_catalog_to_associations(
         max_delta_cz=max_delta_cz,
         cosmo_params=cosmo_params,
         verbose=verbose,
+        **kwargs,
     )
 
 
@@ -360,6 +389,7 @@ def match_erass_catalog_to_associations(
     max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
+    **kwargs,
 ):
     """
     Match an eRASS X-ray catalogue to halo associations (z/M500 cuts applied).
@@ -394,6 +424,9 @@ def match_erass_catalog_to_associations(
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
         If True, print diagnostic information.
+    **kwargs
+        Additional arguments are ignored (e.g. classical_median_pval_max,
+        classical_use_median_pval) to keep the function signature forgiving.
 
     Returns
     -------
@@ -406,6 +439,10 @@ def match_erass_catalog_to_associations(
     selection = (redshift < z_max) & (m500 > m500_min)
 
     filtered_data = mask_structured_array(data_erass, selection)
+
+    # Drop legacy classical args that are unsupported here.
+    kwargs.pop("classical_median_pval_max", None)
+    kwargs.pop("classical_use_median_pval", None)
 
     return match_catalogue_to_associations(
         filtered_data,
@@ -421,4 +458,5 @@ def match_erass_catalog_to_associations(
         max_delta_cz=max_delta_cz,
         cosmo_params=cosmo_params,
         verbose=verbose,
+        **kwargs,
     )
