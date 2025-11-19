@@ -122,7 +122,7 @@ class LinearRoxyFitter:
         return theta[0] * x + theta[1]
 
     def fit(self, x, y, xerr, yerr, nwarm=500, nsamp=5000, method='mnr',
-            x_pivot=0, y_pivot=0):
+            x_pivot=0, y_pivot=0, num_chains=1):
         """
         Fit the linear model with MCMC.
 
@@ -149,6 +149,8 @@ class LinearRoxyFitter:
         y_pivot : float
             Pivot point for y normalization. If 0 (default), no normalization
             is applied. Otherwise y_pivot is subtracted from y.
+        num_chains : int
+            Number of MCMC chains.
 
         Returns
         -------
@@ -159,12 +161,12 @@ class LinearRoxyFitter:
         self._y_pivot = y_pivot
 
         self._result = self._do_fit(x, y, xerr, yerr, nwarm, nsamp, method,
-                                    x_pivot, y_pivot)
+                                    x_pivot, y_pivot, num_chains)
 
         return self._result
 
     def _do_fit(self, x, y, xerr, yerr, nwarm, nsamp, method, x_pivot,
-                y_pivot):
+                y_pivot, num_chains):
         """Perform a single MCMC fit."""
         try:
             from roxy.regressor import RoxyRegressor
@@ -183,8 +185,10 @@ class LinearRoxyFitter:
 
         result = regressor.mcmc(
             self.param_names, xobs, yobs, [xerr, yerr],
-            nwarm, nsamp, method=method
+            nwarm, nsamp, method=method, num_chains=num_chains
         )
+
+        self._regressor = regressor
 
         return result
 
@@ -247,6 +251,9 @@ class LinearRoxyFitter:
 
         if 'samples' in self._result:
             print_summary(self._result['samples'], prob=prob)
+        elif (self._regressor is not None
+              and hasattr(self._regressor, 'samples')):
+            print_summary(self._regressor.samples, prob=prob)
         else:
             print("Warning: NumPyro samples not found in result object.")
 
