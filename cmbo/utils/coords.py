@@ -18,7 +18,7 @@ import astropy.units as u
 import numpy as np
 from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
                                  SkyCoord, SphericalRepresentation)
-from astropy.cosmology import FlatLambdaCDM
+from astropy.cosmology import FlatLambdaCDM, z_at_value
 from tqdm import trange
 
 from ..constants import SPEED_OF_LIGHT_KMS
@@ -70,6 +70,26 @@ def cz_to_comoving_distance(cz, h=1.0, Om0=0.3111):
     distance = cosmo_obj.comoving_distance(redshift).value * cosmo_obj.h
 
     out[mask] = distance
+    if scalar_input:
+        return float(out[0])
+    return out
+
+
+def comoving_distance_to_cz(distance, h=1.0, Om0=0.3111):
+    """
+    Convert comoving distance (in Mpc/h if h = 1) to CMB-frame
+    velocity (km/s).
+    """
+    scalar_input = np.isscalar(distance)
+    dist_arr = np.array(distance, dtype=float, ndmin=1)
+
+    cosmo_obj = FlatLambdaCDM(H0=100.0 * h, Om0=Om0)
+    dist_mpc = (dist_arr / h) * u.Mpc
+
+    # z_at_value supports array inputs in recent Astropy versions
+    redshifts = z_at_value(cosmo_obj.comoving_distance, dist_mpc)
+    out = redshifts * SPEED_OF_LIGHT_KMS
+
     if scalar_input:
         return float(out[0])
     return out
