@@ -323,7 +323,7 @@ class HaloAssociationList(list):
     @property
     def mean_log_mass(self):
         """Mean log mass for each association."""
-        return np.array([np.log10(assoc.masses).mean() for assoc in self])
+        return np.array([np.mean(np.log10(assoc.masses)) for assoc in self])
 
     @property
     def std_log_mass(self):
