@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 from tqdm import tqdm
 
 from .pfeifer import MatchingProbability
@@ -101,8 +102,8 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
     dist_matrix = np.empty((n_obs, n_assoc))
 
     if use_median_mass:
-        median_log_mass = np.median([np.mean(np.log10(a.masses))
-                                      for a in associations])
+        median_log_mass = np.median(
+            [np.mean(np.log10(a.masses)) for a in associations])
 
     for j, assoc in tqdm(enumerate(associations), total=n_assoc):
         halo_pos = assoc.positions - box_size / 2
@@ -285,5 +286,100 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
                         print(f"Cluster {k} ({name}) now orphaned "
                               f"(best remaining p={best_remaining:.3e})")
                         orphaned.add(k)
+
+    return matches
+
+
+def hungarian_global_matching(pval_matrix, dist_matrix, associations,
+                              obs_clusters=None, threshold=0.05,
+                              mass_preference_threshold=None, verbose=True):
+    """
+    Assign association-cluster matches using Hungarian algorithm.
+
+    Uses the Hungarian (Munkres) algorithm to find the optimal assignment that
+    minimizes the total cost (sum of p-values). This guarantees a globally
+    optimal solution, unlike the greedy approach.
+
+    The Hungarian algorithm requires a square cost matrix. When the number of
+    clusters and associations differ, the matrix is padded with a large cost
+    value (2.0, which is > max possible p-value of 1.0). Padded assignments
+    are automatically rejected by threshold filtering. Any inf/nan values in
+    the p-value matrix are also replaced with this large cost to ensure the
+    optimization problem remains feasible.
+
+    Note: mass_preference_threshold is ignored in this implementation as the
+    Hungarian algorithm finds the global optimum based on p-values alone.
+
+    Parameters
+    ----------
+    pval_matrix : ndarray of shape (n_obs_clusters, n_associations)
+        Average p-value for each cluster-association pair. P-values range
+        from 0 (perfect match) to 1 (worst match).
+    dist_matrix : ndarray of shape (n_obs_clusters, n_associations)
+        Distance between association centroid and observed cluster position.
+    associations
+        Iterable of associations.
+    obs_clusters, optional
+        Observed clusters with a `names` attribute.
+    threshold : float, optional
+        Maximum p-value to accept as a match. Matches above threshold are
+        rejected after optimal assignment is found. Default 0.05.
+    mass_preference_threshold : float, optional
+        Not used in Hungarian algorithm (included for API compatibility).
+    verbose : bool, optional
+        If True, print matching progress and rejected matches.
+
+    Returns
+    -------
+    matches : list
+        List of length n_obs_clusters. For each cluster:
+        - (association, pval, distance) if matched
+        - None if not matched
+    """
+    if mass_preference_threshold is not None and verbose:
+        print("Warning: mass_preference_threshold is ignored in Hungarian "
+              "matching")
+
+    n_obs = pval_matrix.shape[0]
+    associations = list(associations)
+    matches = [None] * n_obs
+
+    # Hungarian algorithm requires square matrix, so we need to handle
+    # rectangular matrices by padding with high but finite cost
+    n_assoc = pval_matrix.shape[1]
+    max_dim = max(n_obs, n_assoc)
+
+    # Use a value larger than the maximum possible p-value (1.0) for padding
+    # This ensures padded assignments will be rejected by threshold filtering
+    large_cost = 2.0
+    cost_matrix = np.full((max_dim, max_dim), large_cost)
+    cost_matrix[:n_obs, :n_assoc] = pval_matrix
+
+    # Replace any inf/nan values with large cost to ensure feasibility
+    cost_matrix[~np.isfinite(cost_matrix)] = large_cost
+
+    # Find optimal assignment minimizing total p-value
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+    # Process assignments
+    for i, j in zip(row_ind, col_ind):
+        # Skip padding assignments
+        if i >= n_obs or j >= n_assoc:
+            continue
+
+        pval = float(pval_matrix[i, j])
+
+        # Apply threshold
+        if threshold is not None and pval > threshold:
+            if verbose and obs_clusters is not None:
+                name = obs_clusters.names[i]
+                print(f"Cluster {i} ({name}) rejected: p={pval:.3e} > "
+                      f"threshold={threshold:.3e}")
+            continue
+
+        if not np.isfinite(pval):
+            continue
+
+        matches[i] = (associations[j], pval, float(dist_matrix[i, j]))
 
     return matches

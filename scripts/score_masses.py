@@ -235,6 +235,7 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
         match_threshold=match_threshold,
         mass_preference_threshold=mass_cfg.get("mass_preference_threshold"),  # noqa
         use_median_mass=mass_cfg.get("use_median_mass", True),
+        matching_method=mass_cfg.get("matching_method", "greedy"),
         z_max=mass_cfg["z_max"],
         m500_min=mass_cfg["m500_min"],
         verbose=False,

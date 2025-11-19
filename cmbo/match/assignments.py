@@ -25,7 +25,8 @@ from ..utils.associations import HaloAssociationList
 from ..utils.logging import fprint
 from ..utils.coords import cz_to_comoving_distance, radec_to_cartesian
 from .cluster_matching import (compute_matching_matrix_cartesian,
-                               greedy_global_matching)
+                               greedy_global_matching,
+                               hungarian_global_matching)
 
 
 def match_catalogue_to_associations(
@@ -37,6 +38,7 @@ def match_catalogue_to_associations(
     match_threshold=0.05,
     mass_preference_threshold=None,
     use_median_mass=False,
+    matching_method='greedy',
     cosmo_params=None,
     verbose=True,
 ):
@@ -52,14 +54,15 @@ def match_catalogue_to_associations(
     ra_key, dec_key, redshift_key : str
         Keys selecting RA, Dec (degrees) and redshift columns.
     match_threshold : float, optional
-        Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
+        Maximum Pfeifer p-value accepted by the matching algorithm.
     mass_preference_threshold : float, optional
         When set, prefer associations with higher mean log mass among pairs
-        with p-value below this threshold. Forwarded to
-        :func:`greedy_global_matching`.
+        with p-value below this threshold. Only used with greedy matching.
     use_median_mass
         If True, all associations use the median of mean log masses instead
         of their own masses, giving each association equal weight.
+    matching_method : str, optional
+        Algorithm for global matching: 'greedy' (default) or 'hungarian'.
     cosmo_params : dict, optional
         Cosmological parameters for Pfeifer matching.
     verbose : bool, optional
@@ -83,6 +86,12 @@ def match_catalogue_to_associations(
     if not associations:
         raise ValueError("At least one association is required.")
 
+    if matching_method not in ('greedy', 'hungarian'):
+        raise ValueError(
+            f"matching_method must be 'greedy' or 'hungarian', "
+            f"got '{matching_method}'"
+        )
+
     ra = np.asarray(catalogue[ra_key], dtype=float)
     dec = np.asarray(catalogue[dec_key], dtype=float)
     redshift = np.asarray(catalogue[redshift_key], dtype=float)
@@ -95,20 +104,29 @@ def match_catalogue_to_associations(
     pval_matrix, dist_matrix = compute_matching_matrix_cartesian(
         x_obs,
         associations,
-        box_size=None,
-        mdef=None,
         cosmo_params=cosmo_params,
         use_median_mass=use_median_mass,
         verbose=verbose,
     )
-    matches_local = greedy_global_matching(
-        pval_matrix,
-        dist_matrix,
-        associations,
-        threshold=match_threshold,
-        mass_preference_threshold=mass_preference_threshold,
-        verbose=verbose,
-    )
+
+    if matching_method == 'greedy':
+        matches_local = greedy_global_matching(
+            pval_matrix,
+            dist_matrix,
+            associations,
+            threshold=match_threshold,
+            mass_preference_threshold=mass_preference_threshold,
+            verbose=verbose,
+        )
+    else:  # hungarian
+        matches_local = hungarian_global_matching(
+            pval_matrix,
+            dist_matrix,
+            associations,
+            threshold=match_threshold,
+            mass_preference_threshold=mass_preference_threshold,
+            verbose=verbose,
+        )
 
     assoc_lookup = {id(assoc): idx for idx, assoc in enumerate(associations)}
     assoc_indices = np.empty(len(ra), dtype=int)
@@ -155,6 +173,7 @@ def match_planck_catalog_to_associations(
     match_threshold=0.05,
     mass_preference_threshold=None,
     use_median_mass=False,
+    matching_method='greedy',
     cosmo_params=None,
     verbose=True,
 ):
@@ -172,7 +191,7 @@ def match_planck_catalog_to_associations(
     m500_min : float, optional
         Minimum Planck M500 mass (Msun/h) considered (default 1e14).
     match_threshold : float, optional
-        Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
+        Maximum Pfeifer p-value accepted by the matching algorithm.
     mass_preference_threshold : float, optional
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Forwarded to
@@ -180,6 +199,8 @@ def match_planck_catalog_to_associations(
     use_median_mass
         If True, all associations use the median of mean log masses instead
         of their own masses, giving each association equal weight.
+    matching_method : str, optional
+        Algorithm for global matching: 'greedy' (default) or 'hungarian'.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -207,6 +228,7 @@ def match_planck_catalog_to_associations(
         match_threshold=match_threshold,
         mass_preference_threshold=mass_preference_threshold,
         use_median_mass=use_median_mass,
+        matching_method=matching_method,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
@@ -220,6 +242,7 @@ def match_mcxc_catalog_to_associations(
     match_threshold=0.05,
     mass_preference_threshold=None,
     use_median_mass=False,
+    matching_method='greedy',
     cosmo_params=None,
     verbose=True,
 ):
@@ -238,7 +261,7 @@ def match_mcxc_catalog_to_associations(
     m500_min : float, optional
         Minimum MCXC M500 mass (Msun/h) considered (default 1e14).
     match_threshold : float, optional
-        Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
+        Maximum Pfeifer p-value accepted by the matching algorithm.
     mass_preference_threshold : float, optional
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Forwarded to
@@ -246,6 +269,8 @@ def match_mcxc_catalog_to_associations(
     use_median_mass
         If True, all associations use the median of mean log masses instead
         of their own masses, giving each association equal weight.
+    matching_method : str, optional
+        Algorithm for global matching: 'greedy' (default) or 'hungarian'.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -272,6 +297,7 @@ def match_mcxc_catalog_to_associations(
         match_threshold=match_threshold,
         mass_preference_threshold=mass_preference_threshold,
         use_median_mass=use_median_mass,
+        matching_method=matching_method,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
@@ -285,6 +311,7 @@ def match_erass_catalog_to_associations(
     match_threshold=0.05,
     mass_preference_threshold=None,
     use_median_mass=False,
+    matching_method='greedy',
     cosmo_params=None,
     verbose=True,
 ):
@@ -302,7 +329,7 @@ def match_erass_catalog_to_associations(
     m500_min : float, optional
         Minimum eRASS M500 mass (Msun/h) considered (default 1e14).
     match_threshold : float, optional
-        Maximum Pfeifer p-value accepted by :func:`greedy_global_matching`.
+        Maximum Pfeifer p-value accepted by the matching algorithm.
     mass_preference_threshold : float, optional
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Forwarded to
@@ -310,6 +337,8 @@ def match_erass_catalog_to_associations(
     use_median_mass
         If True, all associations use the median of mean log masses instead
         of their own masses, giving each association equal weight.
+    matching_method : str, optional
+        Algorithm for global matching: 'greedy' (default) or 'hungarian'.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -336,6 +365,7 @@ def match_erass_catalog_to_associations(
         match_threshold=match_threshold,
         mass_preference_threshold=mass_preference_threshold,
         use_median_mass=use_median_mass,
+        matching_method=matching_method,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
