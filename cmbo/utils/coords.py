@@ -35,6 +35,24 @@ def cartesian_to_r_theta_phi(x, y, z, center=[0.0, 0.0, 0.0]):
     return r, theta, phi
 
 
+def cartesian_to_radec(pos, center=[0.0, 0.0, 0.0]):
+    """Convert Cartesian coordinates to right ascension and declination."""
+    pos = np.asarray(pos, dtype=float)
+    if pos.ndim != 2 or pos.shape[1] != 3:
+        raise ValueError("pos must have shape (N, 3).")
+
+    center = np.asarray(center, dtype=float)
+    if center.shape != (3,):
+        raise ValueError("center must have shape (3,).")
+
+    __, theta, phi = cartesian_to_r_theta_phi(
+        pos[:, 0], pos[:, 1], pos[:, 2], center=center
+    )
+    ra = np.degrees(phi)
+    dec = np.degrees(np.pi / 2 - theta)
+    return ra, dec
+
+
 def radec_to_galactic(ra_deg, dec_deg):
     """Convert equatorial coordinates to Galactic longitude and latitude."""
     ra, dec = np.broadcast_arrays(np.asarray(ra_deg, dtype=float),
@@ -92,7 +110,7 @@ def comoving_distance_to_cz(distance, h=1.0, Om0=0.3111):
 
     if scalar_input:
         return float(out[0])
-    return out
+    return out.value
 
 
 def radec_to_cartesian(ra_deg, dec_deg):
