@@ -11,3 +11,4 @@ CLAUDE.md
 GEMINI.md
 .DS_Store
 notebooks/test.ipynb
+.gemini/settings.json
