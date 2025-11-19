@@ -236,6 +236,8 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
         mass_preference_threshold=mass_cfg.get("mass_preference_threshold"),  # noqa
         use_median_mass=mass_cfg.get("use_median_mass", True),
         matching_method=mass_cfg.get("matching_method", "greedy"),
+        max_angular_sep=mass_cfg.get("max_angular_sep", 30.0),
+        max_delta_cz=mass_cfg.get("max_delta_cz", 500.0),
         z_max=mass_cfg["z_max"],
         m500_min=mass_cfg["m500_min"],
         verbose=False,
