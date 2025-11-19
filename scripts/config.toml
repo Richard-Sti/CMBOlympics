@@ -94,15 +94,35 @@ seed = 42   # Random seed for reproducibility
 return_individual_profiles = false # Save all individual 1D profiles to the output file
 return_random_profiles = false     # Save all individual random 1D profiles to the output file
 
+# --- Mass Scoring ---
+# Settings for mass calibration scoring (scripts/score_masses.py)
+# Script loops over all catalogues (planck, mcxc, erass) and all simulations (csiborg1, csiborg2, manticore)
+[mass_scoring]
+match_threshold = [0.05, 0.1]   # p-value threshold(s) for matching (can be single value or list)
+# mass_preference_threshold = 0.01 # Mass preference threshold (comment out for None)
+z_max = 0.045                   # Maximum redshift for matching
+m500_min = 1e14                 # Minimum M500 for matching [M_sun]
+use_median_mass = true          # Use median mass from associations
+h = 0.681                       # Hubble parameter for unit conversion
+x_pivot = 14.0                  # x-axis pivot for regression (log10 scale)
+y_pivot_M500 = 14.0             # y-axis pivot for M500 regression (log10 scale)
+y_pivot_L500 = 44.0             # y-axis pivot for L500 regression (log10 scale)
+y_pivot_YSZ = -4.0              # y-axis pivot for YSZ regression (log10 scale)
+mcmc_warmup = 1000              # Number of MCMC warmup/burn-in steps
+mcmc_samples = 10_000           # Number of MCMC sampling steps
+mcmc_chains = 1                 # Number of MCMC chains
+output_dir = "results/mass_scoring" # Output directory for plots
+clear_output_dir = true         # Clear output directory before running
+
 # --- Halo Catalogues ---
 # Definitions of available halo catalogues. The key is used in `analysis.which_simulation`.
 [halo_catalogues]
-min_association_mass = 5e13
+min_association_mass = 5e13  # Minimum mass for associations [M_sun/h]
 
 [halo_catalogues.csiborg1]
 fname = "data/csiborg1_fof.hdf5"
 nsim = "all"
-box_size = 677.7
+box_size = 677.7  # [Mpc/h]
 omega_m = 0.307
 position_key = "Position"
 mass_key = "M500c"
@@ -114,7 +134,7 @@ nsim = "all"  # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
 mass_key = "Group_M_Crit500"
 radius_key = "Group_R_Crit500"
-box_size = 676.6
+box_size = 676.6  # [Mpc/h]
 omega_m = 0.3111
 
 
@@ -124,5 +144,5 @@ nsim = "all" # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
 mass_key = "Group_M_Crit500"
 radius_key = "Group_R_Crit500"
-box_size = 681.0
+box_size = 681.0  # [Mpc/h]
 omega_m = 0.306
