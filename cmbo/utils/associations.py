@@ -46,7 +46,7 @@ class HaloAssociation:
     member_indices: np.ndarray
     fraction_present: float
     velocities: np.ndarray | None = None
-    optional_data: dict = field(default=None)
+    optional_data: dict = field(default_factory=dict)
 
     # Map signal fields (populated by compute_map_signals)
     median_theta500: float = field(default=None)
@@ -57,6 +57,7 @@ class HaloAssociation:
     halo_pvals: np.ndarray = field(default=None)
 
     def keys(self):
+        """Return a list of available data fields."""
         keys = [
             "label",
             "centroid",
@@ -72,6 +73,7 @@ class HaloAssociation:
         return keys
 
     def as_dict(self):
+        """Return a dictionary representation of the association."""
         d = {
             "label": self.label,
             "centroid": self.centroid,
@@ -96,13 +98,10 @@ class HaloAssociation:
 
     @cached_property
     def Om0(self):
-        """Matter density parameter for this association."""
-        if self.optional_data:
-            if "omega_m" in self.optional_data:
-                return float(self.optional_data["omega_m"])
-            if "Om0" in self.optional_data:
-                return float(self.optional_data["Om0"])
-        raise ValueError("Om0 must be present in optional_data.")
+        """Matter density parameter, read from 'omega_m' in optional_data."""
+        if self.optional_data and "omega_m" in self.optional_data:
+            return float(self.optional_data["omega_m"])
+        raise ValueError("omega_m must be present in optional_data.")
 
     @cached_property
     def box_size(self):
@@ -156,7 +155,8 @@ class HaloAssociation:
         """
         if self.velocities is None:
             raise ValueError(
-                "Velocities are required to compute the observed redshift..")
+                "Velocities are required to compute the observed redshift."
+            )
         runit = (self.positions - self.box_size / 2.0) / self.distance[:, None]
         Vlos = np.sum(self.velocities * runit, axis=1)
         zcosmo = self.cosmo_redshift
@@ -580,7 +580,7 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
                 realisations=cluster_real,
                 member_indices=member_indices,
                 fraction_present=fraction_present,
-                optional_data=cluster_opt if cluster_opt else None,
+                optional_data=cluster_opt,
             )
         )
 
@@ -714,7 +714,6 @@ def _load_simulation_halos(cfg, sim_key):
         "centre": centre,
         "mass_definition": mass_definition,
         "omega_m": omega_m,
-        "Om0": omega_m,
     }
     if velocity_key:
         data["velocities"] = velocity_all
@@ -979,13 +978,13 @@ def load_associations(sim_key, cfg, verbose=True):
         theta_lookup,
     )
     for assoc in associations:
-        assoc.optional_data = assoc.optional_data or {}
+
         assoc.optional_data.setdefault("box_size", halo_data["box_size"])
         assoc.optional_data.setdefault(
             "mass_definition", halo_data["mass_definition"]
         )
         assoc.optional_data.setdefault("omega_m", halo_data["omega_m"])
-        assoc.optional_data.setdefault("Om0", halo_data["omega_m"])
+
         if velocity_key and velocity_key in assoc.optional_data:
             assoc.velocities = assoc.optional_data[velocity_key]
 
