@@ -110,7 +110,7 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
             [np.mean(np.log10(a.masses)) for a in associations])
 
     for j, assoc in tqdm(enumerate(associations), total=n_assoc):
-        halo_pos = assoc.positions - box_size / 2
+        halo_pos = assoc.redshift_position - box_size / 2
         if use_median_mass:
             halo_log_mass = np.full(len(assoc.masses), median_log_mass)
         else:
@@ -126,7 +126,7 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
 
         for i in range(n_obs):
             pval, _, _ = matcher.cdf_per_halo(x_obs[i])
-            pval_matrix[i, j] = np.mean(pval)
+            pval_matrix[i, j] = np.median(pval)
             dist_matrix[i, j] = np.linalg.norm(x_obs[i] - centroid)
 
     if verbose:
@@ -462,7 +462,7 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
     radec_array = assoc_container.centroid_radec
     ra_assoc = radec_array[:, 0]
     dec_assoc = radec_array[:, 1]
-    z_assoc = assoc_container.centroid_redshift
+    z_assoc = assoc_container.centroid_obs_redshift
     assoc_centroids = assoc_container.centroid_cartesian - box_size / 2
 
     # Compute 3D positions for observed clusters
