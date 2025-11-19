@@ -241,6 +241,8 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
         median_halo_tsz_pval_max=mass_cfg.get("median_halo_tsz_pval_max"),
         use_median_halo_tsz_pval=mass_cfg.get(
             "use_median_halo_tsz_pval", False),
+        min_member_fraction=mass_cfg.get(
+            "min_member_fraction", 0.5),
         z_max=mass_cfg["z_max"],
         m500_min=mass_cfg["m500_min"],
         verbose=False,
