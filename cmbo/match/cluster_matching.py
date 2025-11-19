@@ -455,7 +455,11 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
     associations = list(associations)
     n_assoc = len(associations)
 
-    box_size = assoc_container.box_size
+    if verbose:
+        print(f"Classical matching: {n_obs} observed clusters vs {n_assoc} "
+              "associations")
+        print(f"  Filters: angular_sep <= {max_angular_sep:.1f} arcmin, "
+              f"delta_cz <= {max_delta_cz:.1f} km/s")
 
     # Compute association centroids, RA/Dec, and redshifts using object methods
     # Associations automatically use their stored cosmology/box metadata
@@ -463,7 +467,7 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
     ra_assoc = radec_array[:, 0]
     dec_assoc = radec_array[:, 1]
     z_assoc = assoc_container.centroid_obs_redshift
-    assoc_centroids = assoc_container.centroid_cartesian - box_size / 2
+    assoc_centroids = assoc_container.redshift_space_centroid
 
     # Compute 3D positions for observed clusters
     unit_vec_obs = radec_to_cartesian(ra_obs, dec_obs)
@@ -490,6 +494,10 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
     # Apply filters
     valid_matrix = ((angular_sep_matrix <= max_angular_sep) &
                     (delta_cz_matrix <= max_delta_cz))
+
+    if verbose:
+        n_valid_pairs = np.sum(valid_matrix)
+        print(f"  {n_valid_pairs} candidate pairs pass filters")
 
     # Set invalid distances to inf for greedy matching
     dist_matrix_filtered = dist_matrix_3d.copy()
@@ -527,7 +535,14 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
 
     if verbose:
         n_matched = sum(1 for m in matches if m is not None)
-        print(f"Classical matching: {n_matched}/{n_obs} clusters matched "
+        print(f"  Final: {n_matched}/{n_obs} clusters matched "
               f"({100*n_matched/n_obs:.1f}%)")
+        if n_matched > 0:
+            matched_angseps = [m[1] for m in matches if m is not None]
+            matched_dists = [m[2] for m in matches if m is not None]
+            print(f"  Angular sep: median={np.median(matched_angseps):.1f} "
+                  f"arcmin, mean={np.mean(matched_angseps):.1f} arcmin")
+            print(f"  3D distance: median={np.median(matched_dists):.1f} "
+                  f"Mpc/h, mean={np.mean(matched_dists):.1f} Mpc/h")
 
     return matches
