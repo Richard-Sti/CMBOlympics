@@ -92,7 +92,7 @@ class LinearRoxyFitter:
     """
 
     def __init__(self, range_slope=(-10, 10), range_intercept=(-10, 10),
-                 range_sig=(0.01, 3.0)):
+                 range_sig=(0.0001, 3.0)):
         """
         Parameters
         ----------
