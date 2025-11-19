@@ -90,6 +90,12 @@ def apply_root_to_config_paths(cfg):
             root_path, analysis_cfg["output_folder"]
         )
 
+    mass_scoring_cfg = cfg.get("mass_scoring", {})
+    if "output_dir" in mass_scoring_cfg:
+        mass_scoring_cfg["output_dir"] = _resolve_with_root(
+            root_path, mass_scoring_cfg["output_dir"]
+        )
+
     for catalogue in cfg.get("halo_catalogues", {}).values():
         if not isinstance(catalogue, dict):
             continue
