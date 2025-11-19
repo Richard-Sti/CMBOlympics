@@ -22,12 +22,15 @@ from pathlib import Path
 import astropy.units as u
 import h5py
 import numpy as np
-from astropy.cosmology import FlatLambdaCDM, z_at_value
+from astropy.cosmology import FlatLambdaCDM
 from tqdm import tqdm
 
 from ..constants import SPEED_OF_LIGHT_KMS
 from .coords import (cartesian_icrs_to_galactic_spherical,
-                     comoving_distance_to_cz)
+                     cartesian_to_radec,
+                     comoving_distance_to_cz,
+                     cz_to_comoving_distance,
+                     radec_to_cartesian)
 
 
 @dataclass
@@ -41,6 +44,7 @@ class HaloAssociation:
     realisations: np.ndarray
     member_indices: np.ndarray
     fraction_present: float
+    velocities: np.ndarray | None = None
     optional_data: dict = field(default=None)
 
     # Map signal fields (populated by compute_map_signals)
@@ -60,6 +64,8 @@ class HaloAssociation:
             "realisations",
             "member_indices",
         ]
+        if self.velocities is not None:
+            keys.append("velocities")
         if self.optional_data:
             keys.extend(self.optional_data.keys())
         return keys
@@ -74,6 +80,8 @@ class HaloAssociation:
             "member_indices": self.member_indices,
             "fraction_present": self.fraction_present,
         }
+        if self.velocities is not None:
+            d["velocities"] = self.velocities
         if self.optional_data:
             d.update(self.optional_data)
         return d
@@ -85,225 +93,143 @@ class HaloAssociation:
             raise KeyError(key)
         return getattr(self, key)
 
-    def to_galactic_angular(self, center, coord_system="icrs"):
+    @property
+    def Om0(self):
+        """Matter density parameter for this association."""
+        if self.optional_data:
+            if "omega_m" in self.optional_data:
+                return float(self.optional_data["omega_m"])
+            if "Om0" in self.optional_data:
+                return float(self.optional_data["Om0"])
+        raise ValueError("Om0 must be present in optional_data.")
+
+    @property
+    def box_size(self):
+        """Simulation box size for this association."""
+        if self.optional_data and "box_size" in self.optional_data:
+            return float(self.optional_data["box_size"])
+        raise ValueError("box_size must be present in optional_data.")
+
+    @property
+    def radec(self):
         """
-        Convert positions to Galactic spherical coordinates (r, ell, b).
-
-        Parameters
-        ----------
-        center
-            Observer position in the same coordinate system as positions.
-            Array of shape (3,).
-        coord_system
-            Coordinate system of the positions. Currently only "icrs"
-            is supported.
-
-        Returns
-        -------
-        r : ndarray
-            Distances in same units as positions.
-        ell : ndarray
-            Galactic longitude in degrees.
-        b : ndarray
-            Galactic latitude in degrees.
+        Right ascension and declination for all halo members (degrees).
         """
-        if coord_system != "icrs":
-            raise ValueError(
-                f"coord_system='{coord_system}' not supported. "
-                "Currently only 'icrs' is available."
-            )
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        ra, dec = cartesian_to_radec(self.positions, center=center)
+        return np.column_stack((ra, dec))
 
-        return cartesian_icrs_to_galactic_spherical(self.positions, center)
-
-    def centroid_to_galactic_angular(self, center, coord_system="icrs"):
+    @property
+    def galactic_angular(self):
         """
-        Convert centroid to Galactic spherical coordinates (r, ell, b).
-
-        Parameters
-        ----------
-        center
-            Observer position in the same coordinate system as centroid.
-            Array of shape (3,).
-        coord_system
-            Coordinate system of the centroid. Currently only "icrs"
-            is supported.
-
-        Returns
-        -------
-        r : float
-            Distance in same units as centroid.
-        ell : float
-            Galactic longitude in degrees.
-        b : float
-            Galactic latitude in degrees.
+        Galactic angular coordinates (ell, b) for all halo members.
         """
-        if coord_system != "icrs":
-            raise ValueError(
-                f"coord_system='{coord_system}' not supported. "
-                "Currently only 'icrs' is available."
-            )
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        _, ell, b = cartesian_icrs_to_galactic_spherical(
+            self.positions, center=center)
+        return np.column_stack((ell, b))
 
-        r, ell, b = cartesian_icrs_to_galactic_spherical(
-            self.centroid.reshape(1, 3), center
-        )
-        return float(r[0]), float(ell[0]), float(b[0])
-
-    def centroid_radec(self, box_size=None):
-        """
-        Convert centroid to RA/Dec coordinates.
-
-        Parameters
-        ----------
-        box_size : float, optional
-            Simulation box size in Mpc/h. If None, attempts to read from
-            optional_data['box_size'].
-
-        Returns
-        -------
-        ra : float
-            Right ascension in degrees.
-        dec : float
-            Declination in degrees.
-        """
-        if box_size is None:
-            if self.optional_data and "box_size" in self.optional_data:
-                box_size = float(self.optional_data["box_size"])
-            else:
-                raise ValueError(
-                    "box_size must be provided or present in optional_data"
-                )
-
-        # Centroid relative to box center
-        centroid_rel = self.centroid - box_size / 2.0
-        r = np.linalg.norm(centroid_rel)
-        unit_vec = centroid_rel / r
-
-        # Convert to RA/Dec
-        ra = np.degrees(np.arctan2(unit_vec[1], unit_vec[0]))
-        if ra < 0:
-            ra += 360
-        dec = np.degrees(np.arcsin(unit_vec[2]))
-
-        return float(ra), float(dec)
-
-    def centroid_redshift(self, box_size=None, Om0=None):
-        """
-        Compute redshift of centroid from its comoving distance.
-
-        Parameters
-        ----------
-        box_size : float, optional
-            Simulation box size in Mpc/h. If None, attempts to read from
-            optional_data['box_size'].
-        Om0 : float, optional
-            Matter density parameter. If None, attempts to read from
-            optional_data['omega_m'] or optional_data['Om0']; raises a
-            ValueError when unavailable.
-
-        Returns
-        -------
-        z : float
-            Redshift of the association centroid.
-        """
-        if box_size is None:
-            if self.optional_data and "box_size" in self.optional_data:
-                box_size = float(self.optional_data["box_size"])
-            else:
-                raise ValueError(
-                    "box_size must be provided or present in optional_data"
-                )
-
-        if Om0 is None:
-            if self.optional_data:
-                if "omega_m" in self.optional_data:
-                    Om0 = float(self.optional_data["omega_m"])
-            if Om0 is None:
-                raise ValueError(
-                    "Om0 must be provided or present in optional_data "
-                    "('omega_m' or 'Om0')."
-                )
-
-        # Centroid relative to box center
-        centroid_rel = self.centroid - box_size / 2.0
-        r = np.linalg.norm(centroid_rel)
-
-        # Convert distance to redshift
-        cz = comoving_distance_to_cz(r, h=1.0, Om0=Om0)
-        z = cz / SPEED_OF_LIGHT_KMS
-
-        return float(z)
-
-    def to_z(self, center, Om):
-        """
-        Compute cosmological redshifts from comoving distances.
-
-        Parameters
-        ----------
-        center : array-like
-            Observer position used as the comoving-distance origin.
-        Om : float
-            Matter density parameter of a flat LCDM cosmology with h=1.
-
-        Returns
-        -------
-        ndarray
-            Redshifts corresponding to each halo position.
-        """
-        center = np.asarray(center, dtype=float)
-        if center.shape != (3,):
-            raise ValueError("center must be a 3-vector.")
-
+    @property
+    def distance(self):
+        """Comoving distances (Mpc/h) of all halo members."""
+        center = np.full(3, self.box_size / 2.0, dtype=float)
         positions = np.asarray(self.positions, dtype=float)
         if positions.ndim != 2 or positions.shape[1] != 3:
             raise ValueError("positions must have shape (N, 3).")
+        return np.linalg.norm(positions - center, axis=1)
 
-        rel = positions - center
-        comoving = np.linalg.norm(rel, axis=1)
-
-        z = np.full_like(comoving, np.nan, dtype=float)
-        mask = np.isfinite(comoving) & (comoving >= 0)
-        if not np.any(mask):
-            return z
-
-        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
-        distances = comoving * u.Mpc
-        idx = np.where(mask)[0]
-        for i in idx:
-            dist = distances[i]
-            z[i] = float(z_at_value(cosmo.comoving_distance, dist))
-
-        return z
-
-    def to_da(self, center, Om):
+    @property
+    def cosmo_redshift(self):
         """
-        Compute angular diameter distances for halo members.
-
-        Parameters
-        ----------
-        center : array-like
-            Observer position used as the comoving-distance origin.
-        Om : float
-            Matter density parameter of a flat LCDM cosmology with h=1.
-
-        Returns
-        -------
-        ndarray
-            Angular diameter distances in Mpc for each halo in this
-            association.
+        Cosmological redshifts for halo members assuming the observer
+        sits at the box centre and Om0 from optional_data.
         """
-        z = self.to_z(center, Om)
-        da = np.full_like(z, np.nan, dtype=float)
-        mask = np.isfinite(z) & (z >= 0)
-        if not np.any(mask):
-            return da
+        cz = comoving_distance_to_cz(
+            self.distance, h=1.0, Om0=self.Om0)
+        return cz / SPEED_OF_LIGHT_KMS
 
-        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
-        da[mask] = cosmo.angular_diameter_distance(z[mask]).to_value(u.Mpc)
+    @property
+    def obs_redshift(self):
+        """
+        Observed redshifts for halo members (including peculiar velocities).
+        """
+        if self.velocities is None:
+            raise ValueError(
+                "Velocities are required to compute the observed redshift..")
+        runit = (self.positions - self.box_size / 2.0) / self.distance[:, None]
+        Vlos = np.sum(self.velocities * runit, axis=1)
+        zcosmo = self.cosmo_redshift
+        return (1 + zcosmo) * (1 + Vlos / SPEED_OF_LIGHT_KMS) - 1.0
 
-        return da
+    @property
+    def redshift_position(self):
+        """
+        Reconstruct Cartesian positions (Mpc/h) from angular coordinates and
+        observed redshifts.
 
-    def compute_map_signals(self, profiler, obs_pos, theta_rand, map_rand,
-                            r_key="Group_R_Crit500", coord_system="icrs"):
+        Uses observed redshifts (including peculiar velocities) and angular
+        positions to infer comoving distances, then converts back to Cartesian
+        coordinates centered on the box.
+        """
+        radec = self.radec
+        ra = radec[:, 0]
+        dec = radec[:, 1]
+        unit_vectors = radec_to_cartesian(ra, dec)
+        cz = self.obs_redshift * SPEED_OF_LIGHT_KMS
+        distances = cz_to_comoving_distance(cz, h=1.0, Om0=self.Om0)
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        return (unit_vectors.T * distances).T + center
+
+    @property
+    def da(self):
+        """
+        Angular diameter distances (Mpc) for halo members inferred from
+        the cosmological redshifts.
+        """
+        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(self.Om0))
+        return cosmo.angular_diameter_distance(
+            self.cosmo_redshift).to_value(u.Mpc)
+
+    @property
+    def centroid_radec(self):
+        """
+        RA/Dec centroid coordinates (degrees) assuming the box centre observer.
+        """
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        ra, dec = cartesian_to_radec(
+            self.centroid.reshape(1, 3), center=center)
+        return float(ra[0]), float(dec[0])
+
+    @property
+    def centroid_galactic_angular(self):
+        """
+        Centroid Galactic longitude/latitude (degrees) assuming ICRS input.
+        """
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        __, ell, b = cartesian_icrs_to_galactic_spherical(
+            self.centroid.reshape(1, 3), center)
+        return float(ell[0]), float(b[0])
+
+    @property
+    def centroid_distance(self):
+        """Centroid comoving distance from the observer (Mpc/h)."""
+        rel = self.centroid - self.box_size / 2.0
+        return float(np.linalg.norm(rel))
+
+    @property
+    def centroid_obs_redshift(self):
+        """Compute observed centroid redshift including peculiar velocity."""
+        return np.mean(self.obs_redshift)
+
+    @property
+    def centroid_cosmo_redshift(self):
+        """Compute centroid cosmological redshift (no peculiar velocity)."""
+        cz = comoving_distance_to_cz(
+            self.centroid_distance, h=1.0, Om0=self.Om0)
+        return cz / SPEED_OF_LIGHT_KMS
+
+    def compute_map_signals(self, profiler, theta_rand, map_rand,
+                            r_key="Group_R_Crit500"):
         """
         Compute and store map signals and p-values for this association.
 
@@ -314,9 +240,6 @@ class HaloAssociation:
         ----------
         profiler
             PointingEnclosedProfile instance for measuring map signals.
-        obs_pos
-            Observer position (3D array) in same coordinate system as
-            association positions.
         theta_rand
             Angular sizes for random signal profiles (arcmin).
         map_rand
@@ -324,23 +247,18 @@ class HaloAssociation:
             (n_random, n_theta).
         r_key
             Key in optional_data for halo radii (e.g., 'Group_R_Crit500').
-        coord_system
-            Coordinate system of positions. Currently only "icrs".
         """
-        if coord_system != "icrs":
-            raise ValueError(
-                f"coord_system='{coord_system}' not supported. "
-                "Currently only 'icrs' is available."
-            )
-
         if r_key not in self.optional_data:
             raise KeyError(
                 f"Association {self.label} missing '{r_key}' in "
                 "optional_data."
             )
 
-        # Get galactic coordinates for all haloes
-        r, ell, b = self.to_galactic_angular(obs_pos, coord_system)
+        # Get galactic coordinates and distances for all haloes
+        ell_b = self.galactic_angular
+        r = self.distance
+        ell = ell_b[:, 0]
+        b = ell_b[:, 1]
         radii = self.optional_data[r_key]
 
         # Compute aperture sizes
@@ -404,12 +322,17 @@ class HaloAssociationList(list):
     @property
     def centroid_radec(self):
         """Right ascension and declination centroid pairs in degrees."""
-        return np.array([assoc.centroid_radec() for assoc in self])
+        return np.array([assoc.centroid_radec for assoc in self])
 
     @property
-    def centroid_redshift(self):
-        """Redshift of each association centroid."""
-        return np.array([assoc.centroid_redshift() for assoc in self])
+    def centroid_cosmo_redshift(self):
+        """Cosmological redshift of each association centroid."""
+        return np.array([assoc.centroid_cosmo_redshift for assoc in self])
+
+    @property
+    def centroid_obs_redshift(self):
+        """Observed redshift of each association centroid (including peculiar velocities)."""
+        return np.array([assoc.centroid_obs_redshift for assoc in self])
 
     @property
     def centroid_cartesian(self):
@@ -417,36 +340,29 @@ class HaloAssociationList(list):
         return np.array([assoc.centroid for assoc in self])
 
     @property
+    def centroid_distance(self):
+        """Centroid comoving distances (Mpc/h)."""
+        return np.array([assoc.centroid_distance for assoc in self])
+
+    @property
     def box_size(self):
         """Simulation box size inferred from the first association."""
         if not self:
             raise ValueError("Cannot determine box_size for an empty list.")
-        opt = getattr(self[0], "optional_data", {}) or {}
-        if "box_size" not in opt:
-            raise ValueError(
-                "First association missing 'box_size' in optional_data."
-            )
-        return float(opt["box_size"])
+
+        return self[0].box_size
 
     @property
     def Om0(self):
         """Matter density parameter inferred from the first association."""
         if not self:
             raise ValueError("Cannot determine Om0 for an empty list.")
-        opt = getattr(self[0], "optional_data", {}) or {}
-        if "omega_m" in opt:
-            return float(opt["omega_m"])
-        if "Om0" in opt:
-            return float(opt["Om0"])
-        raise ValueError(
-            "First association missing 'omega_m' or 'Om0' in optional_data."
-        )
+
+        return self[0].Om0
 
 
-def compute_association_signals(associations, profiler, obs_pos,
-                                theta_rand, map_rand,
-                                r_key="Group_R_Crit500",
-                                coord_system="icrs"):
+def compute_association_signals(associations, profiler, theta_rand, map_rand,
+                                r_key="Group_R_Crit500"):
     """
     Compute map signals for all associations in a list.
 
@@ -459,22 +375,17 @@ def compute_association_signals(associations, profiler, obs_pos,
         List of HaloAssociation objects.
     profiler
         PointingEnclosedProfile instance for measuring map signals.
-    obs_pos
-        Observer position (3D array).
     theta_rand
         Angular sizes for random pointings (arcmin).
     map_rand
         Map signals for random pointings, shape (n_random, n_theta).
     r_key
         Key in optional_data for halo radii.
-    coord_system
-        Coordinate system of positions. Currently only "icrs".
     """
     for assoc in tqdm(associations, desc="Computing association signals"):
         assoc.compute_map_signals(
-            profiler, obs_pos, theta_rand, map_rand,
+            profiler, theta_rand, map_rand,
             r_key=r_key,
-            coord_system=coord_system
         )
 
 
@@ -699,6 +610,7 @@ def _load_simulation_halos(cfg, sim_key):
     position_key = catalogue_cfg["position_key"]
     mass_key = catalogue_cfg["mass_key"]
     radius_key = catalogue_cfg["radius_key"]
+    velocity_key = catalogue_cfg.get("velocity_key")
     box_size = float(catalogue_cfg["box_size"])
     omega_m = catalogue_cfg.get("omega_m")
     if omega_m is None:
@@ -723,6 +635,7 @@ def _load_simulation_halos(cfg, sim_key):
     r500_all = []
     theta_all = []
     selection_all = []
+    velocity_all = [] if velocity_key else None
     catalogue_sizes = []
     theta_catalogues = []
     sim_ids_kept = []
@@ -732,6 +645,8 @@ def _load_simulation_halos(cfg, sim_key):
         pos = np.asarray(reader[position_key], dtype=float)
         mass = np.asarray(reader[mass_key], dtype=float)
         r500 = np.asarray(reader[radius_key], dtype=float)
+        if velocity_key:
+            velocity = np.asarray(reader[velocity_key], dtype=float)
         indices = np.arange(pos.shape[0], dtype=int)
 
         r, ell, b = cartesian_icrs_to_galactic_spherical(pos, centre)
@@ -751,6 +666,8 @@ def _load_simulation_halos(cfg, sim_key):
         positions_all.append(pos[mask])
         masses_all.append(mass[mask])
         r500_all.append(r500[mask])
+        if velocity_key:
+            velocity_all.append(velocity[mask])
         theta_masked = theta_arcmin[mask]
         theta_all.append(theta_masked)
         selection_all.append(indices[mask])
@@ -780,6 +697,9 @@ def _load_simulation_halos(cfg, sim_key):
         "omega_m": omega_m,
         "Om0": omega_m,
     }
+    if velocity_key:
+        data["velocities"] = velocity_all
+        data["velocity_key"] = velocity_key
     return data
 
 
@@ -985,16 +905,28 @@ def load_associations(sim_key, cfg, verbose=True):
     halo_data = _load_simulation_halos(cfg, sim_key)
     if verbose:
         print(f"Loaded {len(halo_data['positions'])} simulation realisations.")
-    radius_key = cfg["halo_catalogues"][sim_key]["radius_key"]
+    catalogue_cfg = cfg["halo_catalogues"][sim_key]
+    radius_key = catalogue_cfg["radius_key"]
+    velocity_key = catalogue_cfg.get("velocity_key")
     optional = {
         radius_key: halo_data["r500"],
         "theta500_arcmin": halo_data["theta_arcmin"],
     }
+    if velocity_key and "velocities" in halo_data:
+        optional[velocity_key] = halo_data["velocities"]
     associations = identify_halo_associations(
         halo_data["positions"],
         halo_data["masses"],
         optional_data=optional,
     )
+    frac_thresh = cfg["halo_catalogues"].get(
+        "min_fraction_present", 0.0
+    )
+    if frac_thresh > 0.0 and associations:
+        associations = HaloAssociationList([
+            assoc for assoc in associations
+            if assoc.fraction_present >= frac_thresh
+        ])
     if verbose:
         print(f"Identified {len(associations)} halo associations.")
     results_path = _results_path(cfg, sim_key)
@@ -1035,5 +967,7 @@ def load_associations(sim_key, cfg, verbose=True):
         )
         assoc.optional_data.setdefault("omega_m", halo_data["omega_m"])
         assoc.optional_data.setdefault("Om0", halo_data["omega_m"])
+        if velocity_key and velocity_key in assoc.optional_data:
+            assoc.velocities = assoc.optional_data[velocity_key]
 
     return associations
