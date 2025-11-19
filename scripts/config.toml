@@ -98,11 +98,16 @@ return_random_profiles = false     # Save all individual random 1D profiles to t
 # Settings for mass calibration scoring (scripts/score_masses.py)
 # Script loops over all catalogues (planck, mcxc, erass) and all simulations (csiborg1, csiborg2, manticore)
 [mass_scoring]
-match_threshold = [0.05, 0.1]   # p-value threshold(s) for matching (can be single value or list)
+match_threshold = [0.05, 0.1]   # p-value threshold(s) for matching (can be single value or list). Used only for greedy/hungarian matching.
 # mass_preference_threshold = 0.01 # Mass preference threshold (comment out for None)
 z_max = 0.045                   # Maximum redshift for matching
 m500_min = 1e14                 # Minimum M500 for matching [M_sun]
 use_median_mass = true          # Use median mass from associations
+matching_method = "greedy"      # Matching algorithm: greedy, hungarian, or classical
+max_angular_sep = 180.0         # Classical matching: max angular separation [arcmin]
+max_delta_cz = 1000.0           # Classical matching: max |cz| difference [km/s]
+median_halo_tsz_pval_max = 0.1  # Classical matching: max median halo pval (optional)
+use_median_halo_tsz_pval = false # Classical matching: minimise median halo pval instead of distance
 h = 0.681                       # Hubble parameter for unit conversion
 x_pivot = 14.0                  # x-axis pivot for regression (log10 scale)
 y_pivot_M500 = 14.0             # y-axis pivot for M500 regression (log10 scale)
