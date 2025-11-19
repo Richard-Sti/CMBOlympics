@@ -17,6 +17,7 @@
 
 import re
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 import astropy.units as u
@@ -93,7 +94,7 @@ class HaloAssociation:
             raise KeyError(key)
         return getattr(self, key)
 
-    @property
+    @cached_property
     def Om0(self):
         """Matter density parameter for this association."""
         if self.optional_data:
@@ -103,14 +104,14 @@ class HaloAssociation:
                 return float(self.optional_data["Om0"])
         raise ValueError("Om0 must be present in optional_data.")
 
-    @property
+    @cached_property
     def box_size(self):
         """Simulation box size for this association."""
         if self.optional_data and "box_size" in self.optional_data:
             return float(self.optional_data["box_size"])
         raise ValueError("box_size must be present in optional_data.")
 
-    @property
+    @cached_property
     def radec(self):
         """
         Right ascension and declination for all halo members (degrees).
@@ -119,7 +120,7 @@ class HaloAssociation:
         ra, dec = cartesian_to_radec(self.positions, center=center)
         return np.column_stack((ra, dec))
 
-    @property
+    @cached_property
     def galactic_angular(self):
         """
         Galactic angular coordinates (ell, b) for all halo members.
@@ -129,7 +130,7 @@ class HaloAssociation:
             self.positions, center=center)
         return np.column_stack((ell, b))
 
-    @property
+    @cached_property
     def distance(self):
         """Comoving distances (Mpc/h) of all halo members."""
         center = np.full(3, self.box_size / 2.0, dtype=float)
@@ -138,7 +139,7 @@ class HaloAssociation:
             raise ValueError("positions must have shape (N, 3).")
         return np.linalg.norm(positions - center, axis=1)
 
-    @property
+    @cached_property
     def cosmo_redshift(self):
         """
         Cosmological redshifts for halo members assuming the observer
@@ -148,7 +149,7 @@ class HaloAssociation:
             self.distance, h=1.0, Om0=self.Om0)
         return cz / SPEED_OF_LIGHT_KMS
 
-    @property
+    @cached_property
     def obs_redshift(self):
         """
         Observed redshifts for halo members (including peculiar velocities).
@@ -161,7 +162,7 @@ class HaloAssociation:
         zcosmo = self.cosmo_redshift
         return (1 + zcosmo) * (1 + Vlos / SPEED_OF_LIGHT_KMS) - 1.0
 
-    @property
+    @cached_property
     def redshift_position(self):
         """
         Reconstruct Cartesian positions (Mpc/h) from angular coordinates and
@@ -180,7 +181,7 @@ class HaloAssociation:
         center = np.full(3, self.box_size / 2.0, dtype=float)
         return (unit_vectors.T * distances).T + center
 
-    @property
+    @cached_property
     def da(self):
         """
         Angular diameter distances (Mpc) for halo members inferred from
@@ -190,7 +191,7 @@ class HaloAssociation:
         return cosmo.angular_diameter_distance(
             self.cosmo_redshift).to_value(u.Mpc)
 
-    @property
+    @cached_property
     def centroid_radec(self):
         """
         RA/Dec centroid coordinates (degrees) assuming the box centre observer.
@@ -200,7 +201,7 @@ class HaloAssociation:
             self.centroid.reshape(1, 3), center=center)
         return float(ra[0]), float(dec[0])
 
-    @property
+    @cached_property
     def centroid_galactic_angular(self):
         """
         Centroid Galactic longitude/latitude (degrees) assuming ICRS input.
@@ -210,23 +211,33 @@ class HaloAssociation:
             self.centroid.reshape(1, 3), center)
         return float(ell[0]), float(b[0])
 
-    @property
+    @cached_property
     def centroid_distance(self):
         """Centroid comoving distance from the observer (Mpc/h)."""
         rel = self.centroid - self.box_size / 2.0
         return float(np.linalg.norm(rel))
 
-    @property
+    @cached_property
     def centroid_obs_redshift(self):
         """Compute observed centroid redshift including peculiar velocity."""
         return np.mean(self.obs_redshift)
 
-    @property
+    @cached_property
     def centroid_cosmo_redshift(self):
         """Compute centroid cosmological redshift (no peculiar velocity)."""
         cz = comoving_distance_to_cz(
             self.centroid_distance, h=1.0, Om0=self.Om0)
         return cz / SPEED_OF_LIGHT_KMS
+
+    @cached_property
+    def redshift_space_centroid(self):
+        """
+        Redshift space centroid (Mpc/h), computed as the mean of member
+        redshift space positions relative to the observer at box center.
+        """
+        redshift_positions = self.redshift_position
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        return np.mean(redshift_positions - center, axis=0)
 
     def compute_map_signals(self, profiler, theta_rand, map_rand,
                             r_key="Group_R_Crit500"):
@@ -331,7 +342,10 @@ class HaloAssociationList(list):
 
     @property
     def centroid_obs_redshift(self):
-        """Observed redshift of each association centroid (including peculiar velocities)."""
+        """
+        Observed redshift of each association centroid (including peculiar
+        velocities).
+        """
         return np.array([assoc.centroid_obs_redshift for assoc in self])
 
     @property
@@ -343,6 +357,11 @@ class HaloAssociationList(list):
     def centroid_distance(self):
         """Centroid comoving distances (Mpc/h)."""
         return np.array([assoc.centroid_distance for assoc in self])
+
+    @property
+    def redshift_space_centroid(self):
+        """Redshift space centroids relative to observer (Mpc/h)."""
+        return np.array([assoc.redshift_space_centroid for assoc in self])
 
     @property
     def box_size(self):
