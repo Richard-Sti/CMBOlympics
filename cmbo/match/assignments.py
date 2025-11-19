@@ -26,7 +26,8 @@ from ..utils.logging import fprint
 from ..utils.coords import cz_to_comoving_distance, radec_to_cartesian
 from .cluster_matching import (compute_matching_matrix_cartesian,
                                greedy_global_matching,
-                               hungarian_global_matching)
+                               hungarian_global_matching,
+                               classical_matching)
 
 
 def match_catalogue_to_associations(
@@ -39,6 +40,8 @@ def match_catalogue_to_associations(
     mass_preference_threshold=None,
     use_median_mass=False,
     matching_method='greedy',
+    max_angular_sep=30.0,
+    max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
 ):
@@ -55,14 +58,23 @@ def match_catalogue_to_associations(
         Keys selecting RA, Dec (degrees) and redshift columns.
     match_threshold : float, optional
         Maximum Pfeifer p-value accepted by the matching algorithm.
+        Only used with 'greedy' or 'hungarian' matching methods.
     mass_preference_threshold : float, optional
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Only used with greedy matching.
     use_median_mass
         If True, all associations use the median of mean log masses instead
         of their own masses, giving each association equal weight.
+        Only used with 'greedy' or 'hungarian' matching methods.
     matching_method : str, optional
-        Algorithm for global matching: 'greedy' (default) or 'hungarian'.
+        Algorithm for global matching: 'greedy' (default), 'hungarian', or
+        'classical'.
+    max_angular_sep : float, optional
+        Maximum angular separation in arcminutes for classical matching
+        (default 30.0). Only used with 'classical' matching method.
+    max_delta_cz : float, optional
+        Maximum velocity difference in km/s for classical matching
+        (default 500.0). Only used with 'classical' matching method.
     cosmo_params : dict, optional
         Cosmological parameters for Pfeifer matching.
     verbose : bool, optional
@@ -75,9 +87,10 @@ def match_catalogue_to_associations(
     matched_associations : HaloAssociationList
         List of matched associations (same length as matched_catalogue).
     pvals : ndarray
-        Pfeifer p-values for each match.
+        Pfeifer p-values for each match (for Pfeifer methods), or angular
+        separations in arcminutes (for classical method).
     distances : ndarray
-        Centroid distances for each match.
+        Centroid distances for each match in Mpc/h.
     n_matched : int
         Number of successfully matched objects.
     n_total : int
@@ -86,9 +99,9 @@ def match_catalogue_to_associations(
     if not associations:
         raise ValueError("At least one association is required.")
 
-    if matching_method not in ('greedy', 'hungarian'):
+    if matching_method not in ('greedy', 'hungarian', 'classical'):
         raise ValueError(
-            f"matching_method must be 'greedy' or 'hungarian', "
+            f"matching_method must be 'greedy', 'hungarian', or 'classical', "
             f"got '{matching_method}'"
         )
 
@@ -96,37 +109,49 @@ def match_catalogue_to_associations(
     dec = np.asarray(catalogue[dec_key], dtype=float)
     redshift = np.asarray(catalogue[redshift_key], dtype=float)
 
-    unit_vec = radec_to_cartesian(ra, dec)
-    dist = cz_to_comoving_distance(redshift * SPEED_OF_LIGHT_KMS,
-                                   **(cosmo_params or {}))
-    x_obs = (unit_vec.T * dist).T
-
-    pval_matrix, dist_matrix = compute_matching_matrix_cartesian(
-        x_obs,
-        associations,
-        cosmo_params=cosmo_params,
-        use_median_mass=use_median_mass,
-        verbose=verbose,
-    )
-
-    if matching_method == 'greedy':
-        matches_local = greedy_global_matching(
-            pval_matrix,
-            dist_matrix,
+    if matching_method == 'classical':
+        # Classical matching uses angular separation + redshift criteria
+        matches_local = classical_matching(
+            ra, dec, redshift,
             associations,
-            threshold=match_threshold,
-            mass_preference_threshold=mass_preference_threshold,
+            max_angular_sep=max_angular_sep,
+            max_delta_cz=max_delta_cz,
+            cosmo_params=cosmo_params,
             verbose=verbose,
         )
-    else:  # hungarian
-        matches_local = hungarian_global_matching(
-            pval_matrix,
-            dist_matrix,
+    else:
+        # Pfeifer-based matching (greedy or hungarian)
+        unit_vec = radec_to_cartesian(ra, dec)
+        dist = cz_to_comoving_distance(redshift * SPEED_OF_LIGHT_KMS,
+                                       **(cosmo_params or {}))
+        x_obs = (unit_vec.T * dist).T
+
+        pval_matrix, dist_matrix = compute_matching_matrix_cartesian(
+            x_obs,
             associations,
-            threshold=match_threshold,
-            mass_preference_threshold=mass_preference_threshold,
+            cosmo_params=cosmo_params,
+            use_median_mass=use_median_mass,
             verbose=verbose,
         )
+
+        if matching_method == 'greedy':
+            matches_local = greedy_global_matching(
+                pval_matrix,
+                dist_matrix,
+                associations,
+                threshold=match_threshold,
+                mass_preference_threshold=mass_preference_threshold,
+                verbose=verbose,
+            )
+        else:  # hungarian
+            matches_local = hungarian_global_matching(
+                pval_matrix,
+                dist_matrix,
+                associations,
+                threshold=match_threshold,
+                mass_preference_threshold=mass_preference_threshold,
+                verbose=verbose,
+            )
 
     assoc_lookup = {id(assoc): idx for idx, assoc in enumerate(associations)}
     assoc_indices = np.empty(len(ra), dtype=int)
@@ -174,6 +199,8 @@ def match_planck_catalog_to_associations(
     mass_preference_threshold=None,
     use_median_mass=False,
     matching_method='greedy',
+    max_angular_sep=30.0,
+    max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
 ):
@@ -192,6 +219,7 @@ def match_planck_catalog_to_associations(
         Minimum Planck M500 mass (Msun/h) considered (default 1e14).
     match_threshold : float, optional
         Maximum Pfeifer p-value accepted by the matching algorithm.
+        Only used with 'greedy' or 'hungarian' methods.
     mass_preference_threshold : float, optional
         When set, prefer associations with higher mean log mass among pairs
         with p-value below this threshold. Forwarded to
@@ -200,7 +228,12 @@ def match_planck_catalog_to_associations(
         If True, all associations use the median of mean log masses instead
         of their own masses, giving each association equal weight.
     matching_method : str, optional
-        Algorithm for global matching: 'greedy' (default) or 'hungarian'.
+        Algorithm for global matching: 'greedy' (default), 'hungarian', or
+        'classical'.
+    max_angular_sep : float, optional
+        Maximum angular separation in arcminutes for classical matching.
+    max_delta_cz : float, optional
+        Maximum velocity difference in km/s for classical matching.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -229,6 +262,8 @@ def match_planck_catalog_to_associations(
         mass_preference_threshold=mass_preference_threshold,
         use_median_mass=use_median_mass,
         matching_method=matching_method,
+        max_angular_sep=max_angular_sep,
+        max_delta_cz=max_delta_cz,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
@@ -243,6 +278,8 @@ def match_mcxc_catalog_to_associations(
     mass_preference_threshold=None,
     use_median_mass=False,
     matching_method='greedy',
+    max_angular_sep=30.0,
+    max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
 ):
@@ -270,7 +307,12 @@ def match_mcxc_catalog_to_associations(
         If True, all associations use the median of mean log masses instead
         of their own masses, giving each association equal weight.
     matching_method : str, optional
-        Algorithm for global matching: 'greedy' (default) or 'hungarian'.
+        Algorithm for global matching: 'greedy' (default), 'hungarian', or
+        'classical'.
+    max_angular_sep : float, optional
+        Maximum angular separation in arcminutes for classical matching.
+    max_delta_cz : float, optional
+        Maximum velocity difference in km/s for classical matching.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -298,6 +340,8 @@ def match_mcxc_catalog_to_associations(
         mass_preference_threshold=mass_preference_threshold,
         use_median_mass=use_median_mass,
         matching_method=matching_method,
+        max_angular_sep=max_angular_sep,
+        max_delta_cz=max_delta_cz,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
@@ -312,6 +356,8 @@ def match_erass_catalog_to_associations(
     mass_preference_threshold=None,
     use_median_mass=False,
     matching_method='greedy',
+    max_angular_sep=30.0,
+    max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
 ):
@@ -338,7 +384,12 @@ def match_erass_catalog_to_associations(
         If True, all associations use the median of mean log masses instead
         of their own masses, giving each association equal weight.
     matching_method : str, optional
-        Algorithm for global matching: 'greedy' (default) or 'hungarian'.
+        Algorithm for global matching: 'greedy' (default), 'hungarian', or
+        'classical'.
+    max_angular_sep : float, optional
+        Maximum angular separation in arcminutes for classical matching.
+    max_delta_cz : float, optional
+        Maximum velocity difference in km/s for classical matching.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -366,6 +417,8 @@ def match_erass_catalog_to_associations(
         mass_preference_threshold=mass_preference_threshold,
         use_median_mass=use_median_mass,
         matching_method=matching_method,
+        max_angular_sep=max_angular_sep,
+        max_delta_cz=max_delta_cz,
         cosmo_params=cosmo_params,
         verbose=verbose,
     )

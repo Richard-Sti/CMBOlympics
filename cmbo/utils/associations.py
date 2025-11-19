@@ -1,14 +1,33 @@
+# Copyright (C) 2025 Richard Stiskalek
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
 """Utilities for identifying halo associations across realisations."""
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-import re
+
+import astropy.units as u
 import h5py
 import numpy as np
-import astropy.units as u
-from astropy.cosmology import z_at_value, FlatLambdaCDM
+from astropy.cosmology import FlatLambdaCDM, z_at_value
 from tqdm import tqdm
-from .coords import cartesian_icrs_to_galactic_spherical
+
+from ..constants import SPEED_OF_LIGHT_KMS
+from .coords import (cartesian_icrs_to_galactic_spherical,
+                     comoving_distance_to_cz)
 
 
 @dataclass
@@ -128,6 +147,91 @@ class HaloAssociation:
             self.centroid.reshape(1, 3), center
         )
         return float(r[0]), float(ell[0]), float(b[0])
+
+    def centroid_radec(self, box_size=None):
+        """
+        Convert centroid to RA/Dec coordinates.
+
+        Parameters
+        ----------
+        box_size : float, optional
+            Simulation box size in Mpc/h. If None, attempts to read from
+            optional_data['box_size'].
+
+        Returns
+        -------
+        ra : float
+            Right ascension in degrees.
+        dec : float
+            Declination in degrees.
+        """
+        if box_size is None:
+            if self.optional_data and "box_size" in self.optional_data:
+                box_size = float(self.optional_data["box_size"])
+            else:
+                raise ValueError(
+                    "box_size must be provided or present in optional_data"
+                )
+
+        # Centroid relative to box center
+        centroid_rel = self.centroid - box_size / 2.0
+        r = np.linalg.norm(centroid_rel)
+        unit_vec = centroid_rel / r
+
+        # Convert to RA/Dec
+        ra = np.degrees(np.arctan2(unit_vec[1], unit_vec[0]))
+        if ra < 0:
+            ra += 360
+        dec = np.degrees(np.arcsin(unit_vec[2]))
+
+        return float(ra), float(dec)
+
+    def centroid_redshift(self, box_size=None, Om0=None):
+        """
+        Compute redshift of centroid from its comoving distance.
+
+        Parameters
+        ----------
+        box_size : float, optional
+            Simulation box size in Mpc/h. If None, attempts to read from
+            optional_data['box_size'].
+        Om0 : float, optional
+            Matter density parameter. If None, attempts to read from
+            optional_data['omega_m'] or optional_data['Om0']; raises a
+            ValueError when unavailable.
+
+        Returns
+        -------
+        z : float
+            Redshift of the association centroid.
+        """
+        if box_size is None:
+            if self.optional_data and "box_size" in self.optional_data:
+                box_size = float(self.optional_data["box_size"])
+            else:
+                raise ValueError(
+                    "box_size must be provided or present in optional_data"
+                )
+
+        if Om0 is None:
+            if self.optional_data:
+                if "omega_m" in self.optional_data:
+                    Om0 = float(self.optional_data["omega_m"])
+            if Om0 is None:
+                raise ValueError(
+                    "Om0 must be provided or present in optional_data "
+                    "('omega_m' or 'Om0')."
+                )
+
+        # Centroid relative to box center
+        centroid_rel = self.centroid - box_size / 2.0
+        r = np.linalg.norm(centroid_rel)
+
+        # Convert distance to redshift
+        cz = comoving_distance_to_cz(r, h=1.0, Om0=Om0)
+        z = cz / SPEED_OF_LIGHT_KMS
+
+        return float(z)
 
     def to_z(self, center, Om):
         """
@@ -296,6 +400,47 @@ class HaloAssociationList(list):
     def std_log_mass(self):
         """Standard deviation of log mass for each association."""
         return np.array([np.log10(assoc.masses).std() for assoc in self])
+
+    @property
+    def centroid_radec(self):
+        """Right ascension and declination centroid pairs in degrees."""
+        return np.array([assoc.centroid_radec() for assoc in self])
+
+    @property
+    def centroid_redshift(self):
+        """Redshift of each association centroid."""
+        return np.array([assoc.centroid_redshift() for assoc in self])
+
+    @property
+    def centroid_cartesian(self):
+        """Centroid positions as Cartesian coordinates."""
+        return np.array([assoc.centroid for assoc in self])
+
+    @property
+    def box_size(self):
+        """Simulation box size inferred from the first association."""
+        if not self:
+            raise ValueError("Cannot determine box_size for an empty list.")
+        opt = getattr(self[0], "optional_data", {}) or {}
+        if "box_size" not in opt:
+            raise ValueError(
+                "First association missing 'box_size' in optional_data."
+            )
+        return float(opt["box_size"])
+
+    @property
+    def Om0(self):
+        """Matter density parameter inferred from the first association."""
+        if not self:
+            raise ValueError("Cannot determine Om0 for an empty list.")
+        opt = getattr(self[0], "optional_data", {}) or {}
+        if "omega_m" in opt:
+            return float(opt["omega_m"])
+        if "Om0" in opt:
+            return float(opt["Om0"])
+        raise ValueError(
+            "First association missing 'omega_m' or 'Om0' in optional_data."
+        )
 
 
 def compute_association_signals(associations, profiler, obs_pos,
@@ -521,12 +666,14 @@ def _infer_mass_definition(mass_key):
             raise ValueError(
                 f"Unsupported mass scale '{match.group(1)}' in '{mass_key}'.")
         if match.group(2) != "c":
-            raise ValueError(f"Mass definition must be 'c' (critical), got '{match.group(2)}'.")
+            raise ValueError("Mass definition must be 'c' (critical), "
+                             f"got '{match.group(2)}'.")
         return f"{match.group(1)}c"
     match = re.search(r"(crit|mean)\s*(\d+)", key)
     if match:
         if match.group(2) not in ("200", "500"):
-            raise ValueError(f"Unsupported mass scale '{match.group(2)}' in '{mass_key}'.")
+            raise ValueError(f"Unsupported mass scale '{match.group(2)}' "
+                             f"in '{mass_key}'.")
         if match.group(1) != "crit":
             raise ValueError(
                 f"Mass definition must be critical, got '{match.group(1)}'.")
@@ -553,6 +700,10 @@ def _load_simulation_halos(cfg, sim_key):
     mass_key = catalogue_cfg["mass_key"]
     radius_key = catalogue_cfg["radius_key"]
     box_size = float(catalogue_cfg["box_size"])
+    omega_m = catalogue_cfg.get("omega_m")
+    if omega_m is None:
+        omega_m = catalogue_cfg.get("Om0", 0.3111)
+    omega_m = float(omega_m)
     centre = np.array(catalogue_cfg.get(
         "observer_position",
         [box_size / 2.0, box_size / 2.0, box_size / 2.0],
@@ -626,6 +777,8 @@ def _load_simulation_halos(cfg, sim_key):
         "box_size": box_size,
         "centre": centre,
         "mass_definition": mass_definition,
+        "omega_m": omega_m,
+        "Om0": omega_m,
     }
     return data
 
@@ -698,7 +851,8 @@ def _load_original_order_dataset(
 
             if catalogue_idx.shape != dataset.shape:
                 raise ValueError(
-                    f"Dataset '{dataset_name}' mis-sized for simulation {sim_id}."
+                    f"Dataset '{dataset_name}' mis-sized for "
+                    f"simulation {sim_id}."
                 )
 
             if np.any(catalogue_idx < 0) or np.any(catalogue_idx >= n_obj):
@@ -879,5 +1033,7 @@ def load_associations(sim_key, cfg, verbose=True):
         assoc.optional_data.setdefault(
             "mass_definition", halo_data["mass_definition"]
         )
+        assoc.optional_data.setdefault("omega_m", halo_data["omega_m"])
+        assoc.optional_data.setdefault("Om0", halo_data["omega_m"])
 
     return associations

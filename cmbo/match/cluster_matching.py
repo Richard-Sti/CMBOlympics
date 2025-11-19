@@ -17,9 +17,13 @@
 from __future__ import annotations
 
 import numpy as np
+from astropy.coordinates import angular_separation
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial.distance import cdist
 from tqdm import tqdm
 
+from ..constants import SPEED_OF_LIGHT_KMS
+from ..utils.coords import cz_to_comoving_distance, radec_to_cartesian
 from .pfeifer import MatchingProbability
 
 
@@ -381,5 +385,149 @@ def hungarian_global_matching(pval_matrix, dist_matrix, associations,
             continue
 
         matches[i] = (associations[j], pval, float(dist_matrix[i, j]))
+
+    return matches
+
+
+def compute_angular_separation(ra1, dec1, ra2, dec2):
+    """
+    Compute angular separation between two points on the sky using Astropy.
+
+    Parameters
+    ----------
+    ra1, dec1 : float or ndarray
+        RA and Dec of first point(s) in degrees.
+    ra2, dec2 : float or ndarray
+        RA and Dec of second point(s) in degrees.
+
+    Returns
+    -------
+    separation : float or ndarray
+        Angular separation in arcminutes.
+    """
+    sep_rad = angular_separation(
+        np.radians(ra1), np.radians(dec1),
+        np.radians(ra2), np.radians(dec2)
+    )
+    return np.degrees(sep_rad) * 60
+
+
+def classical_matching(ra_obs, dec_obs, z_obs, associations,
+                       max_angular_sep=30.0, max_delta_cz=500.0,
+                       cosmo_params=None, verbose=True):
+    """
+    Match clusters using classical angular separation + redshift criteria.
+
+    Filters association-cluster pairs by:
+    1. Angular separation on sky < max_angular_sep
+    2. |cz_obs - cz_sim| < max_delta_cz
+
+    Among valid pairs, assigns matches greedily by minimizing 3D comoving
+    distance.
+
+    Parameters
+    ----------
+    ra_obs, dec_obs : ndarray
+        Observed cluster positions in degrees, shape (n_obs,).
+    z_obs : ndarray
+        Observed cluster redshifts, shape (n_obs,).
+    associations : sequence
+        Halo associations with positions and optional_data containing box_size
+        and redshift information.
+    max_angular_sep : float, optional
+        Maximum angular separation in arcminutes (default 30.0).
+    max_delta_cz : float, optional
+        Maximum velocity difference in km/s (default 500.0).
+    cosmo_params : dict, optional
+        Cosmological parameters for distance calculations.
+    verbose : bool, optional
+        If True, print diagnostic information.
+
+    Returns
+    -------
+    matches : list
+        List of length n_obs. For each cluster:
+        - (association, angular_sep, distance) if matched
+        - None if not matched
+    """
+    n_obs = len(ra_obs)
+    assoc_container = associations
+    associations = list(associations)
+    n_assoc = len(associations)
+
+    box_size = assoc_container.box_size
+
+    # Compute association centroids, RA/Dec, and redshifts using object methods
+    # Associations automatically use their stored cosmology/box metadata
+    radec_array = assoc_container.centroid_radec
+    ra_assoc = radec_array[:, 0]
+    dec_assoc = radec_array[:, 1]
+    z_assoc = assoc_container.centroid_redshift
+    assoc_centroids = assoc_container.centroid_cartesian - box_size / 2
+
+    # Compute 3D positions for observed clusters
+    unit_vec_obs = radec_to_cartesian(ra_obs, dec_obs)
+    dist_obs = cz_to_comoving_distance(z_obs * SPEED_OF_LIGHT_KMS,
+                                       **(cosmo_params or {}))
+    x_obs = (unit_vec_obs.T * dist_obs).T
+
+    # Create matrices for filtering
+    angular_sep_matrix = np.zeros((n_obs, n_assoc))
+    delta_cz_matrix = np.zeros((n_obs, n_assoc))
+
+    for i in range(n_obs):
+        angular_sep_matrix[i, :] = compute_angular_separation(
+            ra_obs[i], dec_obs[i], ra_assoc, dec_assoc
+        )
+        delta_cz_matrix[i, :] = np.abs(
+            z_obs[i] * SPEED_OF_LIGHT_KMS -
+            z_assoc * SPEED_OF_LIGHT_KMS
+        )
+
+    # Create distance matrix for matched pairs
+    dist_matrix_3d = cdist(x_obs, assoc_centroids)
+
+    # Apply filters
+    valid_matrix = ((angular_sep_matrix <= max_angular_sep) &
+                    (delta_cz_matrix <= max_delta_cz))
+
+    # Set invalid distances to inf for greedy matching
+    dist_matrix_filtered = dist_matrix_3d.copy()
+    dist_matrix_filtered[~valid_matrix] = np.inf
+
+    # Greedy matching on 3D distance
+    matches = [None] * n_obs
+    used_associations = set()
+
+    while True:
+        # Find minimum distance among remaining valid pairs
+        min_dist = np.inf
+        best_i, best_j = -1, -1
+
+        for i in range(n_obs):
+            if matches[i] is not None:
+                continue
+            for j in range(n_assoc):
+                if j in used_associations:
+                    continue
+                if dist_matrix_filtered[i, j] < min_dist:
+                    min_dist = dist_matrix_filtered[i, j]
+                    best_i, best_j = i, j
+
+        if not np.isfinite(min_dist):
+            break
+
+        # Assign match
+        matches[best_i] = (
+            associations[best_j],
+            float(angular_sep_matrix[best_i, best_j]),
+            float(dist_matrix_3d[best_i, best_j])
+        )
+        used_associations.add(best_j)
+
+    if verbose:
+        n_matched = sum(1 for m in matches if m is not None)
+        print(f"Classical matching: {n_matched}/{n_obs} clusters matched "
+              f"({100*n_matched/n_obs:.1f}%)")
 
     return matches
