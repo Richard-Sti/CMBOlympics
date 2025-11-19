@@ -118,6 +118,7 @@ clear_output_dir = true         # Clear output directory before running
 # Definitions of available halo catalogues. The key is used in `analysis.which_simulation`.
 [halo_catalogues]
 min_association_mass = 5e13  # Minimum mass for associations [M_sun/h]
+min_fraction_present = 0.5  # Minimum fraction of realisations per association
 
 [halo_catalogues.csiborg1]
 fname = "data/csiborg1_fof.hdf5"
@@ -125,6 +126,7 @@ nsim = "all"
 box_size = 677.7  # [Mpc/h]
 omega_m = 0.307
 position_key = "Position"
+velocity_key = "Velocity"
 mass_key = "M500c"
 radius_key = "R500c"
 
@@ -132,6 +134,7 @@ radius_key = "R500c"
 fname = "data/csiborg2_fof.hdf5"
 nsim = "all"  # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
+velocity_key = "Velocities"
 mass_key = "Group_M_Crit500"
 radius_key = "Group_R_Crit500"
 box_size = 676.6  # [Mpc/h]
@@ -142,6 +145,7 @@ omega_m = 0.3111
 fname = "data/manticore_fof.hdf5"
 nsim = "all" # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
+velocity_key = "Velocities"
 mass_key = "Group_M_Crit500"
 radius_key = "Group_R_Crit500"
 box_size = 681.0  # [Mpc/h]
