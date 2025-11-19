@@ -75,6 +75,10 @@ def match_catalogue_to_associations(
         Pfeifer p-values for each match.
     distances : ndarray
         Centroid distances for each match.
+    n_matched : int
+        Number of successfully matched objects.
+    n_total : int
+        Total number of objects in the catalogue.
     """
     if not associations:
         raise ValueError("At least one association is required.")
@@ -126,10 +130,11 @@ def match_catalogue_to_associations(
 
     matched_mask = ~np.isnan(pvals)
     n_matched = np.sum(matched_mask)
+    n_total = len(ra)
 
     if verbose:
-        fprint(f"Matched {n_matched}/{len(ra)} objects "
-               f"({100*n_matched/len(ra):.1f}%)")
+        fprint(f"Matched {n_matched}/{n_total} objects "
+               f"({100*n_matched/n_total:.1f}%)")
 
     filtered_catalogue = mask_structured_array(catalogue, matched_mask)
     matched_assoc_indices = assoc_indices[matched_mask]
@@ -138,7 +143,8 @@ def match_catalogue_to_associations(
     )
 
     return (filtered_catalogue, matched_associations,
-            pvals[matched_mask], distances[matched_mask])
+            pvals[matched_mask], distances[matched_mask],
+            n_matched, n_total)
 
 
 def match_planck_catalog_to_associations(
@@ -181,7 +187,8 @@ def match_planck_catalog_to_associations(
 
     Returns
     -------
-    matched_catalogue, matched_associations, pvals, distances :
+    matched_catalogue, matched_associations, pvals, distances, n_matched,
+    n_total :
         See :func:`match_catalogue_to_associations`.
     """
 
@@ -246,7 +253,8 @@ def match_mcxc_catalog_to_associations(
 
     Returns
     -------
-    matched_catalogue, matched_associations, pvals, distances :
+    matched_catalogue, matched_associations, pvals, distances, n_matched,
+    n_total :
         See :func:`match_catalogue_to_associations`.
     """
     redshift = np.asarray(data_mcxc["Z"], dtype=float)
@@ -309,7 +317,8 @@ def match_erass_catalog_to_associations(
 
     Returns
     -------
-    matched_catalogue, matched_associations, pvals, distances :
+    matched_catalogue, matched_associations, pvals, distances, n_matched,
+    n_total :
         See :func:`match_catalogue_to_associations`.
     """
     redshift = np.asarray(data_erass["BEST_Z"], dtype=float)
