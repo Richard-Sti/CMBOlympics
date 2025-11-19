@@ -287,7 +287,8 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
                     all_bad = np.all(finite_vals >= threshold)
                     if has_remaining and all_bad:
                         best_remaining = np.min(finite_vals)
-                        name = obs_clusters.names[k]
+                        name = getattr(
+                            obs_clusters, "names", [None] * pval.shape[0])[k]
                         print(f"Cluster {k} ({name}) now orphaned "
                               f"(best remaining p={best_remaining:.3e})")
                         orphaned.add(k)
@@ -415,6 +416,7 @@ def compute_angular_separation(ra1, dec1, ra2, dec2):
 
 def classical_matching(ra_obs, dec_obs, z_obs, associations,
                        max_angular_sep=30.0, max_delta_cz=500.0,
+                       min_member_fraction=0.5,
                        median_halo_tsz_pval_max=None,
                        use_median_halo_tsz_pval=False,
                        cosmo_params=None, verbose=True):
@@ -441,6 +443,9 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
         Maximum angular separation in arcminutes (default 30.0).
     max_delta_cz : float, optional
         Maximum velocity difference in km/s (default 500.0).
+    min_member_fraction : float, optional
+        Minimum fraction of association member haloes that must satisfy the
+        angular/redshift cuts for the pair to be considered valid.
     median_halo_tsz_pval_max : float, optional
         When set, associations with median halo_pval >= this value are
         excluded before matching.
@@ -500,19 +505,15 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
         print(f"Classical matching: {n_obs} observed clusters vs {n_assoc} "
               "associations")
         print(f"  Filters: angular_sep <= {max_angular_sep:.1f} arcmin, "
-              f"delta_cz <= {max_delta_cz:.1f} km/s")
+              f"delta_cz <= {max_delta_cz:.1f} km/s, "
+              f"min_member_fraction >= {min_member_fraction:.2f}")
         if use_median_halo_tsz_pval:
             print("  Selection: minimise median halo_tsz pval among valid "
                   "pairs")
         else:
             print("  Selection: minimise 3D distance among valid pairs")
 
-    # Compute association centroids, RA/Dec, and redshifts using object methods
-    # Associations automatically use their stored cosmology/box metadata
-    radec_array = assoc_container.centroid_radec
-    ra_assoc = radec_array[:, 0]
-    dec_assoc = radec_array[:, 1]
-    z_assoc = assoc_container.centroid_obs_redshift
+    # Compute association centroids and member properties
     assoc_centroids = assoc_container.redshift_space_centroid
 
     # Compute 3D positions for observed clusters
@@ -521,25 +522,33 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
                                        **(cosmo_params or {}))
     x_obs = (unit_vec_obs.T * dist_obs).T
 
-    # Create matrices for filtering
-    angular_sep_matrix = np.zeros((n_obs, n_assoc))
-    delta_cz_matrix = np.zeros((n_obs, n_assoc))
+    # Member-level angular/redshift filtering
+    member_radec = [np.asarray(assoc.radec) for assoc in associations]
+    member_zobs = [np.asarray(assoc.obs_redshift) for assoc in associations]
 
-    for i in range(n_obs):
-        angular_sep_matrix[i, :] = compute_angular_separation(
-            ra_obs[i], dec_obs[i], ra_assoc, dec_assoc
-        )
-        delta_cz_matrix[i, :] = np.abs(
-            z_obs[i] * SPEED_OF_LIGHT_KMS -
-            z_assoc * SPEED_OF_LIGHT_KMS
-        )
+    min_angular_sep_matrix = np.full((n_obs, n_assoc), np.inf, dtype=float)
+    valid_matrix = np.zeros((n_obs, n_assoc), dtype=bool)
 
     # Create distance matrix for matched pairs
     dist_matrix_3d = cdist(x_obs, assoc_centroids)
 
-    # Apply filters
-    valid_matrix = ((angular_sep_matrix <= max_angular_sep) &
-                    (delta_cz_matrix <= max_delta_cz))
+    for j, (radec_mem, zmem) in enumerate(zip(member_radec, member_zobs)):
+        ra_mem = radec_mem[:, 0]
+        dec_mem = radec_mem[:, 1]
+        cz_mem = zmem * SPEED_OF_LIGHT_KMS
+        n_mem = ra_mem.size
+        for i in range(n_obs):
+            angs = compute_angular_separation(
+                ra_obs[i], dec_obs[i], ra_mem, dec_mem
+            )
+            min_angular_sep_matrix[i, j] = (
+                np.min(angs) if angs.size else np.inf)
+            if n_mem == 0:
+                continue
+            deltas = np.abs(z_obs[i] * SPEED_OF_LIGHT_KMS - cz_mem)
+            good = (angs <= max_angular_sep) & (deltas <= max_delta_cz)
+            if np.count_nonzero(good) / n_mem >= min_member_fraction:
+                valid_matrix[i, j] = True
 
     if verbose:
         n_valid_pairs = np.sum(valid_matrix)
@@ -594,7 +603,7 @@ def classical_matching(ra_obs, dec_obs, z_obs, associations,
         # Assign match
         matches[best_i] = (
             associations[best_j],
-            float(angular_sep_matrix[best_i, best_j]),
+            float(min_angular_sep_matrix[best_i, best_j]),
             float(dist_matrix_3d[best_i, best_j])
         )
         used_associations.add(best_j)
