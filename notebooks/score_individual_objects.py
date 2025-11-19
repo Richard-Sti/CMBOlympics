@@ -211,10 +211,8 @@ def print_cluster_scores(
                 median_logm = float(np.nanmedian(np.log10(masses)))
             if observer_centre is not None:
                 try:
-                    r_sim, ell_deg, b_deg = assoc.centroid_to_galactic_angular(
-                        observer_centre
-                    )
-                    centroid_dist = float(r_sim)
+                    ell_deg, b_deg = assoc.centroid_galactic_angular
+                    centroid_dist = float(assoc.centroid_distance)
                 except Exception:
                     ell_deg = np.nan
                     b_deg = np.nan
