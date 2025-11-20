@@ -23,6 +23,7 @@ from astropy.coordinates import SkyCoord
 
 from ..constants import SPEED_OF_LIGHT_KMS
 from ..utils.arrays import add_field, rename_field
+from ..utils.coords import heliocentric_to_cmb
 
 __all__ = (
     "load_mcxc_catalogue",
@@ -114,6 +115,17 @@ def load_mcxc_catalogue(fname="data/MCXCII_2024.fits", verbose=True):
     if "DEJ2000" in data.dtype.names:
         data = rename_field(data, "DEJ2000", "DEC")
 
+    if {"RA", "DEC", "Z"}.issubset(data.dtype.names):
+        z_helio = np.asarray(data["Z"], dtype=float)
+        ra = np.asarray(data["RA"], dtype=float)
+        dec = np.asarray(data["DEC"], dtype=float)
+        z_cmb = heliocentric_to_cmb(z_helio, ra, dec)
+        z_cmb = np.asarray(z_cmb, dtype=float)
+        data = add_field(data, "Z_HELIO", z_helio, dtype=float)  # preserve
+        np.copyto(data["Z"], z_cmb, casting="unsafe")
+        if verbose:
+            print("Converted MCXC heliocentric redshifts to CMB frame.")
+
     return data
 
 
@@ -189,6 +201,17 @@ def load_erass_catalogue(fname="data/erass1cl_primary_v3.2.fits",
                     f"{max_m500:.2e} Msol."
                 )
         data = data[mask]
+
+    if {"RA", "DEC", "BEST_Z"}.issubset(data.dtype.names):
+        z_helio = np.asarray(data["BEST_Z"], dtype=float)
+        ra = np.asarray(data["RA"], dtype=float)
+        dec = np.asarray(data["DEC"], dtype=float)
+        z_cmb = heliocentric_to_cmb(z_helio, ra, dec)
+        z_cmb = np.asarray(z_cmb, dtype=float)
+        data = add_field(data, "BEST_Z_HELIO", z_helio, dtype=float)
+        np.copyto(data["BEST_Z"], z_cmb, casting="unsafe")
+        if verbose:
+            print("Converted eRASS heliocentric redshifts to CMB frame.")
 
     return data
 

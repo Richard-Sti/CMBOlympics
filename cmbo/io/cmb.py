@@ -19,6 +19,7 @@ from astropy.cosmology import FlatLambdaCDM
 import numpy as np
 
 from ..utils import E_z
+from ..utils.coords import heliocentric_to_cmb
 
 ARCMIN2_TO_SR = (np.pi / (180.0 * 60.0))**2
 
@@ -86,7 +87,16 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION", Om=0.306,
         if removed:
             print(f"Removing {removed} Planck clusters with invalid "
                   "redshifts (z <= 0 or NaN).")
-    table = table[valid_z]
+    table = np.array(table[valid_z], copy=True)
+
+    # Convert heliocentric -> CMB-frame redshifts
+    z_helio = np.asarray(table["REDSHIFT"], dtype=float)
+    ra = np.asarray(table["RA"], dtype=float)
+    dec = np.asarray(table["DEC"], dtype=float)
+    z_cmb = heliocentric_to_cmb(z_helio, ra, dec)
+    np.copyto(table["REDSHIFT"], np.asarray(z_cmb, dtype=float))
+    if verbose:
+        print("Converted Planck heliocentric redshifts to CMB frame.")
 
     def _as_float(col, dtype=np.float64):
         return np.asarray(table[col], dtype=dtype)
@@ -113,6 +123,7 @@ def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION", Om=0.306,
         "pipe_det": _as_int("PIPE_DET"),
         "redshift_id": _as_str("REDSHIFT_ID"),
         "redshift": _as_float("REDSHIFT", dtype=np.float32),
+        "redshift_helio": np.asarray(z_helio, dtype=np.float32),
         "y5r500": _as_float("Y5R500", dtype=np.float32),
         "y5r500_err": _as_float("Y5R500_ERR", dtype=np.float32),
         "M500": _as_float("MSZ", dtype=np.float32) * 1e14,
