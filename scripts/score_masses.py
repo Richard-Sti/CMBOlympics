@@ -264,9 +264,11 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
         fprint("  -> No matches found, skipping.")
         return
 
-    # Prepare x-axis data
-    x = np.array(assoc_matched.mean_log_mass)
-    xerr = np.array(assoc_matched.std_log_mass)
+    # Prepare x-axis data from resampled halo masses
+    x_samples = np.log10(np.asarray(assoc_matched.resampled_halo_masses,
+                                    dtype=float))
+    x = np.mean(x_samples, axis=1)
+    xerr = np.std(x_samples, axis=1)
 
     # Prepare y-axis data
     h = mass_cfg.get("h", 0.68)
@@ -288,15 +290,14 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
     else:
         y_pivot = mass_cfg.get("y_pivot_M500", 14.0)
 
-    fitter = cmbo.utils.LinearRoxyFitter()
+    fitter = cmbo.utils.MarginalizedLinearFitter()
 
     # Capture stdout during fit to get NumPyro summary
     old_stdout = sys.stdout
     sys.stdout = StringIO()
     try:
         res = fitter.fit(
-            x[mask], y[mask], xerr[mask], yerr[mask],
-            method="mnr",
+            x_samples[mask], y[mask], yerr[mask],
             x_pivot=mass_cfg.get("x_pivot", 14.0),
             y_pivot=y_pivot,
             nwarm=mass_cfg.get("mcmc_warmup", 1000),
