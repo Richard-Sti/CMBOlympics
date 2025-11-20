@@ -145,13 +145,14 @@ def load_halo_positions_masses(fname, position_key, mass_key,
 
     Returns
     -------
-    positions_all : list of ndarray
-        Filtered halo positions for each simulation.
-    masses_all : list of ndarray
-        Filtered halo masses for each simulation.
-    optional_data : dict of lists, optional
+    positions_all : ndarray or list of ndarray
+        Filtered halo positions. If nsim is a single simulation, returns
+        a single array; otherwise returns a list of arrays.
+    masses_all : ndarray or list of ndarray
+        Filtered halo masses. Same format as positions_all.
+    optional_data : dict, optional
         If optional_keys is provided, returns a dictionary mapping each key
-        to a list of arrays (one per simulation).
+        to an array (single sim) or list of arrays (all sims).
     """
 
     if nsim == "all":
@@ -213,6 +214,12 @@ def load_halo_positions_masses(fname, position_key, mass_key,
         masses_all.append(mass[mask])
         for key in optional_data:
             optional_data[key].append(opt_arrays[key][mask])
+
+    # Return arrays directly for single simulation
+    if nsim != "all":
+        positions_all = positions_all[0]
+        masses_all = masses_all[0]
+        optional_data = {k: v[0] for k, v in optional_data.items()}
 
     if optional_keys:
         return positions_all, masses_all, optional_data
