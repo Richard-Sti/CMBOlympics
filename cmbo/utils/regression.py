@@ -97,8 +97,22 @@ def correlation_with_errors(x, y, xerr, yerr, n_samples=1000, seed=None,
 
 class CorrelationWithSamples:
     """
-    Compute correlations when x is drawn from per-point sample lists instead of
-    Gaussian errors.
+    Compute Pearson/Spearman correlations when x is drawn from per-point sample
+    lists instead of Gaussian errors.
+
+    Parameters
+    ----------
+    x_samples : sequence of array-like
+        Per-point samples for x; length must match y. Entries can have
+        different lengths but must be non-empty.
+    y : array-like
+        Y data.
+    yerr : array-like
+        Y errors (standard deviations).
+    seed : int, optional
+        Random seed for reproducibility.
+    verbose : bool
+        If True, show a progress bar during sampling.
     """
 
     def __init__(self, x_samples, y, yerr, seed=None, verbose=True):
@@ -124,6 +138,20 @@ class CorrelationWithSamples:
         return self.rng.normal(self.y, self.yerr)
 
     def compute(self, n_samples=10000):
+        """
+        Resample x from the provided lists and y from Gaussian errors to compute
+        Pearson/Spearman statistics.
+
+        Parameters
+        ----------
+        n_samples : int
+            Number of bootstrap samples.
+
+        Returns
+        -------
+        dict
+            Keys: 'pearson', 'pearson_err', 'spearman', 'spearman_err'.
+        """
         pearson_samples = np.empty(n_samples)
         spearman_samples = np.empty(n_samples)
 
