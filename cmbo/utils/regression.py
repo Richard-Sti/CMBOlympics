@@ -12,22 +12,22 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-"""Regression utilities using roxy for errors-in-variables fitting."""
+"""Regression utilities for errors-in-variables fitting."""
 
 import numpy as np
+from jax import numpy as jnp
+from jax import random
+from jax.scipy.special import logsumexp
 from matplotlib import pyplot as plt
+from numpyro import factor, sample
+from numpyro.distributions import Normal, Uniform
+from numpyro.infer import MCMC, NUTS
 from scipy.stats import chi2, norm, pearsonr, spearmanr
 from tqdm import trange
 
-from jax import random
-from jax import numpy as jnp
-from numpyro import sample, factor
-from numpyro.distributions import Normal, Uniform
-from numpyro.infer import MCMC, NUTS
-from jax.scipy.special import logsumexp
-
 
 def logmeanexp(a, axis=None, keepdims=False):
+    """Compute log of mean of exp(a) in a numerically stable way."""
     n = a.shape[axis] if axis is not None else a.size
     return logsumexp(a, axis=axis, keepdims=keepdims) - jnp.log(n)
 
@@ -82,20 +82,72 @@ def correlation_with_errors(x, y, xerr, yerr, n_samples=1000, seed=None,
         x_resample = rng.normal(x, xerr)
         y_resample = rng.normal(y, yerr)
 
-        pearson_samples[i] = pearsonr(x_resample, y_resample)[0]
-        spearman_samples[i] = spearmanr(x_resample, y_resample)[0]
+        pearson_samples[i] = float(pearsonr(x_resample, y_resample)[0])
+        spearman_samples[i] = float(spearmanr(x_resample, y_resample)[0])
 
     result = {
-        'pearson': np.median(pearson_samples),
-        'pearson_err': np.std(pearson_samples),
-        'spearman': np.median(spearman_samples),
-        'spearman_err': np.std(spearman_samples),
+        'pearson': float(np.median(pearson_samples)),
+        'pearson_err': float(np.std(pearson_samples)),
+        'spearman': float(np.median(spearman_samples)),
+        'spearman_err': float(np.std(spearman_samples)),
     }
 
     return result
 
 
+class CorrelationWithSamples:
+    """
+    Compute correlations when x is drawn from per-point sample lists instead of
+    Gaussian errors.
+    """
+
+    def __init__(self, x_samples, y, yerr, seed=None, verbose=True):
+        y = np.asarray(y, dtype=float)
+        yerr = np.asarray(yerr, dtype=float)
+        x_samples = [np.asarray(xs, dtype=float) for xs in x_samples]
+
+        if len(x_samples) != len(y) or len(y) != len(yerr):
+            raise ValueError("x_samples, y, yerr must have the same length")
+        if any(xs.size == 0 for xs in x_samples):
+            raise ValueError("Entries in x_samples must be non-empty")
+
+        self.x_samples = x_samples
+        self.y = y
+        self.yerr = yerr
+        self.verbose = verbose
+        self.rng = np.random.default_rng(seed)
+
+    def _draw_x(self):
+        return np.array([self.rng.choice(xs) for xs in self.x_samples])
+
+    def _draw_y(self):
+        return self.rng.normal(self.y, self.yerr)
+
+    def compute(self, n_samples=10000):
+        pearson_samples = np.empty(n_samples)
+        spearman_samples = np.empty(n_samples)
+
+        iterator = trange(n_samples) if self.verbose else range(n_samples)
+        for i in iterator:
+            x_resample = self._draw_x()
+            y_resample = self._draw_y()
+            pearson_samples[i] = float(pearsonr(x_resample, y_resample)[0])
+            spearman_samples[i] = float(spearmanr(x_resample, y_resample)[0])
+
+        return {
+            'pearson': float(np.median(pearson_samples)),
+            'pearson_err': float(np.std(pearson_samples)),
+            'spearman': float(np.median(spearman_samples)),
+            'spearman_err': float(np.std(spearman_samples)),
+        }
+
+
 class MarginalizedLinearModel:
+    """
+    NumPyro model for linear regression marginalizing over x samples.
+
+    Used internally by MarginalizedLinearFitter.
+    """
 
     def __init__(self, x_samples, y, yerr, slope_range=(-10, 10),
                  intercept_range=(-10, 10), sig_range=(0.0001, 3.0)):
@@ -180,34 +232,6 @@ class BaseLinearFitter:
             y_pred[p] = np.percentile(y_samples, p, axis=0)
 
         return y_pred
-
-    def print_summary(self, prob=0.95):
-        """
-        Print NumPyro MCMC summary statistics.
-
-        Parameters
-        ----------
-        prob : float
-            Probability mass for credible intervals (default 0.95).
-        """
-        if self._result is None:
-            raise ValueError("Must call fit() first")
-
-        try:
-            from numpyro.diagnostics import print_summary
-        except ImportError as e:
-            raise ImportError(
-                "numpyro is required for print_summary. "
-                "Install it with: pip install numpyro"
-            ) from e
-
-        if 'samples' in self._result:
-            print_summary(self._result['samples'], prob=prob)
-        elif (self._regressor is not None
-              and hasattr(self._regressor, 'samples')):
-            print_summary(self._regressor.samples, prob=prob)
-        else:
-            print("Warning: NumPyro samples not found in result object.")
 
     def get_slope_intercept_significance(self, point):
         """
@@ -536,6 +560,34 @@ class LinearRoxyFitter(BaseLinearFitter):
 
         return result
 
+    def print_summary(self, prob=0.95):
+        """
+        Print NumPyro MCMC summary statistics.
+
+        Parameters
+        ----------
+        prob : float
+            Probability mass for credible intervals (default 0.95).
+        """
+        if self._result is None:
+            raise ValueError("Must call fit() first")
+
+        try:
+            from numpyro.diagnostics import print_summary
+        except ImportError as e:
+            raise ImportError(
+                "numpyro is required for print_summary. "
+                "Install it with: pip install numpyro"
+            ) from e
+
+        if 'samples' in self._result:
+            print_summary(self._result['samples'], prob=prob)
+        elif (self._regressor is not None
+              and hasattr(self._regressor, 'samples')):
+            print_summary(self._regressor.samples, prob=prob)
+        else:
+            print("Warning: NumPyro samples not found in result object.")
+
 
 class MarginalizedLinearFitter(BaseLinearFitter):
     """
@@ -562,8 +614,22 @@ class MarginalizedLinearFitter(BaseLinearFitter):
         self.range_intercept = range_intercept
         self.range_sig = range_sig
 
+    def print_summary(self, prob=0.95):
+        """
+        Print NumPyro MCMC summary statistics.
+
+        Parameters
+        ----------
+        prob : float
+            Probability mass for credible intervals (default 0.95).
+        """
+        if self._mcmc is None:
+            raise ValueError("Must call fit() first")
+
+        self._mcmc.print_summary(prob=prob)
+
     def fit(self, x_samples, y, yerr, nwarm=500, nsamp=5000,
-            x_pivot=0, y_pivot=0, num_chains=1, rng_key=None):
+            x_pivot=0, y_pivot=0, num_chains=1, seed=None):
         """
         Fit the linear model with MCMC, marginalizing over x samples.
 
@@ -585,8 +651,8 @@ class MarginalizedLinearFitter(BaseLinearFitter):
             Pivot point for y normalization.
         num_chains : int
             Number of MCMC chains.
-        rng_key : jax.random.PRNGKey, optional
-            Random key for MCMC. If None, uses PRNGKey(0).
+        seed : int, optional
+            Random seed for MCMC. If None, uses 0.
 
         Returns
         -------
@@ -611,11 +677,10 @@ class MarginalizedLinearFitter(BaseLinearFitter):
         mcmc = MCMC(kernel, num_warmup=nwarm, num_samples=nsamp,
                     num_chains=num_chains)
 
-        if rng_key is None:
-            rng_key = random.PRNGKey(0)
+        rng_key = random.PRNGKey(0 if seed is None else seed)
         mcmc.run(rng_key)
 
+        self._mcmc = mcmc
         self._result = mcmc.get_samples()
 
         return self._result
-
