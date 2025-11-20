@@ -190,7 +190,7 @@ def save_fit_summary(fit_output, corr_results, sig_result, y_variable,
         f.write("="*80 + "\n")
         if y_variable == "M500":
             f.write(f"Slope=1, Intercept=0: p={sig_result[0]:.4f}, "
-                    f"p={sig_result[1]:.4f}\n")
+                    f"sigma={sig_result[1]:.4f}\n")
         elif y_variable in ["L500", "YSZ"]:
             f.write(f"Slope=5/3: p={sig_result[0]:.4f}, "
                     f"sigma={sig_result[1]:.2f}\n")
@@ -223,8 +223,11 @@ def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
 def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
                         cfg, mass_cfg):
     """Process a single simulation-catalogue-threshold-variable combination."""
+    matching_method = mass_cfg.get("matching_method", "greedy")
+    thresh_info = (f"threshold={match_threshold}"
+                   if matching_method != "classical" else "classical")
     fprint(f"Processing: {sim_key} vs {catalogue_name} "
-           f"({y_variable}, threshold={match_threshold})")
+           f"({y_variable}, {thresh_info})")
 
     # Load data and perform matching
     data = load_catalogue(catalogue_name, cfg)
@@ -245,7 +248,7 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
         match_threshold=match_threshold,
         mass_preference_threshold=mass_cfg.get("mass_preference_threshold"),  # noqa
         use_median_mass=mass_cfg.get("use_median_mass", True),
-        matching_method=mass_cfg.get("matching_method", "greedy"),
+        matching_method=matching_method,
         max_angular_sep=mass_cfg.get("max_angular_sep", 30.0),
         max_delta_cz=mass_cfg.get("max_delta_cz", 500.0),
         median_halo_tsz_pval_max=mass_cfg.get("median_halo_tsz_pval_max"),
@@ -263,6 +266,10 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
     if len(catalogue_matched) == 0:
         fprint("  -> No matches found, skipping.")
         return
+
+    # Ensure resampled masses are available and of uniform length
+    max_len = max(len(assoc.masses) for assoc in assoc_matched)
+    assoc_matched.resample_masses(max_len)
 
     # Prepare x-axis data from resampled halo masses
     x_samples = np.log10(np.asarray(assoc_matched.resampled_halo_masses,
@@ -304,6 +311,7 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
             nsamp=mass_cfg.get("mcmc_samples", 10000),
             num_chains=mass_cfg.get("mcmc_chains", 1),
         )
+        fitter.print_summary()
         fit_output = sys.stdout.getvalue()
     finally:
         sys.stdout = old_stdout
@@ -321,8 +329,9 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        threshold_str = f"p{match_threshold:.3f}".replace(".", "_")
-        base_name = f"{sim_key}_{threshold_str}_{y_variable}"
+        threshold_str = ("classical" if matching_method == "classical"
+                         else f"p{match_threshold:.3f}".replace(".", "_"))
+        base_name = f"{sim_key}_{threshold_str}_{y_variable}_{catalogue_name}"
 
         data_dict = {
             'x': x[mask], 'xerr': xerr[mask],
@@ -379,13 +388,17 @@ def main():
         ) from exc
 
     # simulations = ["csiborg1", "csiborg2", "manticore"]
-    # catalogues = ["planck", "mcxc", "erass"]
+    catalogues = ["planck", "mcxc", "erass"]
     simulations = ["manticore"]
-    catalogues = ["erass"]
+    # catalogues = ["erass"]
 
     match_thresholds = mass_cfg["match_threshold"]
     if not isinstance(match_thresholds, list):
         match_thresholds = [match_thresholds]
+
+    matching_method = mass_cfg.get("matching_method", "greedy")
+    if matching_method == "classical":
+        match_thresholds = [match_thresholds[0]]
 
     # Clean output directory if requested
     output_dir = mass_cfg.get("output_dir")
