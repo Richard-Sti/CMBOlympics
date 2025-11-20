@@ -139,8 +139,8 @@ class CorrelationWithSamples:
 
     def compute(self, n_samples=10000):
         """
-        Resample x from the provided lists and y from Gaussian errors to compute
-        Pearson/Spearman statistics.
+        Resample x from the provided lists and y from Gaussian errors to
+        compute Pearson/Spearman statistics.
 
         Parameters
         ----------
@@ -308,41 +308,38 @@ class BaseLinearFitter:
 
         return pval, sigma
 
-    def get_slope_significance(self, slope_value):
+    def get_param_significance(self, param_key, value):
         """
-        Compute the significance level at which a slope value is
-        consistent with the 1D Gaussian posterior of the slope.
+        Compute significance for a scalar parameter against its 1D posterior.
 
         Parameters
         ----------
-        slope_value : float
-            The slope value to test.
+        param_key : str
+            Key in the MCMC samples (e.g., 'slope', 'intercept', 'sig').
+        value : float
+            Test value for the parameter.
 
         Returns
         -------
         pval : float
-            The two-sided p-value.
+            Two-sided p-value.
         sigma : float
-            The significance level in terms of Gaussian sigma.
+            Significance in Gaussian sigma.
         """
         if self._result is None:
             raise ValueError("Must call fit() first")
 
         samples_dict = self._result
 
-        if 'slope' not in samples_dict:
-            raise ValueError("Slope not found in MCMC samples.")
+        if param_key not in samples_dict:
+            raise ValueError(f"{param_key} not found in MCMC samples.")
 
-        slope_samples = samples_dict['slope']
+        samples = np.asarray(samples_dict[param_key], dtype=float)
 
-        # Compute mean and standard deviation
-        mean_slope = np.mean(slope_samples)
-        std_slope = np.std(slope_samples)
+        mean_param = np.mean(samples)
+        std_param = np.std(samples)
 
-        # Calculate how many sigmas away the point is
-        sigma = np.abs(slope_value - mean_slope) / std_slope
-
-        # Calculate two-sided p-value
+        sigma = np.abs(value - mean_param) / std_param
         pval = 2 * (1 - norm.cdf(sigma))
 
         return pval, sigma
