@@ -23,6 +23,7 @@ from .coords import (  # noqa: F401
     cartesian_to_r_theta_phi,
     cz_to_comoving_distance,
     radec_to_galactic,
+    radec_to_cartesian,
     galactic_to_radec,
 )
 from .associations import (  # noqa: F401
@@ -45,6 +46,8 @@ from .config_reader import (  # noqa: F401
 from .logging import fprint  # noqa: F401
 from .regression import (  # noqa: F401
     LinearRoxyFitter,
+    MarginalizedLinearFitter,
+    CorrelationWithSamples,
     correlation_with_errors,
 )
 
