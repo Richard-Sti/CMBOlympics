@@ -24,6 +24,7 @@ import astropy.units as u
 import h5py
 import numpy as np
 from astropy.cosmology import FlatLambdaCDM
+from astropy.coordinates import SkyCoord
 from tqdm import tqdm
 
 from ..constants import SPEED_OF_LIGHT_KMS
@@ -902,7 +903,51 @@ def _attach_per_halo_data(
                 assoc.median_theta500 = np.nan
 
 
-def load_associations(sim_key, cfg, verbose=True):
+def _filter_associations_near_target(
+    associations,
+    target_ra_deg,
+    target_dec_deg,
+    target_cz_kms,
+    max_sep_arcmin,
+    max_cz_diff_kms,
+):
+    """Remove associations near a specified (RA, DEC, cz)."""
+    target_coord = SkyCoord(target_ra_deg * u.deg, target_dec_deg * u.deg)
+    kept = HaloAssociationList()
+    removed = 0
+    for assoc in associations:
+        center = np.full(3, assoc.box_size / 2.0, dtype=float)
+        ra, dec = cartesian_to_radec(assoc.centroid[None, :], center=center)
+        ra = float(np.asarray(ra).ravel()[0])
+        dec = float(np.asarray(dec).ravel()[0])
+        assoc_coord = SkyCoord(ra * u.deg, dec * u.deg)
+        sep_arcmin = float(np.asarray(assoc_coord.separation(target_coord).arcmin))
+        dist = np.linalg.norm(assoc.centroid - center)
+        cz = float(np.asarray(comoving_distance_to_cz(dist, Om0=assoc.Om0)))
+        is_near = (
+            np.isfinite(sep_arcmin)
+            and np.isfinite(cz)
+            and sep_arcmin <= max_sep_arcmin
+            and abs(cz - target_cz_kms) <= max_cz_diff_kms
+        )
+        if is_near:
+            removed += 1
+            continue
+        kept.append(assoc)
+    return kept, removed
+
+
+def load_associations(
+    sim_key,
+    cfg,
+    verbose=True,
+    remove_near_target=False,
+    target_ra_deg=201.989583,
+    target_dec_deg=-31.5025,
+    target_cz_kms=14784.0,
+    max_sep_arcmin=180.0,
+    max_cz_diff_kms=500.0,
+):
     """
     Identify halo associations and attach per-halo data.
 
@@ -914,6 +959,15 @@ def load_associations(sim_key, cfg, verbose=True):
         CMBO configuration dictionary.
     verbose
         Print progress messages.
+    remove_near_target : bool, optional
+        If True, drop associations near a specified (RA, DEC, cz).
+    target_ra_deg, target_dec_deg, target_cz_kms : float, optional
+        Target sky position (deg) and CMB-frame velocity (km/s) used when
+        ``remove_near_target`` is True.
+    max_sep_arcmin, max_cz_diff_kms : float, optional
+        Maximum angular separation (arcmin) and |cz - cz_target| (km/s)
+        tolerances for filtering associations when ``remove_near_target`` is
+        True.
 
     Returns
     -------
@@ -987,5 +1041,22 @@ def load_associations(sim_key, cfg, verbose=True):
 
         if velocity_key and velocity_key in assoc.optional_data:
             assoc.velocities = assoc.optional_data[velocity_key]
+
+    if remove_near_target and associations:
+        associations, removed = _filter_associations_near_target(
+            associations,
+            target_ra_deg=target_ra_deg,
+            target_dec_deg=target_dec_deg,
+            target_cz_kms=target_cz_kms,
+            max_sep_arcmin=max_sep_arcmin,
+            max_cz_diff_kms=max_cz_diff_kms,
+        )
+        if verbose:
+            print(
+                f"Removed {removed} associations within "
+                f"{max_sep_arcmin:.1f} arcmin and {max_cz_diff_kms:.0f} km/s "
+                f"of (RA, DEC, cz)=({target_ra_deg}, {target_dec_deg}, "
+                f"{target_cz_kms})."
+            )
 
     return associations
