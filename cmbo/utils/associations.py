@@ -23,15 +23,13 @@ from pathlib import Path
 import astropy.units as u
 import h5py
 import numpy as np
-from astropy.cosmology import FlatLambdaCDM
 from astropy.coordinates import SkyCoord
+from astropy.cosmology import FlatLambdaCDM
 from tqdm import tqdm
 
 from ..constants import SPEED_OF_LIGHT_KMS
-from .coords import (cartesian_icrs_to_galactic_spherical,
-                     cartesian_to_radec,
-                     comoving_distance_to_cz,
-                     cz_to_comoving_distance,
+from .coords import (cartesian_icrs_to_galactic_spherical, cartesian_to_radec,
+                     comoving_distance_to_cz, cz_to_comoving_distance,
                      radec_to_cartesian)
 
 
@@ -48,6 +46,50 @@ class HaloAssociation:
     fraction_present: float
     velocities: np.ndarray | None = None
     optional_data: dict = field(default_factory=dict)
+    _resampled_masses: np.ndarray | None = field(default=None)
+
+    @property
+    def resampled_masses(self):
+        """
+        Resampled masses array. Must call resample_association_masses first.
+        """
+        if self._resampled_masses is None:
+            raise ValueError(
+                "resampled_masses not generated. "
+                "Call resample_masses() first."
+            )
+        return self._resampled_masses
+
+    @resampled_masses.setter
+    def resampled_masses(self, value):
+        self._resampled_masses = value
+
+    def resample_masses(self, N, rng=None):
+        """
+        Resample masses with replacement.
+
+        Keeps the existing masses and adds additional masses sampled with
+        replacement such that the total is N.
+
+        Parameters
+        ----------
+        N : int
+            Total number of masses (original + resampled).
+        rng : numpy.random.Generator, optional
+            Random number generator. If None, uses default.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+
+        n_existing = len(self.masses)
+        n_additional = N - n_existing
+        if n_additional <= 0:
+            self._resampled_masses = self.masses.copy()
+        else:
+            indices = rng.choice(n_existing, size=n_additional, replace=True)
+            self._resampled_masses = np.concatenate(
+                [self.masses, self.masses[indices]]
+            )
 
     # Map signal fields (populated by compute_map_signals)
     median_theta500: float = field(default=None)
@@ -332,6 +374,11 @@ class HaloAssociationList(list):
         return np.array([np.log10(assoc.masses).std() for assoc in self])
 
     @property
+    def log_halo_masses(self):
+        """Log masses for all haloes in each association."""
+        return [np.log10(assoc.masses) for assoc in self]
+
+    @property
     def centroid_radec(self):
         """Right ascension and declination centroid pairs in degrees."""
         return np.array([assoc.centroid_radec for assoc in self])
@@ -379,6 +426,31 @@ class HaloAssociationList(list):
             raise ValueError("Cannot determine Om0 for an empty list.")
 
         return self[0].Om0
+
+    @property
+    def resampled_halo_masses(self):
+        """
+        Resampled halo masses for all associations.
+
+        Returns
+        -------
+        (n_associations, N) array
+        """
+        return np.array([assoc.resampled_masses for assoc in self])
+
+    def resample_masses(self, N, rng=None):
+        """
+        Resample masses for all associations in the list.
+
+        Parameters
+        ----------
+        N : int
+            Total number of masses per association (original + resampled).
+        rng : numpy.random.Generator, optional
+            Random number generator. If None, uses default.
+        """
+        for assoc in self:
+            assoc.resample_masses(N, rng=rng)
 
 
 def compute_association_signals(associations, profiler, theta_rand, map_rand,
