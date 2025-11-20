@@ -228,7 +228,17 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
 
     # Load data and perform matching
     data = load_catalogue(catalogue_name, cfg)
-    associations = cmbo.utils.load_associations(sim_key, cfg, verbose=False)
+    associations = cmbo.utils.load_associations(
+        sim_key,
+        cfg,
+        verbose=False,
+        remove_near_target=mass_cfg.get("remove_near_target", False),
+        target_ra_deg=mass_cfg.get("target_ra_deg", 201.989583),
+        target_dec_deg=mass_cfg.get("target_dec_deg", -31.5025),
+        target_cz_kms=mass_cfg.get("target_cz_kms", 14784.0),
+        max_sep_arcmin=mass_cfg.get("remove_max_sep_arcmin", 180.0),
+        max_cz_diff_kms=mass_cfg.get("remove_max_cz_diff_kms", 500.0),
+    )
 
     result = match_catalogue_to_associations(
         catalogue_name, data, associations,
