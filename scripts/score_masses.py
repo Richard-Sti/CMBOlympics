@@ -136,9 +136,13 @@ def extract_y_data(catalogue_matched, y_variable, catalogue_name, h):
 def compute_significance(fitter, y_variable):
     """Compute significance test based on variable type."""
     if y_variable == "M500":
-        return fitter.get_slope_intercept_significance([1, 0])
+        joint = fitter.get_slope_intercept_significance([1, 0])
+        slope_1d = fitter.get_param_significance("slope", 1.0)
+        intercept_1d = fitter.get_param_significance("intercept", 0.0)
+        return joint, slope_1d, intercept_1d
     elif y_variable in ["L500", "YSZ"]:
-        return fitter.get_slope_significance(5/3)
+        slope_1d = fitter.get_param_significance("slope", 5/3)
+        return None, slope_1d, None
     else:
         raise ValueError(f"Unknown y_variable: {y_variable}")
 
@@ -185,15 +189,20 @@ def save_fit_summary(fit_output, corr_results, sig_result, y_variable,
         f.write(f"Spearman: {corr_results['spearman']:.3f} +/- "
                 f"{corr_results['spearman_err']:.3f}\n")
 
-        f.write("\n" + "="*80 + "\n")
-        f.write("SIGNIFICANCE TESTS\n")
-        f.write("="*80 + "\n")
-        if y_variable == "M500":
-            f.write(f"Slope=1, Intercept=0: p={sig_result[0]:.4f}, "
-                    f"sigma={sig_result[1]:.4f}\n")
-        elif y_variable in ["L500", "YSZ"]:
-            f.write(f"Slope=5/3: p={sig_result[0]:.4f}, "
-                    f"sigma={sig_result[1]:.2f}\n")
+    f.write("\n" + "="*80 + "\n")
+    f.write("SIGNIFICANCE TESTS\n")
+    f.write("="*80 + "\n")
+    joint, slope_sig, intercept_sig = sig_result
+    if y_variable == "M500" and joint is not None:
+        f.write(f"Slope=1, Intercept=0 (2D): p={joint[0]:.4f}, "
+                f"sigma={joint[1]:.4f}\n")
+        f.write(f"Slope=1 (1D): p={slope_sig[0]:.4f}, "
+                f"sigma={slope_sig[1]:.4f}\n")
+        f.write(f"Intercept=0 (1D): p={intercept_sig[0]:.4f}, "
+                f"sigma={intercept_sig[1]:.4f}\n")
+    elif y_variable in ["L500", "YSZ"]:
+        f.write(f"Slope=5/3 (1D): p={slope_sig[0]:.4f}, "
+                f"sigma={slope_sig[1]:.2f}\n")
 
 
 def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
