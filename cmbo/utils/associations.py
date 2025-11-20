@@ -921,7 +921,8 @@ def _filter_associations_near_target(
         ra = float(np.asarray(ra).ravel()[0])
         dec = float(np.asarray(dec).ravel()[0])
         assoc_coord = SkyCoord(ra * u.deg, dec * u.deg)
-        sep_arcmin = float(np.asarray(assoc_coord.separation(target_coord).arcmin))
+        sep_arcmin = float(np.asarray(
+            assoc_coord.separation(target_coord).arcmin))
         dist = np.linalg.norm(assoc.centroid - center)
         cz = float(np.asarray(comoving_distance_to_cz(dist, Om0=assoc.Om0)))
         is_near = (
