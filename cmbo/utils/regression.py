@@ -19,6 +19,18 @@ from matplotlib import pyplot as plt
 from scipy.stats import chi2, norm, pearsonr, spearmanr
 from tqdm import trange
 
+from jax import random
+from jax import numpy as jnp
+from numpyro import sample, factor
+from numpyro.distributions import Normal, Uniform
+from numpyro.infer import MCMC, NUTS
+from jax.scipy.special import logsumexp
+
+
+def logmeanexp(a, axis=None, keepdims=False):
+    n = a.shape[axis] if axis is not None else a.size
+    return logsumexp(a, axis=axis, keepdims=keepdims) - jnp.log(n)
+
 
 def correlation_with_errors(x, y, xerr, yerr, n_samples=1000, seed=None,
                             verbose=True):
@@ -83,114 +95,54 @@ def correlation_with_errors(x, y, xerr, yerr, n_samples=1000, seed=None,
     return result
 
 
-class LinearRoxyFitter:
+class MarginalizedLinearModel:
+
+    def __init__(self, x_samples, y, yerr, slope_range=(-10, 10),
+                 intercept_range=(-10, 10), sig_range=(0.0001, 3.0)):
+        self.x_samples = jnp.asarray(x_samples)
+        self.y = jnp.asarray(y)
+        self.yerr = jnp.asarray(yerr)
+
+        self.dist_slope = Uniform(slope_range[0], slope_range[1])
+        self.dist_intercept = Uniform(intercept_range[0], intercept_range[1])
+        self.dist_sig = Uniform(sig_range[0], sig_range[1])
+
+        self.ndata = len(y)
+
+        assert self.x_samples.ndim == 2, "x_samples must be 2D array"
+        assert self.x_samples.shape[0] == self.ndata, (
+            "x_samples first dimension must match y length")
+
+    def __call__(self):
+        slope = sample('slope', self.dist_slope)
+        intercept = sample('intercept', self.dist_intercept)
+        sig = sample('sig', self.dist_sig)
+
+        # Compute model predictions for all x samples
+        y_model_samples = slope * self.x_samples + intercept
+
+        # Compute log likelihood for each x sample
+        log_likelihoods = Normal(
+            y_model_samples,
+            jnp.sqrt(self.yerr[:, None]**2 + sig**2)).log_prob(
+                self.y[:, None])
+
+        # Marginalize over x samples using log-mean-exp
+        log_likelihood = logmeanexp(log_likelihoods, axis=1)
+
+        factor("log_likelihood", jnp.sum(log_likelihood))
+
+
+class BaseLinearFitter:
     """
-    Bayesian linear regression with errors in both x and y using roxy.
-
-    Fits y = slope * x + intercept with intrinsic scatter using the MNR
-    method.
+    Base class for linear regression fitters with common analysis methods.
     """
 
-    def __init__(self, range_slope=(-10, 10), range_intercept=(-10, 10),
-                 range_sig=(0.0001, 3.0)):
-        """
-        Parameters
-        ----------
-        range_slope : tuple
-            Prior range for slope parameter [min, max].
-        range_intercept : tuple
-            Prior range for intercept parameter [min, max].
-        range_sig : tuple
-            Prior range for intrinsic scatter [min, max].
-        """
-        self.param_names = ['slope', 'intercept']
-        self.theta0 = [1.0, 0.0]
-        self.param_prior = {
-            'slope': list(range_slope),
-            'intercept': list(range_intercept),
-            'sig': list(range_sig)
-        }
-
-        self._regressor = None
+    def __init__(self):
         self._result = None
-        self._x_pivot = None
-        self._y_pivot = None
-
-    @staticmethod
-    def model(x, theta):
-        """Linear model: y = theta[0] * x + theta[1]."""
-        return theta[0] * x + theta[1]
-
-    def fit(self, x, y, xerr, yerr, nwarm=500, nsamp=5000, method='mnr',
-            x_pivot=0, y_pivot=0, num_chains=1):
-        """
-        Fit the linear model with MCMC.
-
-        Parameters
-        ----------
-        x : ndarray
-            X data (assumed already in log space). Normalized by x_pivot if
-            x_pivot != 0.
-        y : ndarray
-            Y data. Normalized by y_pivot if y_pivot != 0.
-        xerr : ndarray
-            X errors (no transformations applied).
-        yerr : ndarray
-            Y errors (no transformations applied).
-        nwarm : int
-            Number of warmup steps.
-        nsamp : int
-            Number of sampling steps.
-        method : str
-            Roxy method ('mnr' for mixture of normals).
-        x_pivot : float
-            Pivot point for x normalization. If 0 (default), no normalization
-            is applied. Otherwise x_pivot is subtracted from x.
-        y_pivot : float
-            Pivot point for y normalization. If 0 (default), no normalization
-            is applied. Otherwise y_pivot is subtracted from y.
-        num_chains : int
-            Number of MCMC chains.
-
-        Returns
-        -------
-        result : dict
-            MCMC result from roxy.
-        """
-        self._x_pivot = x_pivot
-        self._y_pivot = y_pivot
-
-        self._result = self._do_fit(x, y, xerr, yerr, nwarm, nsamp, method,
-                                    x_pivot, y_pivot, num_chains)
-
-        return self._result
-
-    def _do_fit(self, x, y, xerr, yerr, nwarm, nsamp, method, x_pivot,
-                y_pivot, num_chains):
-        """Perform a single MCMC fit."""
-        try:
-            from roxy.regressor import RoxyRegressor
-        except ImportError as e:
-            raise ImportError(
-                "roxy is required for LinearRoxyFitter. "
-                "Install it with: pip install roxy"
-            ) from e
-
-        xobs = x - x_pivot
-        yobs = y - y_pivot
-
-        regressor = RoxyRegressor(
-            self.model, self.param_names, self.theta0, self.param_prior
-        )
-
-        result = regressor.mcmc(
-            self.param_names, xobs, yobs, [xerr, yerr],
-            nwarm, nsamp, method=method, num_chains=num_chains
-        )
-
-        self._regressor = regressor
-
-        return result
+        self._x_pivot = 0
+        self._y_pivot = 0
+        self._regressor = None
 
     def predict(self, x, percentiles=[16, 50, 84]):
         """
@@ -477,3 +429,193 @@ class LinearRoxyFitter:
         plt.close()
 
         return fig, ax
+
+
+class LinearRoxyFitter(BaseLinearFitter):
+    """
+    Bayesian linear regression with errors in both x and y using roxy.
+
+    Fits y = slope * x + intercept with intrinsic scatter using the MNR
+    method.
+    """
+
+    def __init__(self, range_slope=(-10, 10), range_intercept=(-10, 10),
+                 range_sig=(0.0001, 3.0)):
+        """
+        Parameters
+        ----------
+        range_slope : tuple
+            Prior range for slope parameter [min, max].
+        range_intercept : tuple
+            Prior range for intercept parameter [min, max].
+        range_sig : tuple
+            Prior range for intrinsic scatter [min, max].
+        """
+        super().__init__()
+        self.param_names = ['slope', 'intercept']
+        self.theta0 = [1.0, 0.0]
+        self.param_prior = {
+            'slope': list(range_slope),
+            'intercept': list(range_intercept),
+            'sig': list(range_sig)
+        }
+
+    @staticmethod
+    def model(x, theta):
+        """Linear model: y = theta[0] * x + theta[1]."""
+        return theta[0] * x + theta[1]
+
+    def fit(self, x, y, xerr, yerr, nwarm=500, nsamp=5000, method='mnr',
+            x_pivot=0, y_pivot=0, num_chains=1):
+        """
+        Fit the linear model with MCMC.
+
+        Parameters
+        ----------
+        x : ndarray
+            X data (assumed already in log space). Normalized by x_pivot if
+            x_pivot != 0.
+        y : ndarray
+            Y data. Normalized by y_pivot if y_pivot != 0.
+        xerr : ndarray
+            X errors (no transformations applied).
+        yerr : ndarray
+            Y errors (no transformations applied).
+        nwarm : int
+            Number of warmup steps.
+        nsamp : int
+            Number of sampling steps.
+        method : str
+            Roxy method ('mnr' for mixture of normals).
+        x_pivot : float
+            Pivot point for x normalization. If 0 (default), no normalization
+            is applied. Otherwise x_pivot is subtracted from x.
+        y_pivot : float
+            Pivot point for y normalization. If 0 (default), no normalization
+            is applied. Otherwise y_pivot is subtracted from y.
+        num_chains : int
+            Number of MCMC chains.
+
+        Returns
+        -------
+        result : dict
+            MCMC result from roxy.
+        """
+        self._x_pivot = x_pivot
+        self._y_pivot = y_pivot
+
+        self._result = self._do_fit(x, y, xerr, yerr, nwarm, nsamp, method,
+                                    x_pivot, y_pivot, num_chains)
+
+        return self._result
+
+    def _do_fit(self, x, y, xerr, yerr, nwarm, nsamp, method, x_pivot,
+                y_pivot, num_chains):
+        """Perform a single MCMC fit."""
+        try:
+            from roxy.regressor import RoxyRegressor
+        except ImportError as e:
+            raise ImportError(
+                "roxy is required for LinearRoxyFitter. "
+                "Install it with: pip install roxy"
+            ) from e
+
+        xobs = x - x_pivot
+        yobs = y - y_pivot
+
+        regressor = RoxyRegressor(
+            self.model, self.param_names, self.theta0, self.param_prior
+        )
+
+        result = regressor.mcmc(
+            self.param_names, xobs, yobs, [xerr, yerr],
+            nwarm, nsamp, method=method, num_chains=num_chains
+        )
+
+        self._regressor = regressor
+
+        return result
+
+
+class MarginalizedLinearFitter(BaseLinearFitter):
+    """
+    Bayesian linear regression marginalizing over x samples.
+
+    Fits y = slope * x + intercept with intrinsic scatter, where x is
+    uncertain and represented by samples for each data point.
+    """
+
+    def __init__(self, range_slope=(-10, 10), range_intercept=(-10, 10),
+                 range_sig=(0.0001, 3.0)):
+        """
+        Parameters
+        ----------
+        range_slope : tuple
+            Prior range for slope parameter [min, max].
+        range_intercept : tuple
+            Prior range for intercept parameter [min, max].
+        range_sig : tuple
+            Prior range for intrinsic scatter [min, max].
+        """
+        super().__init__()
+        self.range_slope = range_slope
+        self.range_intercept = range_intercept
+        self.range_sig = range_sig
+
+    def fit(self, x_samples, y, yerr, nwarm=500, nsamp=5000,
+            x_pivot=0, y_pivot=0, num_chains=1, rng_key=None):
+        """
+        Fit the linear model with MCMC, marginalizing over x samples.
+
+        Parameters
+        ----------
+        x_samples : (n_data, n_samples) array
+            Samples of x values for each data point.
+        y : ndarray
+            Y data.
+        yerr : ndarray
+            Y errors.
+        nwarm : int
+            Number of warmup steps.
+        nsamp : int
+            Number of sampling steps.
+        x_pivot : float
+            Pivot point for x normalization.
+        y_pivot : float
+            Pivot point for y normalization.
+        num_chains : int
+            Number of MCMC chains.
+        rng_key : jax.random.PRNGKey, optional
+            Random key for MCMC. If None, uses PRNGKey(0).
+
+        Returns
+        -------
+        result : dict
+            MCMC samples dictionary.
+        """
+        self._x_pivot = x_pivot
+        self._y_pivot = y_pivot
+
+        # Apply pivoting
+        x_samples_pivoted = np.asarray(x_samples) - x_pivot
+        y_pivoted = np.asarray(y) - y_pivot
+
+        model = MarginalizedLinearModel(
+            x_samples_pivoted, y_pivoted, yerr,
+            slope_range=self.range_slope,
+            intercept_range=self.range_intercept,
+            sig_range=self.range_sig
+        )
+
+        kernel = NUTS(model)
+        mcmc = MCMC(kernel, num_warmup=nwarm, num_samples=nsamp,
+                    num_chains=num_chains)
+
+        if rng_key is None:
+            rng_key = random.PRNGKey(0)
+        mcmc.run(rng_key)
+
+        self._result = mcmc.get_samples()
+
+        return self._result
+
