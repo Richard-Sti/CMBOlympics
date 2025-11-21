@@ -482,7 +482,7 @@ def compute_association_signals(associations, profiler, theta_rand, map_rand,
 
 
 def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
-                               mass_sigma=0.3, optional_data=None):
+                               mass_sigma=0.4, optional_data=None):
     """
     Cluster haloes from multiple realisations into physical associations.
 
