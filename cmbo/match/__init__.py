@@ -23,4 +23,6 @@ from .assignments import (  # noqa: F401
 #     generate_valid_assignments,
 #     compute_gaussian_probabilities,
 #     compute_group_probabilities,
+#     AssociationModel,
+#     ScalingRelationModel,
 # )
