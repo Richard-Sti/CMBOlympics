@@ -171,7 +171,7 @@ def save_mcmc_samples(result_dict, output_path, data_dict=None):
 
 
 def save_fit_summary(fit_output, corr_results, sig_result, y_variable,
-                     output_path):
+                     output_path, n_matched, n_total):
     """Save fit summary, correlations, and significance to text file."""
     output_path = Path(output_path)
 
@@ -180,6 +180,10 @@ def save_fit_summary(fit_output, corr_results, sig_result, y_variable,
         f.write("MCMC FIT SUMMARY\n")
         f.write("="*80 + "\n\n")
         f.write(fit_output)
+
+        f.write("\nNumber matched: "
+                f"{n_matched}/{n_total} "
+                f"({100*n_matched/n_total:.1f}%)\n")
 
         f.write("\n" + "="*80 + "\n")
         f.write("CORRELATION COEFFICIENTS\n")
@@ -372,8 +376,15 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
 
         save_mcmc_samples(res, output_dir / f"{base_name}_samples.hdf5",
                           data_dict)
-        save_fit_summary(fit_output, corr_results, sig_result, y_variable,
-                         output_dir / f"{base_name}_summary.txt")
+        save_fit_summary(
+            fit_output,
+            corr_results,
+            sig_result,
+            y_variable,
+            output_dir / f"{base_name}_summary.txt",
+            n_matched,
+            n_total
+        )
         save_plots(fitter, x[mask], y[mask], xerr[mask], yerr[mask],
                    y_label, y_variable, sim_key, output_dir, base_name)
 
