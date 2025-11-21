@@ -150,15 +150,11 @@ def compute_significance(fitter, y_variable):
 def save_mcmc_samples(result_dict, output_path, data_dict=None):
     """Save MCMC samples and input data to HDF5 file."""
     output_path = Path(output_path)
+
     with h5py.File(output_path, 'w') as f:
         mcmc_grp = f.create_group('mcmc')
         for key, value in result_dict.items():
-            if key == 'samples':
-                continue
-            if isinstance(value, np.ndarray):
-                mcmc_grp.create_dataset(key, data=value)
-            elif isinstance(value, (int, float)):
-                mcmc_grp.attrs[key] = value
+            mcmc_grp.create_dataset(key, data=np.asarray(value))
 
         if data_dict is not None:
             data_grp = f.create_group('data')
@@ -193,20 +189,20 @@ def save_fit_summary(fit_output, corr_results, sig_result, y_variable,
         f.write(f"Spearman: {corr_results['spearman']:.3f} +/- "
                 f"{corr_results['spearman_err']:.3f}\n")
 
-    f.write("\n" + "="*80 + "\n")
-    f.write("SIGNIFICANCE TESTS\n")
-    f.write("="*80 + "\n")
-    joint, slope_sig, intercept_sig = sig_result
-    if y_variable == "M500" and joint is not None:
-        f.write(f"Slope=1, Intercept=0 (2D): p={joint[0]:.4f}, "
-                f"sigma={joint[1]:.4f}\n")
-        f.write(f"Slope=1 (1D): p={slope_sig[0]:.4f}, "
-                f"sigma={slope_sig[1]:.4f}\n")
-        f.write(f"Intercept=0 (1D): p={intercept_sig[0]:.4f}, "
-                f"sigma={intercept_sig[1]:.4f}\n")
-    elif y_variable in ["L500", "YSZ"]:
-        f.write(f"Slope=5/3 (1D): p={slope_sig[0]:.4f}, "
-                f"sigma={slope_sig[1]:.2f}\n")
+        f.write("\n" + "="*80 + "\n")
+        f.write("SIGNIFICANCE TESTS\n")
+        f.write("="*80 + "\n")
+        joint, slope_sig, intercept_sig = sig_result
+        if y_variable == "M500" and joint is not None:
+            f.write(f"Slope=1, Intercept=0 (2D): p={joint[0]:.4f}, "
+                    f"sigma={joint[1]:.4f}\n")
+            f.write(f"Slope=1 (1D): p={slope_sig[0]:.4f}, "
+                    f"sigma={slope_sig[1]:.4f}\n")
+            f.write(f"Intercept=0 (1D): p={intercept_sig[0]:.4f}, "
+                    f"sigma={intercept_sig[1]:.4f}\n")
+        elif y_variable in ["L500", "YSZ"]:
+            f.write(f"Slope=5/3 (1D): p={slope_sig[0]:.4f}, "
+                    f"sigma={slope_sig[1]:.2f}\n")
 
 
 def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
@@ -407,9 +403,9 @@ def main():
             "See config.toml for the required parameters."
         ) from exc
 
-    # simulations = ["csiborg1", "csiborg2", "manticore"]
+    simulations = ["csiborg1", "csiborg2", "manticore"]
     catalogues = ["planck", "mcxc", "erass"]
-    simulations = ["manticore"]
+    # simulations = ["manticore"]
     # catalogues = ["erass"]
 
     match_thresholds = mass_cfg["match_threshold"]
@@ -444,13 +440,9 @@ def main():
         for catalogue_name in catalogues:
             for y_variable in get_y_variables(catalogue_name):
                 for threshold in match_thresholds:
-                    try:
-                        process_combination(sim_key, catalogue_name, threshold,
-                                            y_variable, cfg, mass_cfg)
-                        completed += 1
-                    except Exception as exc:
-                        fprint(f"  -> ERROR: {exc}")
-                        continue
+                    process_combination(sim_key, catalogue_name, threshold,
+                                        y_variable, cfg, mass_cfg)
+                    completed += 1
 
     fprint(f"\nCompleted {completed}/{total_combinations} combinations "
            f"successfully.")
