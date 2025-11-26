@@ -28,6 +28,28 @@ The aim is to test how the spatial alignment between simulated haloes and the ob
 
 To be added.
 
+## tSZ map painting (JAX, Healpix)
+
+A minimal example for painting a thermal SZ map on a Healpix grid using JAX:
+
+```python
+import jax.numpy as jnp
+from cmbo.mapgen.tsz_map import GNFWParameters, GNFWProfile, TSZMap
+
+nside = 512
+profile = GNFWProfile(GNFWParameters())
+mapper = TSZMap(nside, profile, theta_max_multiplier=4.0, batch_size=256)
+
+# Halo inputs: RA/Dec (rad), M200c (Msun), angular size (rad), redshift.
+halo_ra = jnp.array([0.1, -0.2])
+halo_dec = jnp.array([0.05, -0.1])
+halo_mass = jnp.array([3e14, 8e14])
+theta_200c = jnp.deg2rad(jnp.array([5.0, 6.0]) / 60.0)  # arcmin → rad
+redshift = jnp.array([0.3, 0.6])
+
+tsz_map = mapper.paint(halo_ra, halo_dec, halo_mass, theta_200c, redshift)
+```
+
 
 # Installation
 
