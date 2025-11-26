@@ -18,7 +18,8 @@ import astropy.units as u
 import numpy as np
 from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
                                  SkyCoord, SphericalRepresentation)
-from astropy.cosmology import FlatLambdaCDM, z_at_value
+from astropy.cosmology import FlatLambdaCDM
+from scipy.interpolate import interp1d
 from tqdm import trange
 
 from ..constants import SPEED_OF_LIGHT_KMS
@@ -93,24 +94,31 @@ def cz_to_comoving_distance(cz, h=1.0, Om0=0.3111):
     return out
 
 
-def comoving_distance_to_cz(distance, h=1.0, Om0=0.3111):
+def comoving_distance_to_cz(distance, h=1.0, Om0=0.3111, zmax=0.5,
+                            nz_interp=1000):
     """
     Convert comoving distance (in Mpc/h if h = 1) to CMB-frame
-    velocity (km/s).
+    velocity (km/s), by interpolating redshift vs. comoving distance.
     """
     scalar_input = np.isscalar(distance)
     dist_arr = np.array(distance, dtype=float, ndmin=1)
 
-    cosmo_obj = FlatLambdaCDM(H0=100.0 * h, Om0=Om0)
-    dist_mpc = (dist_arr / h) * u.Mpc
+    cosmo = FlatLambdaCDM(H0=h * 100, Om0=Om0)
 
-    # z_at_value supports array inputs in recent Astropy versions
-    redshifts = z_at_value(cosmo_obj.comoving_distance, dist_mpc)
-    out = redshifts * SPEED_OF_LIGHT_KMS
+    # Build redshift grid and corresponding comoving distances (in Mpc/h)
+    z_grid = np.linspace(1e-6, zmax, nz_interp)
+    d_grid = cosmo.comoving_distance(z_grid).value
+
+    # Build interpolation: d_grid → z_grid
+    inv_interp = interp1d(d_grid, z_grid, kind='cubic', assume_sorted=True,
+                          bounds_error=True)
+    z_out = inv_interp(dist_arr)
+
+    velocities = z_out * SPEED_OF_LIGHT_KMS
 
     if scalar_input:
-        return float(out[0])
-    return out.value
+        return float(velocities[0])
+    return velocities
 
 
 def radec_to_cartesian(ra_deg, dec_deg):

@@ -22,8 +22,10 @@ from .coords import (  # noqa: F401
     cartesian_icrs_to_galactic_spherical,
     cartesian_to_r_theta_phi,
     cz_to_comoving_distance,
+    comoving_distance_to_cz,
     radec_to_galactic,
     radec_to_cartesian,
+    cartesian_to_radec,
     galactic_to_radec,
 )
 from .associations import (  # noqa: F401
