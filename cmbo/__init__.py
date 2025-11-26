@@ -19,6 +19,7 @@ from cmbo import (                                                              
     corr,                                                                       # noqa
     io,                                                                         # noqa
     match,                                                                      # noqa
+    mapgen,                                                                     # noqa
     projection,                                                                 # noqa
     utils,                                                                      # noqa
     )                                                                           # noqa
