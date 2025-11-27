@@ -14,9 +14,11 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Various CMB readers."""
 
-from astropy.io import fits
-from astropy.cosmology import FlatLambdaCDM
+from os.path import basename
+
 import numpy as np
+from astropy.cosmology import FlatLambdaCDM
+from astropy.io import fits
 
 from ..utils import E_z
 from ..utils.coords import heliocentric_to_cmb
@@ -38,7 +40,14 @@ def read_Planck_comptonSZ(fname, which="FULL"):
             f"Column '{which}' not found in '{fname}'. "
             f"Available keys: {available}"
         ) from exc
-    return np.asarray(column, dtype=np.float32)
+
+    arr = np.asarray(column, dtype=np.float32)
+
+    if "deproject_CMB_CIB_default_standard_full" in basename(fname):
+        print("Flattening the Compton-y map array...")
+        arr = arr.flatten()
+
+    return arr
 
 
 def read_Planck_cluster_catalog(fname, extname="PSZ2_UNION", Om=0.306,
