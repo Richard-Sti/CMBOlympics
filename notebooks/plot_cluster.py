@@ -910,6 +910,7 @@ def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
         # Reduce whitespace
         fig.tight_layout(pad=0.3)
 
+    plt.close()
     return fig, axes
 
 
