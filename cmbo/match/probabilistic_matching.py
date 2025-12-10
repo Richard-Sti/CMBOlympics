@@ -175,7 +175,7 @@ def partition_volume(halo_cat, cluster_cat, linking_length=15.0, h=1.0,
 
 
 @jax.jit
-def log_Y_expected(logM, alpha_Y, beta_Y, logM_piv):
+def log_Y_expected(logM, alpha, beta, logM_piv):
     """
     Compute expected log Y from scaling relation.
 
@@ -183,52 +183,59 @@ def log_Y_expected(logM, alpha_Y, beta_Y, logM_piv):
 
     where alpha_Y is the intercept (value at pivot mass).
     """
-    return alpha_Y + beta_Y * (logM - logM_piv)
+    return alpha + beta * (logM - logM_piv)
 
 
 @jax.jit
-def f_sky_latitude(b_deg, b_cut_deg, sigma_theta_rad):
+def f_sky_latitude(b_rad, b_cut_rad, sigma_theta_rad):
     """
-    Analytic result for `f`. Relies on expanding cos(b') to 2nd order around
-    b_deg.
+    Analytic f = E[1_{|b'|>b_cut}] with b' ~ N(b, sigma) on latitude and
+    prior 0.5 cos(b').
         f = ∫ db' 0.5 cos(b') N(b'; b, sigma) 1_{|b'|>b_cut} /
             ∫ dx N(x; b, sigma)
     """
-    mu = jnp.deg2rad(b_deg)
-    b = jnp.deg2rad(b_cut_deg)
+    mu = b_rad
+    b = b_cut_rad
     sigma = sigma_theta_rad
 
     sqrt2pi = jnp.sqrt(2 * jnp.pi)
+    rs2 = jnp.sqrt(2) * sigma
+    two_rs2 = 2 * rs2
+    cos_mu = jnp.cos(mu)
+    sin_mu = jnp.sin(mu)
+    sigma2 = sigma ** 2
+    inv_2sigma2 = 1.0 / (2 * sigma2)
+    inv_8sigma2 = 1.0 / (8 * sigma2)
 
-    group1 = sqrt2pi * (-2 + sigma**2) * jnp.cos(mu) * (
-        - erf((jnp.pi - 2*mu) / (2*jnp.sqrt(2)*sigma))
-        + erf((b - mu) / (jnp.sqrt(2)*sigma))
-        + erf((b + mu) / (jnp.sqrt(2)*sigma))
-        - erf((jnp.pi + 2*mu) / (2*jnp.sqrt(2)*sigma))
+    group1 = sqrt2pi * (-2 + sigma**2) * cos_mu * (
+        - erf((jnp.pi - 2*mu) / two_rs2)
+        + erf((b - mu) / rs2)
+        + erf((b + mu) / rs2)
+        - erf((jnp.pi + 2*mu) / two_rs2)
     )
 
     group2 = (
-        jnp.exp(-(jnp.pi + 2*mu)**2 / (8*sigma**2))
+        jnp.exp(-(jnp.pi + 2*mu)**2 * inv_8sigma2)
         * sigma
-        * ((jnp.pi + 2*mu) * jnp.cos(mu) - 4*jnp.sin(mu))
+        * ((jnp.pi + 2*mu) * cos_mu - 4 * sin_mu)
     )
 
     group3 = (
-        jnp.exp(-(b + mu)**2 / (2*sigma**2))
-        * (-2*(b + mu)*sigma*jnp.cos(mu) + 4*sigma*jnp.sin(mu))
+        jnp.exp(-(b + mu)**2 * inv_2sigma2)
+        * (-2 * (b + mu) * sigma * cos_mu + 4 * sigma * sin_mu)
     )
 
     # Exponential block
-    pref = jnp.exp(-(4*b**2 + jnp.pi**2 + 4*mu**2) / (8*sigma**2))
+    pref = jnp.exp(-(4*b**2 + jnp.pi**2 + 4*mu**2) * inv_8sigma2)
     blockA = (
-        -2 * jnp.exp((jnp.pi**2 + 8*b*mu) / (8*sigma**2))
+        -2 * jnp.exp((jnp.pi**2 + 8*b*mu) * inv_8sigma2)
         * sigma
-        * ((b - mu)*jnp.cos(mu) + 2*jnp.sin(mu))
+        * ((b - mu) * cos_mu + 2 * sin_mu)
     )
     blockB = (
-        jnp.exp((b**2 + jnp.pi*mu) / (2*sigma**2))
+        jnp.exp((b**2 + jnp.pi*mu) * inv_2sigma2)
         * sigma
-        * ((jnp.pi - 2*mu)*jnp.cos(mu) + 4*jnp.sin(mu))
+        * ((jnp.pi - 2*mu) * cos_mu + 4 * sin_mu)
     )
     group4 = pref * (blockA + blockB)
 
@@ -362,6 +369,11 @@ class MatcherData:
         c_z = jnp.asarray(np.asarray(cluster_cat['Z'], dtype=float))
         c_sigma_Y = jnp.asarray(np.asarray(cluster_cat['eY'], dtype=float))
         c_sigma_logY = c_sigma_Y / (c_Y * jnp.log(10))
+
+        if jnp.any(c_logY < self.logY_lim):
+            below = jnp.where(c_logY < self.logY_lim)[0]
+            raise ValueError(f"Clusters below logY_lim: indices {below}, "
+                             "ensure logY_obs >= logY_lim.")
 
         # Compute comoving distances (use numpy versions for now)
         h_dist = cz_to_comoving_distance(
@@ -684,25 +696,23 @@ class ProbabilisticMatcher:
             mean_sigma_logY=float(processed['mean_sigma_logY']),
         )
 
-    def _compute_observed_ll(self, obs_inputs, alpha_Y, beta_Y, sigma_int,
+    def _compute_observed_ll(self, obs_inputs, alpha, beta, sigma_int,
                              sigma_theta, sigma_v, f_det):
         if obs_inputs is None:
             return jnp.array([])
 
         return jax.vmap(
             self._log_likelihood_obs,
-            in_axes=(0, 0, 0, 0, 0, 0, 0, 0, None, None, None, None, None,
-                     None, None, None, None)
+            in_axes=(0, 0, 0, 0, 0, 0, 0,
+                     None, None, None, None, None, None, None)
         )(
             obs_inputs.c_logY, obs_inputs.c_sigma_logY, obs_inputs.c_uv,
-            obs_inputs.c_cz, obs_inputs.c_lat,
-            obs_inputs.h_logM, obs_inputs.h_uv, obs_inputs.h_cz,
-            alpha_Y, beta_Y, sigma_int, sigma_theta, sigma_v,
-            obs_inputs.logY_lim, f_det, obs_inputs.logM_piv,
-            obs_inputs.b_cut
+            obs_inputs.c_cz, obs_inputs.h_logM, obs_inputs.h_uv,
+            obs_inputs.h_cz, alpha, beta, sigma_int, sigma_theta, sigma_v,
+            f_det, obs_inputs.logM_piv
         )
 
-    def _compute_virtual_ll(self, virt_inputs, alpha_Y, beta_Y, sigma_int,
+    def _compute_virtual_ll(self, virt_inputs, alpha, beta, sigma_int,
                             sigma_theta, f_det):
         if virt_inputs is None:
             return jnp.array([])
@@ -713,7 +723,7 @@ class ProbabilisticMatcher:
                      None)
         )(
             virt_inputs.h_logM, virt_inputs.h_lat,
-            alpha_Y, beta_Y, sigma_int, sigma_theta,
+            alpha, beta, sigma_int, sigma_theta,
             virt_inputs.logY_lim, f_det, virt_inputs.logM_piv,
             virt_inputs.b_cut, virt_inputs.mean_sigma_logY
         )
@@ -745,40 +755,36 @@ class ProbabilisticMatcher:
 
     @staticmethod
     @jax.jit
-    def _log_likelihood_obs(logY_obs, sigma_logY, uv_c, cz_c, b_c_deg,
-                            logM_h, uv_h, cz_h, alpha_Y, beta_Y, sigma_int,
-                            sigma_theta_rad, sigma_v_kms, logY_lim, f_det,
-                            logM_piv, b_cut_deg):
+    def _log_likelihood_obs(logY_obs, sigma_logY, uv_c, cz_c,
+                            logM_h, uv_h, cz_h, alpha, beta, sigma_int,
+                            sigma_theta, sigma_v_kms, f_det, logM_piv):
         """
-        Compute log likelihood (ll) for observed cluster-halo pair.
+        Compute log likelihood for observed cluster-halo pair.
         """
         # Scaling relation likelihood
-        logY_exp = log_Y_expected(logM_h, alpha_Y, beta_Y, logM_piv)
+        logY_exp = log_Y_expected(logM_h, alpha, beta, logM_piv)
         sigma_total = jnp.sqrt(sigma_logY**2 + sigma_int**2)
         log_prob_Y = jax_norm.logpdf(logY_obs, logY_exp, sigma_total)
 
         # Angular separation likelihood
         theta_rad = angular_separation(uv_h, uv_c)
-        log_prob_theta = jax_norm.logpdf(theta_rad, 0.0, sigma_theta_rad)
+        lp_theta = jax_norm.logpdf(theta_rad, 0.0, sigma_theta)
 
         # Redshift separation likelihood in cz units
-        log_prob_z = jax_norm.logpdf(cz_c, cz_h, sigma_v_kms)
+        lp_z = jax_norm.logpdf(cz_c, cz_h, sigma_v_kms)
 
-        # Selection probability
-        f_sky_val = f_sky_latitude(b_c_deg, b_cut_deg, sigma_theta_rad)
-        p_sel = f_sky_val * f_det * jnp.where(logY_obs >= logY_lim, 1.0, 0.0)
+        # The selection probability here is just the stochastic term, since
+        # the cluster was observed thus it must be passing the selection
+        # thresholds.
+        p_sel = f_det
 
         # Total log likelihood includes log(p_sel) for selection
-        # Note: p_sel should not be zero for observed clusters
-        log_prob = (log_prob_Y + log_prob_theta + log_prob_z +
-                    jnp.log(p_sel + 1e-30))
-
-        return log_prob
+        return log_prob_Y + lp_theta + lp_z + jnp.log(p_sel)
 
     @staticmethod
     @jax.jit
-    def _log_likelihood_virtual(logM_h, b_h_deg, alpha_Y, beta_Y, sigma_int,
-                                sigma_theta_rad, logY_lim, f_det, logM_piv,
+    def _log_likelihood_virtual(logM_h, b_h_deg, alpha, beta, sigma_int,
+                                sigma_theta, logY_lim, f_det, logM_piv,
                                 b_cut_deg, mean_sigma_logY):
         """
         Compute log likelihood (ll) for virtual (unobserved) cluster.
@@ -787,7 +793,7 @@ class ProbabilisticMatcher:
 
         where a_k = (log Y_lim - log Y(M)) / √(σ²_Y + σ²_int)
         """
-        logY_exp = log_Y_expected(logM_h, alpha_Y, beta_Y, logM_piv)
+        logY_exp = log_Y_expected(logM_h, alpha, beta, logM_piv)
 
         sigma_total = jnp.sqrt(mean_sigma_logY**2 + sigma_int**2)
         a_k = (logY_lim - logY_exp) / sigma_total
@@ -796,7 +802,8 @@ class ProbabilisticMatcher:
         surv = 1.0 - jax_norm.cdf(a_k)
 
         # Sky survival
-        f_sky_val = _f_sky_latitude(b_h_deg, b_cut_deg, sigma_theta_rad)
+        f_sky_val = f_sky_latitude(
+            jnp.deg2rad(b_h_deg), jnp.deg2rad(b_cut_deg), sigma_theta)
 
         # Virtual probability
         p_virtual = 1.0 - f_det * surv * f_sky_val
@@ -817,8 +824,8 @@ class ProbabilisticMatcher:
             Precomputed virtual-pair inputs from prepare_model_inputs.
         """
         # Priors
-        alpha_Y = sample('alpha_Y', Normal(0, 10))
-        beta_Y = sample('beta_Y', Normal(1, 1))
+        alpha = sample('alpha', Normal(0, 10))
+        beta = sample('beta', Normal(1, 1))
         sigma_int = sample('sigma_int', HalfNormal(1))
         sigma_theta_deg = sample('sigma_theta_deg', HalfNormal(1))
         sigma_v = sample('sigma_v', HalfNormal(500))
@@ -830,10 +837,10 @@ class ProbabilisticMatcher:
         sigma_theta = jnp.deg2rad(sigma_theta_deg)
 
         ll_obs = self._compute_observed_ll(
-            obs_inputs, alpha_Y, beta_Y, sigma_int, sigma_theta, sigma_v,
+            obs_inputs, alpha, beta, sigma_int, sigma_theta, sigma_v,
             f_det)
         ll_virt = self._compute_virtual_ll(
-            virt_inputs, alpha_Y, beta_Y, sigma_int, sigma_theta, f_det)
+            virt_inputs, alpha, beta, sigma_int, sigma_theta, f_det)
 
         assoc_ll = self._assoc_ll(ll_obs, ll_virt, obs_inputs, virt_inputs)
 
