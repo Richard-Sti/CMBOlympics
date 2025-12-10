@@ -443,7 +443,7 @@ class MatcherData:
         assoc_sizes = []
         assoc_id_counter = 0
 
-        for group_id, group in enumerate(tqdm(groups, desc="Precompute pairs")):
+        for group_id, group in enumerate(tqdm(groups, desc="Pairing groups")):
             h_idx = group['halo_indices']
             c_idx = group['cluster_indices']
 
@@ -751,7 +751,7 @@ class ProbabilisticMatcher:
             jnp.ones(virt_inputs.n_assocs),
             virt_inputs.assoc_to_group, virt_inputs.n_groups)
 
-        return group_logsumexp - jnp.log(assoc_counts + 1e-30)
+        return group_logsumexp - jnp.log(assoc_counts)
 
     @staticmethod
     @jax.jit
