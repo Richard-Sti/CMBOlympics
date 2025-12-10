@@ -29,7 +29,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 from tqdm import tqdm
-from jax.scipy.special import erf, erfc
+from jax.scipy.special import erf
 
 
 from ..constants import SPEED_OF_LIGHT_KMS
@@ -187,28 +187,12 @@ def log_Y_expected(logM, alpha_Y, beta_Y, logM_piv):
 
 
 @jax.jit
-def f_sky(b_deg, b_cut_deg, sigma_theta_rad):
+def f_sky_latitude(b_deg, b_cut_deg, sigma_theta_rad):
     """
-    TODO: Describe in maths that this is what it
-
-    Here is a numerical implementation, translate this to an equation.
-
-    def f_sky_numerical(b_deg, b_cut_deg, sigma_theta_rad):
-        b_rad = jnp.deg2rad(b_deg)
-        b_cut_rad = jnp.deg2rad(b_cut_deg)
-
-        b_grid = jnp.linspace(-jnp.pi / 2, jnp.pi / 2, 10000)
-
-        # Prior over b
-        lp = 0.5 * jnp.cos(b_grid)
-
-        # Gaussian in b, truncated but not periodic
-        ll = jnp.exp(-0.5 * ((b_grid - b_rad) / sigma_theta_rad) ** 2)
-        ll /= trapezoid(ll, x=b_grid)
-
-        y = ll * jnp.where(jnp.abs(b_grid) > b_cut_rad, 1., 0.) * lp
-        return trapezoid(y, x=b_grid)
-
+    Analytic result for `f`. Relies on expanding cos(b') to 2nd order around
+    b_deg.
+        f = ∫ db' 0.5 cos(b') N(b'; b, sigma) 1_{|b'|>b_cut} /
+            ∫ dx N(x; b, sigma)
     """
     mu = jnp.deg2rad(b_deg)
     b = jnp.deg2rad(b_cut_deg)
@@ -781,7 +765,7 @@ class ProbabilisticMatcher:
         log_prob_z = jax_norm.logpdf(cz_c, cz_h, sigma_v_kms)
 
         # Selection probability
-        f_sky_val = f_sky(b_c_deg, b_cut_deg, sigma_theta_rad)
+        f_sky_val = f_sky_latitude(b_c_deg, b_cut_deg, sigma_theta_rad)
         p_sel = f_sky_val * f_det * jnp.where(logY_obs >= logY_lim, 1.0, 0.0)
 
         # Total log likelihood includes log(p_sel) for selection
@@ -799,7 +783,7 @@ class ProbabilisticMatcher:
         """
         Compute log likelihood (ll) for virtual (unobserved) cluster.
 
-        p_virtual(h) = 1 - f_det * (1 - Φ(a_k)) * f_sky(b_h)
+        p_virtual(h) = 1 - f_det * (1 - Φ(a_k)) * f_sky_latitude(b_h)
 
         where a_k = (log Y_lim - log Y(M)) / √(σ²_Y + σ²_int)
         """
@@ -812,7 +796,7 @@ class ProbabilisticMatcher:
         surv = 1.0 - jax_norm.cdf(a_k)
 
         # Sky survival
-        f_sky_val = _f_sky(b_h_deg, b_cut_deg, sigma_theta_rad)
+        f_sky_val = _f_sky_latitude(b_h_deg, b_cut_deg, sigma_theta_rad)
 
         # Virtual probability
         p_virtual = 1.0 - f_det * surv * f_sky_val
