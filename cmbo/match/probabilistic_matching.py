@@ -180,65 +180,58 @@ def f_sky_latitude(b_rad, b_cut_rad, sigma_theta_rad):
     """
     Analytic f = E[1_{|b'|>b_cut}] with b' ~ N(b, sigma) on latitude and
     prior 0.5 cos(b').
-        f = ∫ db' 0.5 cos(b') N(b'; b, sigma) 1_{|b'|>b_cut} /
-            ∫ dx N(x; b, sigma)
+
+    Numerically stable implementation using logsumexp trick for exponential
+    terms.
     """
+    # Precompute common subexpressions
     mu = b_rad
     b = b_cut_rad
-    sigma = sigma_theta_rad
+    sigma2 = sigma_theta_rad**2
+    inv_sigma2 = 1.0 / sigma2
 
-    sqrt2pi = jnp.sqrt(2 * jnp.pi)
-    rs2 = jnp.sqrt(2) * sigma
-    two_rs2 = 2 * rs2
+    sqrt2_sigma = jnp.sqrt(2) * sigma_theta_rad
+    pi_minus_2mu = jnp.pi - 2*mu
+    pi_plus_2mu = jnp.pi + 2*mu
+    b_minus_mu = b - mu
+    b_plus_mu = b + mu
+
+    # Erf terms
+    erf_term1 = erf(pi_minus_2mu / (2 * sqrt2_sigma))
+    erf_term2 = erf(pi_plus_2mu / (2 * sqrt2_sigma))
+    erfc_term1 = 1 - erf(b_minus_mu / sqrt2_sigma)
+    erfc_term2 = 1 - erf(b_plus_mu / sqrt2_sigma)
+
+    # Trigonometric terms
     cos_mu = jnp.cos(mu)
     sin_mu = jnp.sin(mu)
-    sigma2 = sigma ** 2
-    inv_2sigma2 = 1.0 / (2 * sigma2)
-    inv_8sigma2 = 1.0 / (8 * sigma2)
 
-    group1 = sqrt2pi * (-2 + sigma**2) * cos_mu * (
-        - erf((jnp.pi - 2*mu) / two_rs2)
-        + erf((b - mu) / rs2)
-        + erf((b + mu) / rs2)
-        - erf((jnp.pi + 2*mu) / two_rs2)
-    )
+    # First part of numerator
+    erf_sum = -2 + erf_term1 + erf_term2 + erfc_term1 + erfc_term2
+    numerator_part1 = cos_mu * erf_sum
 
-    group2 = (
-        jnp.exp(-(jnp.pi + 2*mu)**2 * inv_8sigma2)
-        * sigma
-        * ((jnp.pi + 2*mu) * cos_mu - 4 * sin_mu)
-    )
+    # Second part of numerator - exponential terms with numerical stability
+    # Compute log of each exponential (the exponents)
+    log_exp1 = -pi_minus_2mu**2 * 0.125 * inv_sigma2
+    log_exp2 = -b_minus_mu**2 * 0.5 * inv_sigma2
+    log_exp3 = -b_plus_mu**2 * 0.5 * inv_sigma2
+    log_exp4 = -pi_plus_2mu**2 * 0.125 * inv_sigma2
 
-    group3 = (
-        jnp.exp(-(b + mu)**2 * inv_2sigma2)
-        * (-2 * (b + mu) * sigma * cos_mu + 4 * sigma * sin_mu)
-    )
+    # Numerically stable computation via logsumexp trick
+    # exp1 - exp2 + exp3 - exp4
+    max_log = jnp.maximum(jnp.maximum(log_exp1, log_exp2),
+                          jnp.maximum(log_exp3, log_exp4))
 
-    # Exponential block
-    pref = jnp.exp(-(4*b**2 + jnp.pi**2 + 4*mu**2) * inv_8sigma2)
-    blockA = (
-        -2 * jnp.exp((jnp.pi**2 + 8*b*mu) * inv_8sigma2)
-        * sigma
-        * ((b - mu) * cos_mu + 2 * sin_mu)
-    )
-    blockB = (
-        jnp.exp((b**2 + jnp.pi*mu) * inv_2sigma2)
-        * sigma
-        * ((jnp.pi - 2*mu) * cos_mu + 4 * sin_mu)
-    )
-    group4 = pref * (blockA + blockB)
+    exp_sum = (jnp.exp(log_exp1 - max_log)
+               - jnp.exp(log_exp2 - max_log)
+               + jnp.exp(log_exp3 - max_log)
+               - jnp.exp(log_exp4 - max_log)) * jnp.exp(max_log)
 
-    numerator = group1 + group2 + group3 + group4
+    # Complete second part of numerator (precompute sqrt(2/pi))
+    numerator_part2 = exp_sum * 0.7978845608028654 * sigma_theta_rad * sin_mu
 
-    # ----- Denominator -----
-
-    denominator = (
-        2 * jnp.sqrt(2 * jnp.pi) *
-        (erf((jnp.pi - 2*mu)/(2*jnp.sqrt(2)*sigma)) +
-         erf((jnp.pi + 2*mu)/(2*jnp.sqrt(2)*sigma)))
-    )
-
-    return 0.5 * numerator / denominator
+    # Total and return
+    return 0.5 * (numerator_part1 + numerator_part2) / (erf_term1 + erf_term2)
 
 
 @jax.jit
