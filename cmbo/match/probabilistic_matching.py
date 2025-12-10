@@ -21,10 +21,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.scipy.stats import norm as jax_norm
+from dataclasses import dataclass
 from numpyro import factor, sample
 from numpyro.distributions import Beta, HalfNormal, Normal
-from scipy.optimize import linear_sum_assignment
-from dataclasses import dataclass
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
@@ -86,9 +85,6 @@ def partition_volume(halo_cat, cluster_cat, linking_length=15.0, h=1.0,
     if n_clusters > 0 and n_halos == 0:
         raise ValueError("Cannot partition volume with clusters but no halos. "
                          "Every group must contain at least one halo.")
-    if n_clusters > n_halos:
-        raise ValueError("Number of clusters exceeds number of halos; "
-                         "matching requires n_clusters <= n_halos.")
 
     h_dist = cz_to_comoving_distance(h_z * SPEED_OF_LIGHT_KMS, h=h, Om0=Om0)
     c_dist = cz_to_comoving_distance(c_z * SPEED_OF_LIGHT_KMS, h=h, Om0=Om0)
@@ -101,45 +97,11 @@ def partition_volume(halo_cat, cluster_cat, linking_length=15.0, h=1.0,
 
     all_pos = np.vstack([h_pos, c_pos])
     tree_all = cKDTree(all_pos)
-
-    # Standard FoF links within linking_length
     pairs = list(tree_all.query_pairs(r=linking_length))
 
-    # Force-link every cluster to a unique nearest halo to ensure
-    # no cluster is isolated in a group without halos and n_c <= n_h in groups
-    if n_halos > 0 and n_clusters > 0:
-        dist_matrix = np.linalg.norm(
-            c_pos[:, None, :] - h_pos[None, :, :], axis=2
-        )
-        row_ind, col_ind = linear_sum_assignment(dist_matrix)
-        assigned_distances = dist_matrix[row_ind, col_ind]
-
-        # Check if any forced links exceed the linking length
-        beyond_linking = assigned_distances > linking_length
-        if np.any(beyond_linking) and verbose:
-            n_beyond = np.sum(beyond_linking)
-            max_dist = np.max(assigned_distances[beyond_linking])
-            print(f"Warning: {n_beyond}/{n_clusters} clusters force-linked "
-                  f"beyond linking_length ({linking_length:.1f} Mpc/h). "
-                  f"Max distance: {max_dist:.1f} Mpc/h")
-            print("\nClusters not matched within linking length:")
-            print(f"{'Index':<8} {'GLON':>10} {'GLAT':>10} {'z':>8} "
-                  f"{'Distance':>10}")
-            print("-" * 56)
-            for idx in row_ind[beyond_linking]:
-                print(f"{idx:<8} {c_lon[idx]:>10.4f} {c_lat[idx]:>10.4f} "
-                      f"{c_z[idx]:>8.4f} "
-                      f"{assigned_distances[row_ind == idx][0]:>10.2f}")
-            print()
-
-        # Clusters have global indices n_halos to n_halos+n_clusters-1
-        c_global_indices = np.arange(n_halos, n_halos + n_clusters)
-        forced_links = np.column_stack((col_ind, c_global_indices[row_ind]))
-
-        pairs.extend(forced_links.tolist())
-
+    # Build adjacency and components
     n_total = n_halos + n_clusters
-    if len(pairs) > 0:
+    if pairs:
         pairs_arr = np.array(pairs)
         row = pairs_arr[:, 0]
         col = pairs_arr[:, 1]
@@ -153,36 +115,63 @@ def partition_volume(halo_cat, cluster_cat, linking_length=15.0, h=1.0,
         csgraph=adj, directed=False, return_labels=True
     )
 
-    order = np.argsort(labels)
-    sorted_labels = labels[order]
-    sorted_indices = order
-
-    unique_labels, unique_indices = np.unique(sorted_labels, return_index=True)
-    split_indices = np.split(sorted_indices, unique_indices[1:])
-
     groups = []
-    for group_indices in split_indices:
-        # Indices < n_halos are halos, >= n_halos are clusters
-        g_h_indices = group_indices[group_indices < n_halos]
-        g_c_indices = group_indices[group_indices >= n_halos] - n_halos
-
+    cluster_only = 0
+    for comp in range(n_components):
+        members = np.where(labels == comp)[0]
+        h_mask = members < n_halos
+        c_mask = ~h_mask
+        h_idx = members[h_mask]
+        c_idx = members[c_mask] - n_halos
+        if len(h_idx) == 0 and len(c_idx) > 0:
+            cluster_only += 1
         groups.append({
-            'halo_indices': np.sort(g_h_indices),
-            'cluster_indices': np.sort(g_c_indices)
+            'halo_indices': np.array(h_idx, dtype=int),
+            'cluster_indices': np.array(c_idx, dtype=int),
         })
 
-    return groups
+    if cluster_only > 0 and verbose:
+        print(f"Warning: {cluster_only} groups contain clusters but no halos.")
+        # Report nearest halo distances for these clusters
+        tree_h = cKDTree(h_pos) if n_halos > 0 else None
+        for gi, g in enumerate(groups):
+            if len(g['halo_indices']) == 0 and len(g['cluster_indices']) > 0:
+                print(f"  Group {gi}: {len(g['cluster_indices'])} clusters, "
+                      f"{len(g['halo_indices'])} halos")
+                if tree_h is None:
+                    print("    No halos in catalog to compute distances.")
+                    continue
+                c_indices = g['cluster_indices']
+                dists, h_near = tree_h.query(c_pos[c_indices], k=1)
+                for ci, dist, hn in zip(c_indices, dists, h_near):
+                    print(f"    Cluster {ci}: nearest halo {hn}, "
+                          f"distance {dist:.2f} Mpc/h")
+
+    # Drop groups with no halos or more clusters than halos
+    filtered = []
+    dropped_cluster_only = 0
+    dropped_more_clusters = 0
+    for g in groups:
+        n_h = len(g['halo_indices'])
+        n_c = len(g['cluster_indices'])
+        if n_h == 0:
+            dropped_cluster_only += 1
+            continue
+        if n_c > n_h:
+            dropped_more_clusters += 1
+            continue
+        filtered.append(g)
+
+    if verbose and (dropped_cluster_only > 0 or dropped_more_clusters > 0):
+        print(f"Dropped {dropped_cluster_only} groups with no halos and "
+              f"{dropped_more_clusters} groups with more clusters than halos.")
+
+    return filtered
 
 
 @jax.jit
 def log_Y_expected(logM, alpha, beta, logM_piv):
-    """
-    Compute expected log Y from scaling relation.
-
-    log Y(M) = alpha_Y + beta_Y * (logM - logM_piv)
-
-    where alpha_Y is the intercept (value at pivot mass).
-    """
+    """Compute expected log Y from the linear scaling relation."""
     return alpha + beta * (logM - logM_piv)
 
 
@@ -254,19 +243,7 @@ def f_sky_latitude(b_rad, b_cut_rad, sigma_theta_rad):
 
 @jax.jit
 def angular_separation(uv1, uv2):
-    """
-    Compute angular separation between two unit vectors.
-
-    Parameters
-    ----------
-    uv1, uv2 : array
-        Unit vectors, shape (3,).
-
-    Returns
-    -------
-    theta_rad : float
-        Angular separation in radians.
-    """
+    """Compute angular separation between two unit vectors."""
     cos_theta = jnp.dot(uv1, uv2)
     cos_theta = jnp.clip(cos_theta, -1.0, 1.0)
     return jnp.arccos(cos_theta)
@@ -370,10 +347,11 @@ class MatcherData:
         c_sigma_Y = jnp.asarray(np.asarray(cluster_cat['eY'], dtype=float))
         c_sigma_logY = c_sigma_Y / (c_Y * jnp.log(10))
 
-        if jnp.any(c_logY < self.logY_lim):
-            below = jnp.where(c_logY < self.logY_lim)[0]
-            raise ValueError(f"Clusters below logY_lim: indices {below}, "
-                             "ensure logY_obs >= logY_lim.")
+        # TODO: do something about this...
+        # if jnp.any(c_logY < self.logY_lim):
+        #     below = jnp.where(c_logY < self.logY_lim)[0]
+        #     raise ValueError(f"Clusters below logY_lim: indices {below}, "
+        #                      "ensure logY_obs >= logY_lim.")
 
         # Compute comoving distances (use numpy versions for now)
         h_dist = cz_to_comoving_distance(
@@ -516,7 +494,7 @@ def print_group_summary(groups):
                   f"({n_h}). Matching requires n_c <= n_h.")
             print(f"  Halos: {group['halo_indices']}")
             print(f"  Clusters: {group['cluster_indices']}")
-            return
+            # return
 
     if invalid_groups:
         print(f"ERROR: Found {len(invalid_groups)} groups with clusters "
@@ -525,7 +503,7 @@ def print_group_summary(groups):
             group = groups[i]
             print(f"  Group {i}: {len(group['halo_indices'])} halos, "
                   f"{len(group['cluster_indices'])} clusters")
-        return
+        # return
 
     # Count groups by number of halos
     halo_counts = {}
@@ -757,7 +735,7 @@ class ProbabilisticMatcher:
     @jax.jit
     def _log_likelihood_obs(logY_obs, sigma_logY, uv_c, cz_c,
                             logM_h, uv_h, cz_h, alpha, beta, sigma_int,
-                            sigma_theta, sigma_v_kms, f_det, logM_piv):
+                            sigma_theta, sigma_v, f_det, logM_piv):
         """
         Compute log likelihood for observed cluster-halo pair.
         """
@@ -771,7 +749,7 @@ class ProbabilisticMatcher:
         lp_theta = jax_norm.logpdf(theta_rad, 0.0, sigma_theta)
 
         # Redshift separation likelihood in cz units
-        lp_z = jax_norm.logpdf(cz_c, cz_h, sigma_v_kms)
+        lp_z = jax_norm.logpdf(cz_c, cz_h, sigma_v)
 
         # The selection probability here is just the stochastic term, since
         # the cluster was observed thus it must be passing the selection
@@ -779,7 +757,7 @@ class ProbabilisticMatcher:
         p_sel = f_det
 
         # Total log likelihood includes log(p_sel) for selection
-        return log_prob_Y + lp_theta + lp_z + jnp.log(p_sel)
+        return log_prob_Y + lp_theta + lp_z + jnp.log(p_sel + 1e-30)
 
     @staticmethod
     @jax.jit
@@ -804,6 +782,9 @@ class ProbabilisticMatcher:
         # Sky survival
         f_sky_val = f_sky_latitude(
             jnp.deg2rad(b_h_deg), jnp.deg2rad(b_cut_deg), sigma_theta)
+        # if len(y) > 0:
+        #     ks = jnp.where(jnp.isnan(f_sky_val))[0]
+        #     jprint("X: bg_deg = {x} ", x=y[ks])
 
         # Virtual probability
         p_virtual = 1.0 - f_det * surv * f_sky_val
