@@ -14,25 +14,52 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Probabilistic association between observed clusters and simulated halos."""
 
+from dataclasses import dataclass
 from itertools import permutations
 from math import factorial
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.scipy.special import erf, erfc
 from jax.scipy.stats import norm as jax_norm
-from dataclasses import dataclass
 from numpyro import factor, sample
-from numpyro.distributions import Beta, HalfNormal, Normal
+from numpyro.distributions import Beta, HalfNormal, Normal, Uniform
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 from tqdm import tqdm
-from jax.scipy.special import erf
-
 
 from ..constants import SPEED_OF_LIGHT_KMS
 from ..utils.coords import cz_to_comoving_distance, radec_to_cartesian
+
+
+def von_mises_fisher_logpdf(theta, sigma):
+    """
+    Log PDF of von Mises-Fisher distribution for angular separation.
+
+    Parameters
+    ----------
+    theta : scalar or array
+        Angular separation, radians.
+    sigma : scalar
+        Angular uncertainty, radians.
+
+    Returns
+    -------
+    log_prob : scalar or array
+        Log probability density.
+
+    Notes
+    -----
+    Uses numerically stable form to avoid sinh(κ) overflow for large κ.
+    L(θ) = (κ/(4π sinh(κ))) exp(κ cos(θ)) with κ = 1/σ².
+    """
+    kappa = 1.0 / sigma**2
+    # Numerically stable: log(sinh(κ)) = κ + log1p(-exp(-2κ)) - log(2)
+    log_norm = (jnp.log(kappa / (4 * jnp.pi))
+                - (kappa + jnp.log1p(-jnp.exp(-2 * kappa)) - jnp.log(2.0)))
+    return log_norm + kappa * jnp.cos(theta)
 
 
 def partition_volume(halo_cat, cluster_cat, linking_length=15.0, h=1.0,
@@ -176,62 +203,15 @@ def log_Y_expected(logM, alpha, beta, logM_piv):
 
 
 @jax.jit
-def f_sky_latitude(b_rad, b_cut_rad, sigma_theta_rad):
-    """
-    Analytic f = E[1_{|b'|>b_cut}] with b' ~ N(b, sigma) on latitude and
-    prior 0.5 cos(b').
+def f_Y(logY_lim, logY_exp, sigma_tot):
+    """Selection function f_Y = P(logY_obs > logY_lim)."""
+    return 0.5 * erfc((logY_lim - logY_exp) / (jnp.sqrt(2) * sigma_tot))
 
-    Numerically stable implementation using logsumexp trick for exponential
-    terms.
-    """
-    # Precompute common subexpressions
-    mu = b_rad
-    b = b_cut_rad
-    sigma2 = sigma_theta_rad**2
-    inv_sigma2 = 1.0 / sigma2
 
-    sqrt2_sigma = jnp.sqrt(2) * sigma_theta_rad
-    pi_minus_2mu = jnp.pi - 2*mu
-    pi_plus_2mu = jnp.pi + 2*mu
-    b_minus_mu = b - mu
-    b_plus_mu = b + mu
-
-    # Erf terms
-    erf_term1 = erf(pi_minus_2mu / (2 * sqrt2_sigma))
-    erf_term2 = erf(pi_plus_2mu / (2 * sqrt2_sigma))
-    erfc_term1 = 1 - erf(b_minus_mu / sqrt2_sigma)
-    erfc_term2 = 1 - erf(b_plus_mu / sqrt2_sigma)
-
-    # Trigonometric terms
-    cos_mu = jnp.cos(mu)
-    sin_mu = jnp.sin(mu)
-
-    # First part of numerator
-    erf_sum = -2 + erf_term1 + erf_term2 + erfc_term1 + erfc_term2
-    numerator_part1 = cos_mu * erf_sum
-
-    # Second part of numerator - exponential terms with numerical stability
-    # Compute log of each exponential (the exponents)
-    log_exp1 = -pi_minus_2mu**2 * 0.125 * inv_sigma2
-    log_exp2 = -b_minus_mu**2 * 0.5 * inv_sigma2
-    log_exp3 = -b_plus_mu**2 * 0.5 * inv_sigma2
-    log_exp4 = -pi_plus_2mu**2 * 0.125 * inv_sigma2
-
-    # Numerically stable computation via logsumexp trick
-    # exp1 - exp2 + exp3 - exp4
-    max_log = jnp.maximum(jnp.maximum(log_exp1, log_exp2),
-                          jnp.maximum(log_exp3, log_exp4))
-
-    exp_sum = (jnp.exp(log_exp1 - max_log)
-               - jnp.exp(log_exp2 - max_log)
-               + jnp.exp(log_exp3 - max_log)
-               - jnp.exp(log_exp4 - max_log)) * jnp.exp(max_log)
-
-    # Complete second part of numerator (precompute sqrt(2/pi))
-    numerator_part2 = exp_sum * 0.7978845608028654 * sigma_theta_rad * sin_mu
-
-    # Total and return
-    return 0.5 * (numerator_part1 + numerator_part2) / (erf_term1 + erf_term2)
+@jax.jit
+def f_z(cz_max, cz_halo, sigma_v):
+    """Redshift-space selection function f_z."""
+    return 0.5 * (1 + erf((cz_max - cz_halo) / (jnp.sqrt(2) * sigma_v)))
 
 
 @jax.jit
@@ -567,7 +547,6 @@ class ObservedInputs:
     h_cz: jnp.ndarray
     obs_assoc_id: jnp.ndarray
     logM_piv: float
-    b_cut: float
     logY_lim: float
 
     @property
@@ -579,12 +558,14 @@ class ObservedInputs:
 class VirtualInputs:
     h_logM: jnp.ndarray
     h_lat: jnp.ndarray
+    h_cz: jnp.ndarray
+    h_idx: jnp.ndarray
     virt_assoc_id: jnp.ndarray
     assoc_to_group: jnp.ndarray
     n_assocs: int
     n_groups: int
     logM_piv: float
-    b_cut: float
+    cz_max: float
     logY_lim: float
     mean_sigma_logY: float
 
@@ -598,14 +579,30 @@ class ProbabilisticMatcher:
     NumPyro model for probabilistic cluster-halo matching with marginalization
     over all associations. Includes a logY-logM scaling relation, positional
     likelihoods, selection effects, and virtual clusters.
+
+    Parameters
+    ----------
+    cz_max : scalar
+        Maximum comoving redshift for selection, km/s.
+    logY_lim : scalar
+        Log detection limit for clusters.
+    sky_mask_interpolator : MaskedSkyInterpolator
+        Precomputed interpolator for sky mask integrals. Must be initialized
+        with the same b_lim used for sky masking.
+    logM_piv : scalar
+        Pivot mass for scaling relation.
+    logY_piv : scalar, optional
+        Pivot log Y for scaling relation.
     """
 
-    def __init__(self, b_cut, logY_lim, logM_piv=14.0, logY_piv=None):
-        self.b_cut = b_cut
+    def __init__(self, cz_max, logY_lim, sky_mask_interpolator,
+                 logM_piv=14.0, logY_piv=None):
+        self.cz_max = float(cz_max)
         self.logM_piv = logM_piv
         self.logY_piv = logY_piv if logY_piv is not None else 0.0
         self.logY_lim = float(logY_lim)
         self.logY_lim_centered = self.logY_lim - self.logY_piv
+        self.sky_mask_interpolator = sky_mask_interpolator
 
     def prepare_model_inputs(self, data):
         """
@@ -645,7 +642,6 @@ class ProbabilisticMatcher:
             h_cz=processed['h_cz'][h_idx],
             obs_assoc_id=pair_data['obs_assoc_id'],
             logM_piv=self.logM_piv,
-            b_cut=self.b_cut,
             logY_lim=self.logY_lim_centered,
         )
 
@@ -657,12 +653,14 @@ class ProbabilisticMatcher:
         return VirtualInputs(
             h_logM=processed['h_logM'][h_idx],
             h_lat=processed['h_lat'][h_idx],
+            h_cz=processed['h_cz'][h_idx],
+            h_idx=jnp.asarray(h_idx),
             virt_assoc_id=pair_data['virt_assoc_id'],
             assoc_to_group=pair_data['assoc_to_group'],
             n_assocs=int(pair_data['n_assocs']),
             n_groups=int(pair_data['n_groups']),
             logM_piv=self.logM_piv,
-            b_cut=self.b_cut,
+            cz_max=self.cz_max,
             logY_lim=self.logY_lim_centered,
             mean_sigma_logY=float(processed['mean_sigma_logY']),
         )
@@ -684,19 +682,25 @@ class ProbabilisticMatcher:
         )
 
     def _compute_virtual_ll(self, virt_inputs, alpha, beta, sigma_int,
-                            sigma_theta, f_det):
+                            sigma_v, f_det, f_sky_all):
         if virt_inputs is None:
             return jnp.array([])
+
+        # Index f_sky values for virtual halos only
+        f_sky_vals = f_sky_all[virt_inputs.h_idx]
 
         return jax.vmap(
             self._log_likelihood_virtual,
             in_axes=(0, 0, None, None, None, None, None, None, None, None,
-                     None)
+                     None, 0)
         )(
-            virt_inputs.h_logM, virt_inputs.h_lat,
-            alpha, beta, sigma_int, sigma_theta,
+            virt_inputs.h_logM,
+            virt_inputs.h_cz,
+            alpha, beta, sigma_int,
+            sigma_v,
             virt_inputs.logY_lim, f_det, virt_inputs.logM_piv,
-            virt_inputs.b_cut, virt_inputs.mean_sigma_logY
+            virt_inputs.cz_max,
+            virt_inputs.mean_sigma_logY, f_sky_vals
         )
 
     @staticmethod
@@ -731,15 +735,17 @@ class ProbabilisticMatcher:
                             sigma_theta, sigma_v, f_det, logM_piv):
         """
         Compute log likelihood for observed cluster-halo pair.
+
+        Uses von Mises-Fisher distribution for angular separation.
         """
         # Scaling relation likelihood
         logY_exp = log_Y_expected(logM_h, alpha, beta, logM_piv)
         sigma_total = jnp.sqrt(sigma_logY**2 + sigma_int**2)
         log_prob_Y = jax_norm.logpdf(logY_obs, logY_exp, sigma_total)
 
-        # Angular separation likelihood
+        # Angular separation likelihood (von Mises-Fisher)
         theta_rad = angular_separation(uv_h, uv_c)
-        lp_theta = jax_norm.logpdf(theta_rad, 0.0, sigma_theta)
+        lp_theta = von_mises_fisher_logpdf(theta_rad, sigma_theta)
 
         # Redshift separation likelihood in cz units
         lp_z = jax_norm.logpdf(cz_c, cz_h, sigma_v)
@@ -750,39 +756,33 @@ class ProbabilisticMatcher:
         p_sel = f_det
 
         # Total log likelihood includes log(p_sel) for selection
-        return log_prob_Y + lp_theta + lp_z + jnp.log(p_sel + 1e-30)
+        return log_prob_Y + lp_theta + lp_z + jnp.log(p_sel)
 
     @staticmethod
     @jax.jit
-    def _log_likelihood_virtual(logM_h, b_h_deg, alpha, beta, sigma_int,
-                                sigma_theta, logY_lim, f_det, logM_piv,
-                                b_cut_deg, mean_sigma_logY):
+    def _log_likelihood_virtual(logM_h, cz_h, alpha, beta, sigma_int, sigma_v,
+                                logY_lim, f_det, logM_piv, cz_max,
+                                mean_sigma_logY, f_sky_val):
         """
         Compute log likelihood (ll) for virtual (unobserved) cluster.
 
-        p_virtual(h) = 1 - f_det * (1 - Φ(a_k)) * f_sky_latitude(b_h)
+        p_virtual(h) = 1 - f_det * f_Y * f_sky * f_z
 
-        where a_k = (log Y_lim - log Y(M)) / √(σ²_Y + σ²_int)
+        where:
+        - f_Y: Probability of exceeding Y threshold
+        - f_sky: Probability of being in unmasked sky region (von Mises-Fisher)
+        - f_z: Probability of being within redshift selection
         """
         logY_exp = log_Y_expected(logM_h, alpha, beta, logM_piv)
 
         sigma_total = jnp.sqrt(mean_sigma_logY**2 + sigma_int**2)
-        a_k = (logY_lim - logY_exp) / sigma_total
-
-        # Survival function: 1 - Φ(a_k)
-        surv = 1.0 - jax_norm.cdf(a_k)
-
-        # Sky survival
-        f_sky_val = f_sky_latitude(
-            jnp.deg2rad(b_h_deg), jnp.deg2rad(b_cut_deg), sigma_theta)
-        # if len(y) > 0:
-        #     ks = jnp.where(jnp.isnan(f_sky_val))[0]
-        #     jprint("X: bg_deg = {x} ", x=y[ks])
+        f_Y_val = f_det * f_Y(logY_lim, logY_exp, sigma_total)
+        f_z_val = f_z(cz_max, cz_h, sigma_v)
 
         # Virtual probability
-        p_virtual = 1.0 - f_det * surv * f_sky_val
+        p_virtual = 1.0 - f_Y_val * f_sky_val * f_z_val
 
-        return jnp.log(p_virtual + 1e-30)
+        return jnp.log(p_virtual)
 
     def model(self, obs_inputs, virt_inputs):
         """
@@ -801,7 +801,7 @@ class ProbabilisticMatcher:
         alpha = sample('alpha', Normal(0, 10))
         beta = sample('beta', Normal(1, 1))
         sigma_int = sample('sigma_int', HalfNormal(1))
-        sigma_theta_deg = sample('sigma_theta_deg', HalfNormal(1))
+        sigma_theta_deg = sample('sigma_theta', Uniform(0.1, 15))
         sigma_v = sample('sigma_v', HalfNormal(500))
 
         # Selection function parameters
@@ -810,11 +810,19 @@ class ProbabilisticMatcher:
         # Convert sigma_theta to radians
         sigma_theta = jnp.deg2rad(sigma_theta_deg)
 
+        # Compute f_sky values for all halos (von Mises-Fisher integrals)
+        # This is done once per MCMC iteration using the precomputed
+        # interpolator
+        f_sky_all = self.sky_mask_interpolator(sigma_theta_deg)
+
+        # Observed cluster likelihoods
         ll_obs = self._compute_observed_ll(
             obs_inputs, alpha, beta, sigma_int, sigma_theta, sigma_v,
             f_det)
+
+        # Virtual cluster likelihoods
         ll_virt = self._compute_virtual_ll(
-            virt_inputs, alpha, beta, sigma_int, sigma_theta, f_det)
+            virt_inputs, alpha, beta, sigma_int, sigma_v, f_det, f_sky_all)
 
         assoc_ll = self._assoc_ll(ll_obs, ll_virt, obs_inputs, virt_inputs)
 
