@@ -24,7 +24,7 @@ import numpy as np
 from jax.scipy.special import erf, erfc
 from jax.scipy.stats import norm as jax_norm
 from numpyro import factor, sample
-from numpyro.distributions import Beta, HalfNormal, Normal, Uniform
+from numpyro.distributions import Uniform
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
@@ -560,6 +560,9 @@ class VirtualInputs:
     h_lat: jnp.ndarray
     h_cz: jnp.ndarray
     h_idx: jnp.ndarray
+    h_unique_idx: jnp.ndarray  # Unique halo indices
+    h_first_occurrence: jnp.ndarray  # First occurrence of each unique halo
+    h_inverse_indices: jnp.ndarray  # Maps virtual pairs back to unique halos
     virt_assoc_id: jnp.ndarray
     assoc_to_group: jnp.ndarray
     n_assocs: int
@@ -650,11 +653,22 @@ class ProbabilisticMatcher:
             return None
 
         h_idx = pair_data['virt_halo_idx']
+        h_idx_jnp = jnp.asarray(h_idx)
+
+        # Precompute unique halo mapping for efficient virtual likelihood
+        # computation
+        unique_h_idx, first_occurrence, inverse_indices = jnp.unique(
+            h_idx_jnp, return_index=True, return_inverse=True
+        )
+
         return VirtualInputs(
             h_logM=processed['h_logM'][h_idx],
             h_lat=processed['h_lat'][h_idx],
             h_cz=processed['h_cz'][h_idx],
-            h_idx=jnp.asarray(h_idx),
+            h_idx=h_idx_jnp,
+            h_unique_idx=unique_h_idx,
+            h_first_occurrence=first_occurrence,
+            h_inverse_indices=inverse_indices,
             virt_assoc_id=pair_data['virt_assoc_id'],
             assoc_to_group=pair_data['assoc_to_group'],
             n_assocs=int(pair_data['n_assocs']),
@@ -686,22 +700,28 @@ class ProbabilisticMatcher:
         if virt_inputs is None:
             return jnp.array([])
 
-        # Index f_sky values for virtual halos only
-        f_sky_vals = f_sky_all[virt_inputs.h_idx]
+        # Get properties for unique halos
+        h_logM_unique = virt_inputs.h_logM[virt_inputs.h_first_occurrence]
+        h_cz_unique = virt_inputs.h_cz[virt_inputs.h_first_occurrence]
+        f_sky_unique = f_sky_all[virt_inputs.h_unique_idx]
 
-        return jax.vmap(
+        # Compute virtual likelihood once per unique halo
+        ll_unique = jax.vmap(
             self._log_likelihood_virtual,
             in_axes=(0, 0, None, None, None, None, None, None, None, None,
                      None, 0)
         )(
-            virt_inputs.h_logM,
-            virt_inputs.h_cz,
+            h_logM_unique,
+            h_cz_unique,
             alpha, beta, sigma_int,
             sigma_v,
             virt_inputs.logY_lim, f_det, virt_inputs.logM_piv,
             virt_inputs.cz_max,
-            virt_inputs.mean_sigma_logY, f_sky_vals
+            virt_inputs.mean_sigma_logY, f_sky_unique
         )
+
+        # Map back to all virtual pairs using precomputed inverse indices
+        return ll_unique[virt_inputs.h_inverse_indices]
 
     @staticmethod
     def _assoc_ll(ll_obs, ll_virt, obs_inputs, virt_inputs):
@@ -784,7 +804,12 @@ class ProbabilisticMatcher:
 
         return jnp.log(p_virtual)
 
-    def model(self, obs_inputs, virt_inputs):
+    def model(self, obs_inputs, virt_inputs,
+              alpha_limits=(-10, 10),
+              beta_limits=(-5, 5),
+              sigma_int_limits=(0, 1),
+              sigma_theta_deg_limits=(0.1, 7.5),
+              sigma_v_limits=(10, 2500)):
         """
         NumPyro probabilistic model for cluster-halo matching.
 
@@ -796,16 +821,25 @@ class ProbabilisticMatcher:
             Precomputed observed-pair inputs from prepare_model_inputs.
         virt_inputs : VirtualInputs
             Precomputed virtual-pair inputs from prepare_model_inputs.
+        alpha_limits : tuple
+            Prior limits for alpha (scaling relation intercept).
+        beta_limits : tuple
+            Prior limits for beta (scaling relation slope).
+        sigma_int_limits : tuple
+            Prior limits for intrinsic scatter.
+        sigma_theta_deg_limits : tuple
+            Prior limits for angular uncertainty, degrees.
+        sigma_v_limits : tuple
+            Prior limits for velocity uncertainty, km/s.
         """
         # Priors
-        alpha = sample('alpha', Normal(0, 10))
-        beta = sample('beta', Normal(1, 1))
-        sigma_int = sample('sigma_int', HalfNormal(1))
-        sigma_theta_deg = sample('sigma_theta', Uniform(0.1, 15))
-        sigma_v = sample('sigma_v', HalfNormal(500))
-
-        # Selection function parameters
-        f_det = sample('f_det', Beta(2, 2))  # Centered at 0.5, flexible
+        alpha = sample('alpha', Uniform(*alpha_limits))
+        beta = sample('beta', Uniform(*beta_limits))
+        sigma_int = sample('sigma_int', Uniform(*sigma_int_limits))
+        sigma_theta_deg = sample(
+            'sigma_theta', Uniform(*sigma_theta_deg_limits))
+        sigma_v = sample('sigma_v', Uniform(*sigma_v_limits))
+        f_det = sample('f_det', Uniform(0, 1))
 
         # Convert sigma_theta to radians
         sigma_theta = jnp.deg2rad(sigma_theta_deg)
