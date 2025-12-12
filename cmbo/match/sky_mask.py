@@ -1,6 +1,31 @@
+# Copyright (C) 2025 Richard Stiskalek
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+"""
+Sky mask integration for probabilistic matching.
+
+Computes the fraction of a von Mises-Fisher angular uncertainty distribution
+that falls within an unmasked region of the sky, defined by a galactic latitude
+cut |b| >= b_lim. Uses HEALPix for efficient spherical integration.
+"""
+import healpy as hp
 import jax.numpy as jnp
+import numpy as np
 from jax import vmap
-import jax
+from tqdm import tqdm
+
+from ..utils import fprint
 
 
 def angular_sep(b, ell, b0, ell0):
@@ -11,82 +36,159 @@ def angular_sep(b, ell, b0, ell0):
     )
 
 
-@jax.jit
-def masked_integral_for_sigma(b0, ell0, b_lim, sigma, n_b=400, n_l=64):
+def masked_integral_for_sigma(b0, ell0, b_lim, sigma, nside=512, n_sigma=5.0,
+                              verbose=False):
     """
-    Compute ∫ masked L(θ | σ) dΩ for a single σ, with a Gaussian L(θ).
-    Mask: |b| < b_lim is zero, otherwise one.
+    Compute the masked sky integral of a von Mises-Fisher likelihood.
+
+    Evaluates ∫_{|b|>=b_lim} L(θ | σ) dΩ, where L is the von Mises-Fisher PDF
+    centered at (ell0, b0) with concentration κ = 1/σ². Returns 1 when the
+    source is entirely in the unmasked region, <1 when masked.
+
+    Parameters
+    ----------
+    b0 : scalar
+        Galactic latitude of source center, degrees.
+    ell0 : scalar
+        Galactic longitude of source center, degrees.
+    b_lim : scalar
+        Latitude mask threshold, degrees. Region |b| < b_lim is masked.
+    sigma : scalar or array
+        Angular uncertainty, radians. Can be scalar or 1D array.
+    nside : int
+        HEALPix resolution parameter.
+    n_sigma : scalar
+        Query radius in units of sigma. Pixels beyond n_sigma * max(sigma)
+        from source are not queried.
+    verbose : bool
+        Print integration diagnostics if True.
+
+    Returns
+    -------
+    result : scalar or array
+        Integrated probability in unmasked region. Scalar if sigma is scalar,
+        array if sigma is array. Equals 1 when source is far from mask.
+
+    Notes
+    -----
+    Uses von Mises-Fisher distribution L(θ) = (κ/(4π sinh(κ))) exp(κ cos(θ))
+    with κ = 1/σ². For array sigma, queries HEALPix once at max(sigma) then
+    filters by distance for efficiency.
     """
-    # Latitude grid
-    b = jnp.linspace(-jnp.pi / 2, jnp.pi / 2, n_b)
-    mask = jnp.abs(b) >= b_lim
-    b = b[mask]
+    b0_rad = jnp.deg2rad(b0)
+    ell0_rad = jnp.deg2rad(ell0)
+    b_lim_rad = jnp.deg2rad(b_lim)
 
-    # Longitude samples
-    ell = jnp.linspace(0.0, 2 * jnp.pi, n_l, endpoint=False)
+    theta0 = jnp.pi / 2 - b0_rad
+    phi0 = ell0_rad
 
-    # Grid for θ(b, ell)
-    B, L = jnp.meshgrid(b, ell, indexing="ij")
-    theta = angular_sep(B, L, b0, ell0)
+    sigma_array = jnp.atleast_1d(sigma)
+    radius = n_sigma * jnp.max(sigma_array)
 
-    # Gaussian likelihood in θ
-    Ltheta = jnp.exp(-0.5 * (theta / sigma) ** 2)
+    vec = hp.ang2vec(float(theta0), float(phi0))
+    pixels = hp.query_disc(
+        nside, vec, float(radius), nest=False, inclusive=True)
 
-    # Average over longitude
-    L_avg = jnp.mean(Ltheta, axis=1)  # shape (len(b),)
+    theta_pix, phi_pix = hp.pix2ang(nside, pixels, nest=False)
+    b_pix = jnp.pi / 2 - theta_pix
 
-    # Integrate over b with cos(b) measure
-    integrand = L_avg * jnp.cos(b)
-    return jnp.trapz(integrand, b)
+    lat_mask = jnp.abs(b_pix) >= b_lim_rad
+    theta_sep = angular_sep(b_pix, phi_pix, b0_rad, ell0_rad)
+    pixel_area = hp.nside2pixarea(nside)
+
+    if verbose:
+        pixel_size_arcmin = jnp.rad2deg(jnp.sqrt(pixel_area)) * 60
+        n_pix_total = len(pixels)
+        sigma_min = jnp.min(sigma_array)
+        n_pix_min = jnp.sum(theta_sep <= n_sigma * sigma_min)
+
+        fprint(f"HEALPix integration: nside={nside} "
+               f"({pixel_size_arcmin:.2f}'/pix)")
+        fprint(f"Pixels queried: {n_pix_total} (σ_max) | "
+               f"{n_pix_min} (σ_min)")
+
+    def integrate_single_sigma(s):
+        mask = lat_mask & (theta_sep <= n_sigma * s)
+        kappa = 1.0 / s**2
+        # Numerically stable form: work in log space to avoid sinh(κ) overflow
+        # L(θ) = (κ/(4π sinh(κ))) exp(κ cos(θ))
+        # log(sinh(κ)) = κ + log1p(-exp(-2κ)) - log(2) for κ > 0
+        log_norm = (
+            jnp.log(kappa / (4 * jnp.pi))
+            - (kappa + jnp.log1p(-jnp.exp(-2 * kappa)) - jnp.log(2.0)))
+        log_likelihood = log_norm + kappa * jnp.cos(theta_sep)
+        return jnp.sum(jnp.exp(log_likelihood) * mask) * pixel_area
+
+    result = vmap(integrate_single_sigma)(sigma_array)
+    return result[0] if jnp.ndim(sigma) == 0 else result
 
 
 class MaskedSkyInterpolatorJAX:
     """
-    JAX-based interpolator for the masked-sky integral as a function of σ.
+    JAX-based interpolator for masked-sky integrals as a function of σ.
 
-    For a halo at (ell_h, b_h) and a fixed latitude cut b_lim, it precomputes:
+    For halos at (ell, b) and a fixed latitude cut b_lim, precomputes:
         f(σ) = ∫_{|b|>=b_lim} L(θ | σ) dΩ
+    for each halo on a grid of σ values, then interpolates.
 
-    Usage:
-        interp = MaskedSkyInterpolatorJAX(ell_h, b_h, b_lim)
-        sig_grid = jnp.linspace(0.01, 0.5, 200)
-        interp.compute_grid(sig_grid)
-        value = interp(0.075)   # linear interpolation in σ (JAX)
+    Parameters
+    ----------
+    ell : array
+        Galactic longitudes of halos, degrees.
+    b : array
+        Galactic latitudes of halos, degrees.
+    b_lim : scalar
+        Latitude mask threshold, degrees.
+    sigma_min : scalar
+        Minimum sigma for grid, radians.
+    sigma_max : scalar
+        Maximum sigma for grid, radians.
+    n_sigma_grid : int
+        Number of grid points in sigma.
+    nside : int
+        HEALPix resolution parameter.
+    n_sigma : scalar
+        Query radius in units of sigma.
+    verbose : bool
+        Print progress and diagnostics if True.
     """
 
-    def __init__(self, ell_h_rad, b_h_rad, b_lim_rad):
-        self.ell_h = float(ell_h_rad)
-        self.b_h = float(b_h_rad)
-        self.b_lim = float(b_lim_rad)
-        self._sig_grid = None
-        self._val_grid = None
+    def __init__(self, ell, b, b_lim, sigma_min, sigma_max, n_sigma_grid=200,
+                 nside=512, n_sigma=5.0, verbose=False):
+        self.ell = jnp.asarray(ell)
+        self.b = jnp.asarray(b)
+        self.b_lim = float(b_lim)
+        self.n_halos = len(self.ell)
 
-    def compute_grid(self, sigma_grid, n_b=400, n_l=64):
-        """
-        Precompute f(σ) on a grid of σ values (1D JAX array).
+        self._sig_grid = jnp.linspace(sigma_min, sigma_max, n_sigma_grid)
+        val_grid = np.zeros((self.n_halos, n_sigma_grid))
 
-        sigma_grid must be sorted ascending for jnp.interp.
-        """
-        sigma_grid = jnp.asarray(sigma_grid)
+        if verbose:
+            fprint(f"Precomputing grid for {self.n_halos} halos, "
+                   f"{n_sigma_grid} σ values...")
 
-        # Vectorised over σ
-        f_sigma = vmap(
-            lambda s: masked_integral_for_sigma(
-                self.b_h, self.ell_h, self.b_lim, s, n_b=n_b, n_l=n_l
+        for i in tqdm(range(self.n_halos), disable=not verbose):
+            val_grid[i] = masked_integral_for_sigma(
+                self.b[i], self.ell[i], self.b_lim, self._sig_grid,
+                nside=nside, n_sigma=n_sigma, verbose=False
             )
-        )(sigma_grid)
 
-        self._sig_grid = sigma_grid
-        self._val_grid = f_sigma
-        return self._sig_grid, self._val_grid
+        self._val_grid = jnp.asarray(val_grid)
 
     def __call__(self, sigma):
         """
-        Interpolate f(σ) at given σ (scalar or array).
-        Uses jnp.interp (piecewise linear, JAX-differentiable).
-        """
-        if self._sig_grid is None:
-            raise ValueError("Interpolator not initialised. Call compute_grid() first.")
+        Interpolate f(σ) at given σ for all halos.
 
-        sigma = jnp.asarray(sigma)
-        return jnp.interp(sigma, self._sig_grid, self._val_grid)
+        Parameters
+        ----------
+        sigma : scalar
+            Angular uncertainty, radians.
+
+        Returns
+        -------
+        result : array, shape (n_halos,)
+            Interpolated values for each halo.
+        """
+        sigma = float(sigma)
+        return vmap(lambda vals: jnp.interp(
+            sigma, self._sig_grid, vals))(self._val_grid)
