@@ -161,7 +161,8 @@ class MaskedSkyInterpolator:
 
         sigma_min_rad = jnp.deg2rad(sigma_min)
         sigma_max_rad = jnp.deg2rad(sigma_max)
-        self._sig_grid = jnp.linspace(sigma_min_rad, sigma_max_rad, n_sigma_grid)
+        self._sig_grid = jnp.linspace(
+            sigma_min_rad, sigma_max_rad, n_sigma_grid)
         val_grid = np.zeros((self.n_halos, n_sigma_grid))
 
         if verbose:
@@ -183,12 +184,12 @@ class MaskedSkyInterpolator:
         Parameters
         ----------
         sigma : scalar or JAX array
-            Angular uncertainty, degrees. Can be traced for autodiff.
+            Angular uncertainty, degrees.
 
         Returns
         -------
         result : array, shape (n_halos,)
-            Interpolated values for each halo. Differentiable w.r.t. sigma.
+            Interpolated values for each halo.
         """
         sigma_rad = jnp.deg2rad(sigma)
         return vmap(lambda vals: jnp.interp(
