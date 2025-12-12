@@ -25,15 +25,14 @@ import numpy as np
 from jax import vmap
 from tqdm import tqdm
 
-from ..utils import fprint
+from ..utils.logging import fprint
 
 
 def angular_sep(b, ell, b0, ell0):
     """Angular separation on the sphere between (ell, b) and (ell0, b0)."""
-    return jnp.arccos(
-        jnp.sin(b) * jnp.sin(b0)
-        + jnp.cos(b) * jnp.cos(b0) * jnp.cos(ell - ell0)
-    )
+    cos_theta = jnp.sin(b) * jnp.sin(b0) + jnp.cos(b) * jnp.cos(b0) * jnp.cos(
+        ell - ell0)
+    return jnp.arccos(jnp.clip(cos_theta, -1.0, 1.0))
 
 
 def masked_integral_for_sigma(b0, ell0, b_lim, sigma, nside=512, n_sigma=5.0,
@@ -123,7 +122,7 @@ def masked_integral_for_sigma(b0, ell0, b_lim, sigma, nside=512, n_sigma=5.0,
     return result[0] if jnp.ndim(sigma) == 0 else result
 
 
-class MaskedSkyInterpolatorJAX:
+class MaskedSkyInterpolator:
     """
     JAX-based interpolator for masked-sky integrals as a function of σ.
 
@@ -140,9 +139,9 @@ class MaskedSkyInterpolatorJAX:
     b_lim : scalar
         Latitude mask threshold, degrees.
     sigma_min : scalar
-        Minimum sigma for grid, radians.
+        Minimum sigma for grid, degrees.
     sigma_max : scalar
-        Maximum sigma for grid, radians.
+        Maximum sigma for grid, degrees.
     n_sigma_grid : int
         Number of grid points in sigma.
     nside : int
@@ -153,14 +152,16 @@ class MaskedSkyInterpolatorJAX:
         Print progress and diagnostics if True.
     """
 
-    def __init__(self, ell, b, b_lim, sigma_min, sigma_max, n_sigma_grid=200,
-                 nside=512, n_sigma=5.0, verbose=False):
+    def __init__(self, ell, b, b_lim, sigma_min, sigma_max, n_sigma_grid=101,
+                 nside=512, n_sigma=5.0, verbose=True):
         self.ell = jnp.asarray(ell)
         self.b = jnp.asarray(b)
         self.b_lim = float(b_lim)
         self.n_halos = len(self.ell)
 
-        self._sig_grid = jnp.linspace(sigma_min, sigma_max, n_sigma_grid)
+        sigma_min_rad = jnp.deg2rad(sigma_min)
+        sigma_max_rad = jnp.deg2rad(sigma_max)
+        self._sig_grid = jnp.linspace(sigma_min_rad, sigma_max_rad, n_sigma_grid)
         val_grid = np.zeros((self.n_halos, n_sigma_grid))
 
         if verbose:
@@ -181,14 +182,14 @@ class MaskedSkyInterpolatorJAX:
 
         Parameters
         ----------
-        sigma : scalar
-            Angular uncertainty, radians.
+        sigma : scalar or JAX array
+            Angular uncertainty, degrees. Can be traced for autodiff.
 
         Returns
         -------
         result : array, shape (n_halos,)
-            Interpolated values for each halo.
+            Interpolated values for each halo. Differentiable w.r.t. sigma.
         """
-        sigma = float(sigma)
+        sigma_rad = jnp.deg2rad(sigma)
         return vmap(lambda vals: jnp.interp(
-            sigma, self._sig_grid, vals))(self._val_grid)
+            sigma_rad, self._sig_grid, vals))(self._val_grid)
