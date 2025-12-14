@@ -31,7 +31,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scienceplots  # noqa: F401
 from cmbo.match.cluster_matching import (compute_matching_matrix_obs,
-                                         greedy_global_matching)
+                                         # greedy_global_matching,
+                                         )
 from matplotlib.lines import Line2D
 from scipy.stats import combine_pvalues
 

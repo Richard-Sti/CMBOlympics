@@ -229,14 +229,9 @@ def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
     plt.close(fig_corner)
 
 
-def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
-                        cfg, mass_cfg):
-    """Process a single simulation-catalogue-threshold-variable combination."""
-    matching_method = mass_cfg.get("matching_method", "greedy")
-    thresh_info = (f"threshold={match_threshold}"
-                   if matching_method != "classical" else "classical")
-    fprint(f"Processing: {sim_key} vs {catalogue_name} "
-           f"({y_variable}, {thresh_info})")
+def process_combination(sim_key, catalogue_name, y_variable, cfg, mass_cfg):
+    """Process a single simulation-catalogue-variable combination."""
+    fprint(f"Processing: {sim_key} vs {catalogue_name} ({y_variable})")
 
     # Load data and perform matching
     data = load_catalogue(catalogue_name, cfg)
@@ -254,10 +249,6 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
 
     result = match_catalogue_to_associations(
         catalogue_name, data, associations,
-        match_threshold=match_threshold,
-        mass_preference_threshold=mass_cfg.get("mass_preference_threshold"),  # noqa
-        use_median_mass=mass_cfg.get("use_median_mass", True),
-        matching_method=matching_method,
         max_angular_sep=mass_cfg.get("max_angular_sep", 30.0),
         max_delta_cz=mass_cfg.get("max_delta_cz", 500.0),
         median_halo_tsz_pval_max=mass_cfg.get("median_halo_tsz_pval_max"),
@@ -307,7 +298,6 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
         y_pivot = mass_cfg.get("y_pivot_M500", 14.0)
 
     fitter = cmbo.utils.MarginalizedLinearFitter()
-
     # Capture stdout during fit to get NumPyro summary
     old_stdout = sys.stdout
     sys.stdout = StringIO()
@@ -338,9 +328,7 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        threshold_str = ("classical" if matching_method == "classical"
-                         else f"p{match_threshold:.3f}".replace(".", "_"))
-        base_name = f"{sim_key}_{threshold_str}_{y_variable}_{catalogue_name}"
+        base_name = f"{sim_key}_classical_{y_variable}_{catalogue_name}"
 
         data_dict = {
             'x': x[mask], 'xerr': xerr[mask],
@@ -360,7 +348,6 @@ def process_combination(sim_key, catalogue_name, match_threshold, y_variable,
                 'sim_key': sim_key,
                 'catalogue': catalogue_name,
                 'y_variable': y_variable,
-                'match_threshold': match_threshold,
                 'n_matched': n_matched,
                 'n_total': n_total,
                 'match_fraction': n_matched / n_total if n_total > 0 else 0.0,
@@ -408,14 +395,6 @@ def main():
     # simulations = ["manticore"]
     # catalogues = ["erass"]
 
-    match_thresholds = mass_cfg["match_threshold"]
-    if not isinstance(match_thresholds, list):
-        match_thresholds = [match_thresholds]
-
-    matching_method = mass_cfg.get("matching_method", "greedy")
-    if matching_method == "classical":
-        match_thresholds = [match_thresholds[0]]
-
     # Clean output directory if requested
     output_dir = mass_cfg.get("output_dir")
     clear_output_dir = mass_cfg.get("clear_output_dir", True)
@@ -429,8 +408,7 @@ def main():
     # Calculate total combinations
     total_combinations = 0
     for cat in catalogues:
-        total_combinations += (len(simulations) * len(get_y_variables(cat))
-                               * len(match_thresholds))
+        total_combinations += (len(simulations) * len(get_y_variables(cat)))
 
     fprint(f"Processing {total_combinations} combinations")
     fprint("")
@@ -439,10 +417,9 @@ def main():
     for sim_key in simulations:
         for catalogue_name in catalogues:
             for y_variable in get_y_variables(catalogue_name):
-                for threshold in match_thresholds:
-                    process_combination(sim_key, catalogue_name, threshold,
-                                        y_variable, cfg, mass_cfg)
-                    completed += 1
+                process_combination(sim_key, catalogue_name, y_variable,
+                                    cfg, mass_cfg)
+                completed += 1
 
     fprint(f"\nCompleted {completed}/{total_combinations} combinations "
            f"successfully.")

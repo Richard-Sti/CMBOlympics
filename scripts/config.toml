@@ -98,12 +98,8 @@ return_random_profiles = false     # Save all individual random 1D profiles to t
 # Settings for mass calibration scoring (scripts/score_masses.py)
 # Script loops over all catalogues (planck, mcxc, erass) and all simulations (csiborg1, csiborg2, manticore)
 [mass_scoring]
-match_threshold = 0.05         # p-value threshold for matching
-# mass_preference_threshold = 0.01 # Mass preference threshold (commented out for None)
 z_max = 0.05                   # Maximum redshift for matching
 m500_min = 1e14                 # Minimum M500 for matching [M_sun]
-use_median_mass = true          # Use median mass from associations
-matching_method = "classical"   # Matching algorithm: greedy, hungarian, or classical
 max_angular_sep = 90.0          # Classical matching: max angular separation [arcmin]
 max_delta_cz = 750.0            # Classical matching: max |cz| difference [km/s]
 median_halo_tsz_pval_max = 0.1  # Classical matching: max median halo pval (optional)
@@ -129,8 +125,13 @@ clear_output_dir = true         # Clear output directory before running
 # --- Halo Catalogues ---
 # Definitions of available halo catalogues. The key is used in `analysis.which_simulation`.
 [halo_catalogues]
-min_association_mass = 5e13  # Minimum mass for associations [M_sun/h]
+min_association_mass = 3.5e13  # Minimum mass for associations [M_sun/h]
 min_fraction_present = 0.5  # Minimum fraction of realisations per association
+association_eps = 1.5        # DBSCAN linking length [Mpc/h]
+association_min_samples = 9  # Minimum members per association
+association_mass_sigma = 0.3  # Max |log10(M) - mean| before rejection
+association_eps_iterations = 3  # Iterations for mass-dependent eps pruning
+association_mass_dependent_eps = true  # Use eps scaling with mean association mass
 
 [halo_catalogues.csiborg1]
 fname = "data/csiborg1_fof.hdf5"
