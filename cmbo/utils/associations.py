@@ -481,8 +481,17 @@ def compute_association_signals(associations, profiler, theta_rand, map_rand,
         )
 
 
-def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
-                               mass_sigma=0.4, optional_data=None):
+def identify_halo_associations(
+    positions,
+    masses,
+    eps=1.75,
+    min_samples=9,
+    mass_sigma=0.4,
+    optional_data=None,
+    mass_dependent_eps=True,
+    eps_iterations=3,
+    verbose=False,
+):
     """
     Cluster haloes from multiple realisations into physical associations.
 
@@ -495,7 +504,7 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         Sequence of arrays with shape (Ni,) storing halo masses matched to
         ``positions``.
     eps
-        DBSCAN linking length in comoving Mpc.
+        Initial DBSCAN linking length in comoving Mpc.
     min_samples
         Minimum number of members required to keep an association.
     mass_sigma
@@ -505,6 +514,13 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         Dictionary mapping key names to sequences of arrays (one per
         realisation), matched to ``positions``. These will be filtered and
         stored in the associations.
+    mass_dependent_eps
+        If True, iteratively prune associations using an eps that scales with
+        the mean association mass as eps = eps * (M / 1e14)^(1/3).
+    eps_iterations
+        Maximum number of pruning iterations for mass-dependent eps.
+    verbose
+        If True, print pruning diagnostics.
 
     Returns
     -------
@@ -583,7 +599,14 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
     clustering = DBSCAN(eps=eps, min_samples=min_samples)
     labels = clustering.fit_predict(all_positions)
 
+    index_lookup = {
+        (int(r), int(h)): idx for idx, (r, h) in enumerate(
+            zip(real_ids.tolist(), halo_ids.tolist())
+        )
+    }
+
     associations = []
+    global_indices_list = []
     for label in sorted(lab for lab in np.unique(labels) if lab >= 0):
         cluster_mask = labels == label
         cluster_indices = np.where(cluster_mask)[0]
@@ -643,21 +666,67 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         centroid = cluster_pos.mean(axis=0)
         member_indices = np.column_stack((cluster_real, cluster_local))
         fraction_present = cluster_real.size / len(positions)
-
-        associations.append(
-            HaloAssociation(
-                label=int(label),
-                centroid=centroid,
-                positions=cluster_pos,
-                masses=cluster_mass,
-                realisations=cluster_real,
-                member_indices=member_indices,
-                fraction_present=fraction_present,
-                optional_data=cluster_opt,
-            )
+        assoc = HaloAssociation(
+            label=int(label),
+            centroid=centroid,
+            positions=cluster_pos,
+            masses=cluster_mass,
+            realisations=cluster_real,
+            member_indices=member_indices,
+            fraction_present=fraction_present,
+            optional_data=cluster_opt,
         )
+        associations.append(assoc)
+        global_indices_list.append(np.array(
+            [index_lookup[(int(r), int(h))] for r, h in member_indices],
+            dtype=int,
+        ))
 
-    return HaloAssociationList(associations)
+    associations = HaloAssociationList(associations)
+    if not mass_dependent_eps or not associations:
+        return associations
+
+    cache = {}
+    base_eps = float(eps)
+    for i in range(max(int(eps_iterations), 1)):
+        before = len(associations)
+        survivors = []
+        survivor_indices = []
+        for assoc, global_idx in zip(associations, global_indices_list):
+            mean_mass = float(np.mean(assoc.masses))
+            eps_dyn = base_eps * (mean_mass / 1e14) ** (1.0 / 3.0)
+            eps_dyn = float(min(eps_dyn, base_eps))
+            labels_dyn = cache.get(eps_dyn)
+            if labels_dyn is None:
+                labels_dyn = DBSCAN(
+                    eps=eps_dyn, min_samples=min_samples
+                ).fit_predict(all_positions)
+                cache[eps_dyn] = labels_dyn
+            assoc_labels = labels_dyn[global_idx]
+            valid = assoc_labels >= 0
+            if not np.all(valid):
+                continue
+            unique_labels = np.unique(assoc_labels)
+            if unique_labels.size != 1:
+                continue
+            cluster_label = unique_labels[0]
+            cluster_size = int(np.sum(labels_dyn == cluster_label))
+            if cluster_size < min_samples:
+                continue
+            survivors.append(assoc)
+            survivor_indices.append(global_idx)
+        pruned = before - len(survivors)
+        if verbose:
+            print(
+                f"Mass-dependent eps iteration {i + 1}: "
+                f"pruned {pruned} / {before} associations."
+            )
+        if pruned == 0:
+            break
+        associations = HaloAssociationList(survivors)
+        global_indices_list = survivor_indices
+
+    return associations
 
 
 def _infer_mass_definition(mass_key):
@@ -1047,12 +1116,33 @@ def load_associations(
     HaloAssociationList
         List of associations with attached p-values and signals.
     """
+    halo_cfg = cfg.get("halo_catalogues", {})
     halo_data = _load_simulation_halos(cfg, sim_key)
     if verbose:
         print(f"Loaded {len(halo_data['positions'])} simulation realisations.")
-    catalogue_cfg = cfg["halo_catalogues"][sim_key]
+    catalogue_cfg = halo_cfg[sim_key]
     radius_key = catalogue_cfg["radius_key"]
     velocity_key = catalogue_cfg.get("velocity_key")
+    eps = float(catalogue_cfg.get(
+        "association_eps",
+        halo_cfg.get("association_eps", 1.75),
+    ))
+    min_samples = int(catalogue_cfg.get(
+        "association_min_samples",
+        halo_cfg.get("association_min_samples", 9),
+    ))
+    mass_sigma = float(catalogue_cfg.get(
+        "association_mass_sigma",
+        halo_cfg.get("association_mass_sigma", 0.4),
+    ))
+    eps_iterations = int(catalogue_cfg.get(
+        "association_eps_iterations",
+        halo_cfg.get("association_eps_iterations", 3),
+    ))
+    mass_dependent_eps = bool(catalogue_cfg.get(
+        "association_mass_dependent_eps",
+        halo_cfg.get("association_mass_dependent_eps", True),
+    ))
     optional = {
         radius_key: halo_data["r500"],
         "theta500_arcmin": halo_data["theta_arcmin"],
@@ -1062,6 +1152,12 @@ def load_associations(
     associations = identify_halo_associations(
         halo_data["positions"],
         halo_data["masses"],
+        eps=eps,
+        min_samples=min_samples,
+        mass_sigma=mass_sigma,
+        mass_dependent_eps=mass_dependent_eps,
+        eps_iterations=eps_iterations,
+        verbose=verbose,
         optional_data=optional,
     )
     frac_thresh = cfg["halo_catalogues"].get(

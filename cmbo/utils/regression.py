@@ -204,8 +204,8 @@ class MarginalizedLinearModel:
         # Compute log likelihood for each x sample
         log_likelihoods = Normal(
             y_model_samples,
-            jnp.sqrt(self.yerr[:, None]**2 + sig**2)).log_prob(
-                self.y[:, None])
+            jnp.sqrt(self.yerr[:, None]**2 + sig**2)
+        ).log_prob(self.y[:, None])
 
         # Marginalize over x samples using log-mean-exp
         log_likelihood = logmeanexp(log_likelihoods, axis=1)
@@ -695,7 +695,7 @@ class MarginalizedLinearFitter(BaseLinearFitter):
             x_samples_pivoted, y_pivoted, yerr,
             slope_range=self.range_slope,
             intercept_range=self.range_intercept,
-            sig_range=self.range_sig
+            sig_range=self.range_sig,
         )
 
         kernel = NUTS(model)

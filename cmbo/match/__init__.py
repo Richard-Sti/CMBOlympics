@@ -18,7 +18,6 @@
 from .cluster_matching import (  # noqa: F401
     compute_matching_matrix_cartesian,
     compute_matching_matrix_obs,
-    greedy_global_matching,
 )
 from .crossmatch import (  # noqa: F401
     crossmatch_planck_catalog,
@@ -32,4 +31,3 @@ from .assignments import (  # noqa: F401
     match_mcxc_catalog_to_associations,
     match_erass_catalog_to_associations,
 )
-from .probabilistic_matching import partition_volume, print_group_summary  # noqa: F401

@@ -24,10 +24,7 @@ from ..utils.arrays import mask_structured_array
 from ..utils.associations import HaloAssociationList
 from ..utils.logging import fprint
 from ..utils.coords import cz_to_comoving_distance, radec_to_cartesian
-from .cluster_matching import (compute_matching_matrix_cartesian,
-                               greedy_global_matching,
-                               hungarian_global_matching,
-                               classical_matching)
+from .cluster_matching import classical_matching
 
 
 def match_catalogue_to_associations(
@@ -36,15 +33,11 @@ def match_catalogue_to_associations(
     ra_key,
     dec_key,
     redshift_key,
-    match_threshold=0.05,
-    mass_preference_threshold=None,
-    use_median_mass=False,
-    matching_method='greedy',
-    median_halo_tsz_pval_max=None,
-    use_median_halo_tsz_pval=False,
-    min_member_fraction=0.5,
     max_angular_sep=30.0,
     max_delta_cz=500.0,
+    min_member_fraction=0.5,
+    median_halo_tsz_pval_max=None,
+    use_median_halo_tsz_pval=False,
     cosmo_params=None,
     verbose=True,
 ):
@@ -59,36 +52,23 @@ def match_catalogue_to_associations(
         Associations returned by :func:`cmbo.match.load_associations`.
     ra_key, dec_key, redshift_key : str
         Keys selecting RA, Dec (degrees) and redshift columns.
-    match_threshold : float, optional
-        Maximum Pfeifer p-value accepted by the matching algorithm.
-        Only used with 'greedy' or 'hungarian' matching methods.
-    mass_preference_threshold : float, optional
-        When set, prefer associations with higher mean log mass among pairs
-        with p-value below this threshold. Only used with greedy matching.
-    use_median_mass
-        If True, all associations use the median of mean log masses instead
-        of their own masses, giving each association equal weight.
-        Only used with 'greedy' or 'hungarian' matching methods.
-    matching_method : str, optional
-        Algorithm for global matching: 'greedy' (default), 'hungarian', or
-        'classical'.
+    max_angular_sep : float, optional
+        Maximum angular separation in arcminutes for classical matching
+        (default 30.0).
+    max_delta_cz : float, optional
+        Maximum velocity difference in km/s for classical matching
+        (default 500.0).
+    min_member_fraction : float, optional
+        Minimum fraction of member haloes that must satisfy angular/redshift
+        cuts in classical matching.
     median_halo_tsz_pval_max : float, optional
         When set, classical matching only considers associations whose
         median halo_pval falls below this threshold.
     use_median_halo_tsz_pval : bool, optional
         If True, classical matching selects matches by minimising median
         halo_pval instead of 3D distance after angular/redshift filtering.
-    min_member_fraction : float, optional
-        Minimum fraction of member haloes that must satisfy angular/redshift
-        cuts in classical matching.
-    max_angular_sep : float, optional
-        Maximum angular separation in arcminutes for classical matching
-        (default 30.0). Only used with 'classical' matching method.
-    max_delta_cz : float, optional
-        Maximum velocity difference in km/s for classical matching
-        (default 500.0). Only used with 'classical' matching method.
     cosmo_params : dict, optional
-        Cosmological parameters for Pfeifer matching.
+        Cosmological parameters for distance calculations.
     verbose : bool, optional
         If True, print diagnostic information.
 
@@ -111,62 +91,21 @@ def match_catalogue_to_associations(
     if not associations:
         raise ValueError("At least one association is required.")
 
-    if matching_method not in ('greedy', 'hungarian', 'classical'):
-        raise ValueError(
-            f"matching_method must be 'greedy', 'hungarian', or 'classical', "
-            f"got '{matching_method}'"
-        )
-
     ra = np.asarray(catalogue[ra_key], dtype=float)
     dec = np.asarray(catalogue[dec_key], dtype=float)
     redshift = np.asarray(catalogue[redshift_key], dtype=float)
 
-    if matching_method == 'classical':
-        # Classical matching uses angular separation + redshift criteria
-        matches_local = classical_matching(
-            ra, dec, redshift,
-            associations,
-            max_angular_sep=max_angular_sep,
-            max_delta_cz=max_delta_cz,
-            median_halo_tsz_pval_max=median_halo_tsz_pval_max,
-            use_median_halo_tsz_pval=use_median_halo_tsz_pval,
-            min_member_fraction=min_member_fraction,
-            cosmo_params=cosmo_params,
-            verbose=verbose,
-        )
-    else:
-        # Pfeifer-based matching (greedy or hungarian)
-        unit_vec = radec_to_cartesian(ra, dec)
-        dist = cz_to_comoving_distance(redshift * SPEED_OF_LIGHT_KMS,
-                                       **(cosmo_params or {}))
-        x_obs = (unit_vec.T * dist).T
-
-        pval_matrix, dist_matrix = compute_matching_matrix_cartesian(
-            x_obs,
-            associations,
-            cosmo_params=cosmo_params,
-            use_median_mass=use_median_mass,
-            verbose=verbose,
-        )
-
-        if matching_method == 'greedy':
-            matches_local = greedy_global_matching(
-                pval_matrix,
-                dist_matrix,
-                associations,
-                threshold=match_threshold,
-                mass_preference_threshold=mass_preference_threshold,
-                verbose=verbose,
-            )
-        else:  # hungarian
-            matches_local = hungarian_global_matching(
-                pval_matrix,
-                dist_matrix,
-                associations,
-                threshold=match_threshold,
-                mass_preference_threshold=mass_preference_threshold,
-                verbose=verbose,
-            )
+    matches_local = classical_matching(
+        ra, dec, redshift,
+        associations,
+        max_angular_sep=max_angular_sep,
+        max_delta_cz=max_delta_cz,
+        median_halo_tsz_pval_max=median_halo_tsz_pval_max,
+        use_median_halo_tsz_pval=use_median_halo_tsz_pval,
+        min_member_fraction=min_member_fraction,
+        cosmo_params=cosmo_params,
+        verbose=verbose,
+    )
 
     assoc_lookup = {id(assoc): idx for idx, assoc in enumerate(associations)}
     assoc_indices = np.empty(len(ra), dtype=int)
@@ -183,13 +122,10 @@ def match_catalogue_to_associations(
                 "Matched association not found in the associations list."
             )
         assoc_indices[i] = assoc_idx
-        pvals[i] = np.nan if matching_method == 'classical' else pval
+        pvals[i] = np.nan
         distances[i] = distance
 
-    if matching_method == 'classical':
-        matched_mask = assoc_indices != -1
-    else:
-        matched_mask = ~np.isnan(pvals)
+    matched_mask = assoc_indices != -1
     n_matched = np.sum(matched_mask)
     n_total = len(ra)
 
@@ -213,15 +149,11 @@ def match_planck_catalog_to_associations(
     associations,
     z_max=0.05,
     m500_min=1.0e14,
-    match_threshold=0.05,
-    mass_preference_threshold=None,
-    use_median_mass=False,
-    matching_method='greedy',
+    max_angular_sep=30.0,
+    max_delta_cz=500.0,
     median_halo_tsz_pval_max=None,
     use_median_halo_tsz_pval=False,
     min_member_fraction=0.5,
-    max_angular_sep=30.0,
-    max_delta_cz=500.0,
     cosmo_params=None,
     verbose=True,
 ):
@@ -238,19 +170,10 @@ def match_planck_catalog_to_associations(
         Maximum redshift passed to the matcher (default 0.05).
     m500_min : float, optional
         Minimum Planck M500 mass (Msun/h) considered (default 1e14).
-    match_threshold : float, optional
-        Maximum Pfeifer p-value accepted by the matching algorithm.
-        Only used with 'greedy' or 'hungarian' methods.
-    mass_preference_threshold : float, optional
-        When set, prefer associations with higher mean log mass among pairs
-        with p-value below this threshold. Forwarded to
-        :func:`match_catalogue_to_associations`.
-    use_median_mass
-        If True, all associations use the median of mean log masses instead
-        of their own masses, giving each association equal weight.
-    matching_method : str, optional
-        Algorithm for global matching: 'greedy' (default), 'hungarian', or
-        'classical'.
+    max_angular_sep : float, optional
+        Maximum angular separation in arcminutes for classical matching.
+    max_delta_cz : float, optional
+        Maximum velocity difference in km/s for classical matching.
     median_halo_tsz_pval_max : float, optional
         When set, classical matching only considers associations with median
         halo_pval below this value.
@@ -260,10 +183,6 @@ def match_planck_catalog_to_associations(
     min_member_fraction : float, optional
         Minimum fraction of member haloes that must satisfy angular/redshift
         cuts in classical matching.
-    max_angular_sep : float, optional
-        Maximum angular separation in arcminutes for classical matching.
-    max_delta_cz : float, optional
-        Maximum velocity difference in km/s for classical matching.
     cosmo_params : dict, optional
         Cosmological parameters forwarded to the matcher.
     verbose : bool, optional
@@ -288,10 +207,6 @@ def match_planck_catalog_to_associations(
         ra_key="RA",
         dec_key="DEC",
         redshift_key="redshift",
-        match_threshold=match_threshold,
-        mass_preference_threshold=mass_preference_threshold,
-        use_median_mass=use_median_mass,
-        matching_method=matching_method,
         median_halo_tsz_pval_max=median_halo_tsz_pval_max,
         use_median_halo_tsz_pval=use_median_halo_tsz_pval,
         min_member_fraction=min_member_fraction,
@@ -307,10 +222,6 @@ def match_mcxc_catalog_to_associations(
     associations,
     z_max=0.05,
     m500_min=1.0e14,
-    match_threshold=0.05,
-    mass_preference_threshold=None,
-    use_median_mass=False,
-    matching_method='greedy',
     max_angular_sep=30.0,
     max_delta_cz=500.0,
     cosmo_params=None,
@@ -332,18 +243,6 @@ def match_mcxc_catalog_to_associations(
         Maximum redshift passed to the matcher (default 0.05).
     m500_min : float, optional
         Minimum MCXC M500 mass (Msun/h) considered (default 1e14).
-    match_threshold : float, optional
-        Maximum Pfeifer p-value accepted by the matching algorithm.
-    mass_preference_threshold : float, optional
-        When set, prefer associations with higher mean log mass among pairs
-        with p-value below this threshold. Forwarded to
-        :func:`match_catalogue_to_associations`.
-    use_median_mass
-        If True, all associations use the median of mean log masses instead
-        of their own masses, giving each association equal weight.
-    matching_method : str, optional
-        Algorithm for global matching: 'greedy' (default), 'hungarian', or
-        'classical'.
     max_angular_sep : float, optional
         Maximum angular separation in arcminutes for classical matching.
     max_delta_cz : float, optional
@@ -382,10 +281,6 @@ def match_mcxc_catalog_to_associations(
         ra_key="RA",
         dec_key="DEC",
         redshift_key="Z",
-        match_threshold=match_threshold,
-        mass_preference_threshold=mass_preference_threshold,
-        use_median_mass=use_median_mass,
-        matching_method=matching_method,
         max_angular_sep=max_angular_sep,
         max_delta_cz=max_delta_cz,
         min_member_fraction=min_member_fraction,
@@ -400,10 +295,6 @@ def match_erass_catalog_to_associations(
     associations,
     z_max=0.05,
     m500_min=1.0e14,
-    match_threshold=0.05,
-    mass_preference_threshold=None,
-    use_median_mass=False,
-    matching_method='greedy',
     max_angular_sep=30.0,
     max_delta_cz=500.0,
     cosmo_params=None,
@@ -424,18 +315,6 @@ def match_erass_catalog_to_associations(
         Maximum redshift passed to the matcher (default 0.05).
     m500_min : float, optional
         Minimum eRASS M500 mass (Msun/h) considered (default 1e14).
-    match_threshold : float, optional
-        Maximum Pfeifer p-value accepted by the matching algorithm.
-    mass_preference_threshold : float, optional
-        When set, prefer associations with higher mean log mass among pairs
-        with p-value below this threshold. Forwarded to
-        :func:`match_catalogue_to_associations`.
-    use_median_mass
-        If True, all associations use the median of mean log masses instead
-        of their own masses, giving each association equal weight.
-    matching_method : str, optional
-        Algorithm for global matching: 'greedy' (default), 'hungarian', or
-        'classical'.
     max_angular_sep : float, optional
         Maximum angular separation in arcminutes for classical matching.
     max_delta_cz : float, optional
@@ -474,10 +353,6 @@ def match_erass_catalog_to_associations(
         ra_key="RA",
         dec_key="DEC",
         redshift_key="BEST_Z",
-        match_threshold=match_threshold,
-        mass_preference_threshold=mass_preference_threshold,
-        use_median_mass=use_median_mass,
-        matching_method=matching_method,
         max_angular_sep=max_angular_sep,
         max_delta_cz=max_delta_cz,
         min_member_fraction=min_member_fraction,
