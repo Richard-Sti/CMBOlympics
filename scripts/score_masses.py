@@ -286,7 +286,20 @@ def process_combination(sim_key, catalogue_name, y_variable, cfg, mass_cfg):
     # Apply mask
     mask = x < 30
     if mask.sum() < 3:
-        fprint(f"  -> Only {mask.sum()} points available, skipping.")
+        msg = f"Only {mask.sum()} points available, skipping."
+        fprint(f"  -> {msg}")
+        output_dir = mass_cfg.get("output_dir")
+        if output_dir is not None:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            base_name = f"{sim_key}_classical_{y_variable}_{catalogue_name}"
+            skip_path = output_dir / f"{base_name}_skipped.txt"
+            skip_path.write_text(
+                f"{msg}\n"
+                f"n_matched={n_matched}, n_total={n_total}, "
+                f"sim={sim_key}, catalogue={catalogue_name}, "
+                f"y_variable={y_variable}\n"
+            )
         return
 
     # Fit regression model
