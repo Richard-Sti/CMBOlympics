@@ -18,8 +18,8 @@ n_jobs = 4
 # --- Input Maps ---
 # Paths to the HEALPix maps for the tSZ signal and random pointings.
 [input_map]
-signal_map = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
-random_pointing = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
+signal_map = "data/deproject_CMB_CIB_default_standard_full.fits"
+random_pointing = "data/deproject_CMB_CIB_default_standard_full_RAND_POINTING.hdf5"
 # FWHM in arcminutes for smoothing the input map.
 smooth_fwhm = 9.6
 
@@ -34,7 +34,7 @@ theta_max = 751.0
 n_theta = 1001
 # Random pointing sampling controls.
 n_points = 100_000
-abs_b_min = 10.0
+abs_b_min = 20.0
 fwhm_arcmin = 9.6
 seed = 42
 
@@ -100,8 +100,8 @@ return_random_profiles = false     # Save all individual random 1D profiles to t
 [mass_scoring]
 z_max = 0.05                   # Maximum redshift for matching
 m500_min = 1e14                 # Minimum M500 for matching [M_sun]
-max_angular_sep = 90.0          # Classical matching: max angular separation [arcmin]
-max_delta_cz = 750.0            # Classical matching: max |cz| difference [km/s]
+max_angular_sep = 60.0          # Classical matching: max angular separation [arcmin]
+max_delta_cz = 350.0            # Classical matching: max |cz| difference [km/s]
 median_halo_tsz_pval_max = 0.1  # Classical matching: max median halo pval (optional)
 use_median_halo_tsz_pval = false # Classical matching: minimise median halo pval instead of distance
 min_member_fraction = 0.5       # Classical matching: minimum member fraction passing angular/redshift cuts
@@ -125,7 +125,7 @@ clear_output_dir = true         # Clear output directory before running
 # --- Halo Catalogues ---
 # Definitions of available halo catalogues. The key is used in `analysis.which_simulation`.
 [halo_catalogues]
-min_association_mass = 3.5e13  # Minimum mass for associations [M_sun/h]
+min_association_mass = 5e13  # Minimum mass for associations [M_sun/h]
 min_fraction_present = 0.5  # Minimum fraction of realisations per association
 association_eps = 1.5        # DBSCAN linking length [Mpc/h]
 association_min_samples = 9  # Minimum members per association
@@ -142,6 +142,7 @@ position_key = "Position"
 velocity_key = "Velocity"
 mass_key = "M500c"
 radius_key = "R500c"
+Vext = [67.4, 1.8, -309.1]  # External bulk velocity [km/s] added to peculiar velocities
 
 [halo_catalogues.csiborg2]
 fname = "data/csiborg2_fof.hdf5"
@@ -152,6 +153,7 @@ mass_key = "Group_M_Crit500"
 radius_key = "Group_R_Crit500"
 box_size = 676.6  # [Mpc/h]
 omega_m = 0.3111
+Vext = [-6.1, -23.2, -98.2]
 
 
 [halo_catalogues.manticore]
@@ -163,3 +165,4 @@ mass_key = "Group_M_Crit500"
 radius_key = "Group_R_Crit500"
 box_size = 681.0  # [Mpc/h]
 omega_m = 0.306
+Vext = [-29.4, -17.9, -82.95]
