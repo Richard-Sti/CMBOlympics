@@ -26,10 +26,16 @@ from ..utils.coords import heliocentric_to_cmb
 ARCMIN2_TO_SR = (np.pi / (180.0 * 60.0))**2
 
 
-def read_Planck_comptonSZ(fname, which="FULL"):
+def read_Planck_comptonSZ(fname, which=None):
     """
     Load a Planck Compton-y map column, warning when the key is missing.
     """
+    if which is None:
+        if "deproject_CMB_CIB_default_standard_full" in basename(fname):
+            which = "T"
+        else:
+            which = "FULL"
+
     data = fits.getdata(fname, ext=1)
     try:
         column = data[which]
