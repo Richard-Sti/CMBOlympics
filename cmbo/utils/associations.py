@@ -777,6 +777,11 @@ def _load_simulation_halos(cfg, sim_key):
     if omega_m is None:
         omega_m = catalogue_cfg.get("Om0", 0.3111)
     omega_m = float(omega_m)
+    vext = catalogue_cfg.get("Vext")
+    if vext is not None:
+        vext = np.asarray(vext, dtype=float)
+        if vext.shape != (3,):
+            raise ValueError("Vext must be a sequence of three numbers.")
     centre = np.array(catalogue_cfg.get(
         "observer_position",
         [box_size / 2.0, box_size / 2.0, box_size / 2.0],
@@ -828,6 +833,8 @@ def _load_simulation_halos(cfg, sim_key):
         masses_all.append(mass[mask])
         r500_all.append(r500[mask])
         if velocity_key:
+            if vext is not None:
+                velocity = velocity + vext
             velocity_all.append(velocity[mask])
         theta_masked = theta_arcmin[mask]
         theta_all.append(theta_masked)
