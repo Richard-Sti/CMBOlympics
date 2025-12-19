@@ -814,7 +814,7 @@ def plot_observed_cluster_cutout(obs_cluster, association=None,
 def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
                                ncols=4, zoom_arcmin=None,
                                cmap=None, cbar_label=r"$y$",
-                               show_legend=False):
+                               show_legend=False, exclude_prefixes=None):
     """
     Plot multiple observed clusters in a grid layout.
 
@@ -838,30 +838,57 @@ def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
         Label for the colorbar, default is "$y$".
     show_legend
         Whether to show legend on each panel. Default: False.
+    exclude_prefixes
+        Optional list of strings. Clusters whose names start with any of these
+        prefixes will be excluded from the plot.
 
     Returns
     -------
     fig, axes
         Matplotlib figure and axes array.
     """
-    # Filter out unmatched clusters
+    # Create exclusion mask based on prefixes
+    names = obs_clusters.names
+    if exclude_prefixes is not None:
+        include_mask = np.array(
+            [not any(name.startswith(prefix) for prefix in exclude_prefixes)
+             for name in names],
+            dtype=bool
+        )
+    else:
+        include_mask = np.ones(len(names), dtype=bool)
+
+    # Filter out unmatched clusters and excluded clusters
     matched_indices = [
         k for k in range(len(obs_clusters))
-        if matches[k] is not None
+        if matches[k] is not None and include_mask[k]
     ]
+
+    # Sort by redshift
+    if matched_indices:
+        redshifts = np.asarray(obs_clusters.redshifts, dtype=float)
+        matched_redshifts = redshifts[matched_indices]
+        sort_order = np.argsort(matched_redshifts)
+        matched_indices = [matched_indices[i] for i in sort_order]
 
     n_matched = len(matched_indices)
     if n_matched == 0:
         raise ValueError("No matched clusters to plot.")
 
-    print(f"Plotting {n_matched}/{len(obs_clusters)} matched clusters")
-    skipped = [
-        k for k in range(len(obs_clusters))
-        if matches[k] is None
-    ]
-    if skipped:
-        skipped_names = [obs_clusters.names[k] for k in skipped]
-        print(f"Skipping {len(skipped)} unmatched: {skipped_names}")
+    print(f"Plotting {n_matched}/{len(obs_clusters)} clusters")
+
+    # Report skipped clusters
+    unmatched = [k for k in range(len(obs_clusters)) if matches[k] is None]
+    excluded = [k for k in range(len(obs_clusters)) if not include_mask[k]]
+
+    if unmatched:
+        unmatched_names = [obs_clusters.names[k] for k in unmatched]
+        print(
+            f"Skipping {len(unmatched)} unmatched clusters: {unmatched_names}")
+
+    if excluded:
+        excluded_names = [obs_clusters.names[k] for k in excluded]
+        print(f"Skipping {len(excluded)} excluded clusters: {excluded_names}")
 
     nrows = int(np.ceil(n_matched / ncols))
 
@@ -870,12 +897,12 @@ def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
     with plt.style.context("science"):
         fig, axes = plt.subplots(
             nrows, ncols,
-            figsize=(4 * ncols, 3.5 * nrows),
+            figsize=(4 * ncols, 3. * nrows),
             squeeze=False
         )
 
         # Increase spacing between subplots
-        fig.subplots_adjust(hspace=0.2, wspace=0.2)
+        fig.subplots_adjust(hspace=0.05, wspace=0.05)
 
         for plot_idx, cluster_idx in enumerate(matched_indices):
             row = plot_idx // ncols
@@ -908,7 +935,7 @@ def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
             fig.delaxes(axes[row, col])
 
         # Reduce whitespace
-        fig.tight_layout(pad=0.3)
+        fig.tight_layout(pad=0.0)
 
     plt.close()
     return fig, axes

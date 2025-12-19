@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scienceplots  # noqa: F401
 from cmbo.match.cluster_matching import (compute_matching_matrix_obs,
-                                         # greedy_global_matching,
+                                         greedy_global_matching,
                                          )
 from matplotlib.lines import Line2D
 from scipy.stats import combine_pvalues
@@ -305,6 +305,7 @@ def plot_cluster_pvalue_percentiles(
     ax=None,
     suite_labels=None,
     suite_colors=None,
+    exclude_prefixes=None,
 ):
     """
     Plot per-cluster percentile summaries of per-halo tSZ p-values.
@@ -313,6 +314,9 @@ def plot_cluster_pvalue_percentiles(
     ----------
     suite_colors
         Optional sequence of Matplotlib color specs, one per simulation suite.
+    exclude_prefixes
+        Optional list of strings. Clusters whose names start with any of these
+        prefixes will be excluded from the plot.
     """
     if obs_clusters is None:
         try:
@@ -329,6 +333,27 @@ def plot_cluster_pvalue_percentiles(
         raise ValueError("obs_clusters must expose 'names'.")
     if not names:
         raise ValueError("No observed clusters available to plot.")
+
+    # Create include mask based on exclude_prefixes
+    original_names = list(names)
+    if exclude_prefixes is not None:
+        include_mask = np.array(
+            [not any(name.startswith(prefix) for prefix in exclude_prefixes)
+             for name in original_names],
+            dtype=bool
+        )
+        if not np.any(include_mask):
+            raise ValueError(
+                "No clusters remain after applying exclude_prefixes.")
+    else:
+        include_mask = np.ones(len(original_names), dtype=bool)
+
+    # Get redshifts and create sorting order
+    redshifts = np.asarray(obs_clusters.redshifts, dtype=float)
+    filtered_indices = np.where(include_mask)[0]
+    filtered_redshifts = redshifts[filtered_indices]
+    sort_order = np.argsort(filtered_redshifts)
+    sorted_filtered_indices = filtered_indices[sort_order]
 
     if observer_centre is None:
         observer_centre = _observer_centre_from_cfg(cfg, sim_key=sim_key)
@@ -353,7 +378,7 @@ def plot_cluster_pvalue_percentiles(
 
         first = match_input[0]
         if _is_match_entry(first):
-            if len(match_input) != len(names):
+            if len(match_input) != len(original_names):
                 raise ValueError(
                     "Single-suite matches length does not match observed "
                     "clusters."
@@ -365,7 +390,7 @@ def plot_cluster_pvalue_percentiles(
                 candidate, (str, bytes)
             ):
                 return False
-            if len(candidate) != len(names):
+            if len(candidate) != len(original_names):
                 return False
             probe = next((
                 item for item in candidate if item is not None), None)
@@ -390,6 +415,9 @@ def plot_cluster_pvalue_percentiles(
         return suites
 
     matches_by_suite = _normalise_matches(matches)
+
+    # Filter and sort names for display after validation
+    filtered_names = [original_names[idx] for idx in sorted_filtered_indices]
     num_suites = len(matches_by_suite)
     if suite_labels is not None:
         if len(suite_labels) != num_suites:
@@ -418,7 +446,9 @@ def plot_cluster_pvalue_percentiles(
         p05 = []
         p50 = []
         p95 = []
-        for idx, entry in enumerate(suite, start=1):
+        for plot_position, orig_idx in enumerate(sorted_filtered_indices,
+                                                 start=1):
+            entry = suite[orig_idx]
             if entry is None:
                 continue
             assoc = entry[0]
@@ -427,7 +457,7 @@ def plot_cluster_pvalue_percentiles(
             finite = per_halo[np.isfinite(per_halo)]
             if finite.size == 0:
                 continue
-            positions.append(idx)
+            positions.append(plot_position)
             q05, q50, q95 = np.percentile(finite, percentile_levels)
             p05.append(float(q05))
             p50.append(float(q50))
@@ -443,15 +473,15 @@ def plot_cluster_pvalue_percentiles(
 
     with plt.style.context("science"):
         if ax is None:
-            width = max(8.0, 0.7 * len(names))
-            fig, ax = plt.subplots(figsize=(width, 4.0))
+            # width = max(8.0, 0.7 * len(filtered_names))
+            fig, ax = plt.subplots(figsize=(9, 3.5))
         else:
             fig = ax.figure
 
-        positions = np.arange(1, len(names) + 1)
+        positions = np.arange(1, len(filtered_names) + 1)
         offsets = np.zeros(num_suites)
         if num_suites > 1:
-            offsets = np.linspace(-0.35, 0.35, num_suites)
+            offsets = np.linspace(-0.2, 0.2, num_suites)
         marker_size = 25
         if suite_colors is not None:
             colors = suite_colors
@@ -497,21 +527,21 @@ def plot_cluster_pvalue_percentiles(
                 )
             )
 
-        ax.set_xticks(positions, names)
+        ax.set_xticks(positions, filtered_names)
         ax.tick_params(axis="x", which="both", length=0)
         for label in ax.get_xticklabels():
             label.set_horizontalalignment("right")
             label.set_rotation(50)
             label.set_rotation_mode("anchor")
-        ax.set_xlim(0.5, len(names) + 0.5)
-        boundaries = np.arange(1.5, len(names) + 0.5, 1.0)
+        ax.set_xlim(0.5, len(filtered_names) + 0.5)
+        boundaries = np.arange(1.5, len(filtered_names) + 0.5, 1.0)
+        spine_width = ax.spines['bottom'].get_linewidth()
         for xpos in boundaries:
             ax.axvline(
                 xpos,
-                color="grey",
-                linestyle="-",
-                linewidth=1.1,
-                alpha=0.7,
+                color="black",
+                linestyle="--",
+                linewidth=spine_width,
                 zorder=0,
             )
         ax.set_ylabel(r"$p_{\mathrm{tSZ}}$")
@@ -530,7 +560,7 @@ def plot_cluster_pvalue_percentiles(
         if y_max > 1.0:
             ax.set_ylim(y_min, 1.0)
         ax.grid(False)
-        for thresh in (0.05, 0.005):
+        for thresh in [0.05,]:
             ax.axhline(
                 thresh,
                 color="red",

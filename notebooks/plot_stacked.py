@@ -798,10 +798,12 @@ def plot_stacked_profiles_overlay(
     theta500_scale=5.0,
     suite_labels=None,
     colors=None,
+    random_colors=None,
 ):
     """
     Plot per-bin stacked profiles from multiple suites within a single row,
-    overlaying each suite as a band (no random-control or p-value panels).
+    overlaying each suite as a band. Includes random distributions as dashed
+    lines in matching colors.
 
     Parameters
     ----------
@@ -818,6 +820,10 @@ def plot_stacked_profiles_overlay(
         the underlying results file.
     colors : sequence, optional
         Matplotlib-compatible color specifications applied per suite.
+    random_colors : sequence, optional
+        Colors for random distributions per suite. If None, uses gray for all.
+        Can be a single color (applied to all) or a sequence matching the
+        number of suites.
     """
     if hasattr(res, "iter_simulations"):
         res_list = [res]
@@ -862,6 +868,17 @@ def plot_stacked_profiles_overlay(
     if not color_cycle:
         raise ValueError("No colors available for plotting.")
 
+    # Set up random colors
+    if random_colors is not None:
+        if isinstance(random_colors, str):
+            random_color_cycle = [random_colors] * nsuites
+        else:
+            if len(random_colors) < nsuites:
+                raise ValueError("Need at least one random color per suite.")
+            random_color_cycle = list(random_colors)
+    else:
+        random_color_cycle = ["0.35"] * nsuites
+
     with plt.style.context("science"):
         if theta500_scale == 1:
             theta_label = r"$\theta / \theta_{500\mathrm{c}}$"
@@ -871,11 +888,11 @@ def plot_stacked_profiles_overlay(
                 f"{theta500_scale:g}"
                 r"\,\theta_{500\mathrm{c}})$"
             )
-        width = 3.2 * nbins_to_plot
+
         fig, axes = plt.subplots(
             1,
             nbins_to_plot,
-            figsize=(width, 3.6),
+            figsize=(9, 3.0),
             constrained_layout=True,
         )
         if nbins_to_plot == 1:
@@ -888,6 +905,7 @@ def plot_stacked_profiles_overlay(
         for j_bin in range(nbins_to_plot):
             ax = axes[j_bin]
 
+            # First plot all data profiles
             for suite_idx, block in enumerate(blocks):
                 color = color_cycle[suite_idx % len(color_cycle)]
                 have_bin = ~np.isnan(block["profile_mean"][:, j_bin, 0])
@@ -928,11 +946,81 @@ def plot_stacked_profiles_overlay(
                     alpha=0.15,
                     linewidth=0,
                 )
+                # Add thin lines at boundaries
+                ax.plot(
+                    radii_norm,
+                    stack_mean - stack_err,
+                    lw=lw * 0.4,
+                    color=color,
+                    alpha=0.6,
+                )
+                ax.plot(
+                    radii_norm,
+                    stack_mean + stack_err,
+                    lw=lw * 0.4,
+                    color=color,
+                    alpha=0.6,
+                )
+
+            # Then plot randoms (so they appear last in legend)
+            for suite_idx, block in enumerate(blocks):
+                have_bin = ~np.isnan(block["profile_mean"][:, j_bin, 0])
+                if not np.any(have_bin):
+                    continue
+                radii_norm = block["radii_norm"]
+                rm = block["random_mean"][have_bin, j_bin]
+                re = block["random_err"][have_bin, j_bin]
+
+                if np.isfinite(rm).any():
+                    multi_sim = (simulation is None) or (block["nsim"] > 1)
+                    if multi_sim:
+                        rand_mean = np.nanmean(rm, axis=0)
+                        rand_spread = np.sqrt(np.nanmean(re**2, axis=0))
+                    else:
+                        rand_mean = rm[0]
+                        rand_spread = re[0]
+
+                    rand_color = random_color_cycle[suite_idx % len(random_color_cycle)]
+                    label_rand = (
+                        "Random" if suite_idx == len(blocks) - 1 and j_bin == 0 else None
+                    )
+                    ax.plot(
+                        radii_norm,
+                        rand_mean,
+                        lw=lw * 0.8,
+                        ls="--",
+                        color=rand_color,
+                        alpha=0.5,
+                        label=label_rand,
+                    )
+                    ax.fill_between(
+                        radii_norm,
+                        rand_mean - rand_spread,
+                        rand_mean + rand_spread,
+                        color=rand_color,
+                        alpha=0.10,
+                        linewidth=0,
+                    )
+                    # Add thin lines at random boundaries
+                    ax.plot(
+                        radii_norm,
+                        rand_mean - rand_spread,
+                        lw=lw * 0.3,
+                        color=rand_color,
+                        alpha=0.25,
+                    )
+                    ax.plot(
+                        radii_norm,
+                        rand_mean + rand_spread,
+                        lw=lw * 0.3,
+                        color=rand_color,
+                        alpha=0.25,
+                )
 
             ax.axhline(0.0, lw=lw * 0.7, alpha=0.6, color="k")
             ax.set_xlim(x_min, x_max)
             ax.set_xlabel(theta_label)
-            ax.legend(frameon=False, loc="upper right", fontsize=9)
+            ax.legend(frameon=False, loc="upper right", fontsize="small")
 
         axes[0].set_ylabel(r"$\langle y(<\theta) \rangle$ (mean enclosed)")
 
