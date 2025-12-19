@@ -23,11 +23,14 @@ import sys
 from io import StringIO
 from pathlib import Path
 
+import scienceplots  # noqa: F401
+import matplotlib.pyplot as plt
 import cmbo
 import h5py
-import matplotlib.pyplot as plt
 import numpy as np
 from cmbo.utils import fprint
+
+plt.style.use('science')
 
 SIM_DISPLAY_NAMES = {
     "csiborg1": "CSiBORG1",
@@ -205,25 +208,99 @@ def save_fit_summary(fit_output, corr_results, sig_result, y_variable,
                     f"sigma={slope_sig[1]:.2f}\n")
 
 
-def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
-               output_dir, base_name):
-    """Save scatter and corner plots."""
-    sim_display = SIM_DISPLAY_NAMES.get(sim_key, sim_key.capitalize())
+def plot_matching_fraction_vs_mass(catalogue_data, matches, h, output_path,
+                                   catalogue_name):
+    """
+    Plot the fraction of matched clusters as a function of M500.
 
-    add_one_to_one = (y_variable == "M500")
-    fig, ax = fitter.plot_fit(x, y, xerr, yerr, add_one_to_one=add_one_to_one)
-    ax.set_xlabel(rf'$\log M_{{\rm {sim_display}}} ~ '
-                  rf'[h^{{-1}}\,M_\odot]$')
-    ax.set_ylabel(y_label)
-    fig.savefig(output_dir / f"{base_name}_scatter.png", dpi=450,
-                bbox_inches='tight')
+    Shows cumulative matching fraction: for each mass threshold, what fraction
+    of clusters above that mass are matched.
+
+    Parameters
+    ----------
+    catalogue_data : dict
+        Full catalogue with all clusters including M500 and eM500.
+    matches : list
+        Match results (None for unmatched clusters).
+    h : float
+        Hubble parameter for mass conversion.
+    output_path : Path
+        Where to save the figure.
+    catalogue_name : str
+        Name of the catalogue for labeling.
+    """
+    # Extract masses for all clusters
+    M500_all = catalogue_data["M500"] * h  # Convert to h^-1 M_sun
+    is_matched = np.array([m is not None for m in matches])
+
+    # Sort by mass (descending)
+    sort_idx = np.argsort(M500_all)[::-1]
+    M500_sorted = M500_all[sort_idx]
+    matched_sorted = is_matched[sort_idx]
+
+    # Calculate cumulative matching fraction
+    cumulative_matched = np.cumsum(matched_sorted)
+    cumulative_total = np.arange(1, len(M500_sorted) + 1)
+    matching_fraction = cumulative_matched / cumulative_total
+
+    # Create figure
+    figsize = (4, 3)
+    fig, ax = plt.subplots(figsize=figsize)
+
+    ax.plot(M500_sorted, matching_fraction * 100, 'o-', markersize=3,
+            linewidth=1)
+    ax.set_xlabel(r'$M_{500\mathrm{c}} ~ [h^{-1} \, M_\odot]$')
+    ax.set_ylabel('Matching fraction above mass [%]')
+    ax.set_xscale('log')
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim(0, 105)
+
+    # Add annotation showing total matched
+    n_matched = np.sum(is_matched)
+    n_total = len(is_matched)
+    ax.text(0.05, 0.95,
+            f'{catalogue_name.upper()}\n'
+            f'{n_matched}/{n_total} matched ({100*n_matched/n_total:.1f}%)',
+            transform=ax.transAxes, va='top', fontsize=9,
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=450, bbox_inches='tight')
     plt.close(fig)
 
+
+def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
+               output_dir, base_name):
+    """Save scatter and corner plots with MNRAS single-column sizing."""
+    sim_display = SIM_DISPLAY_NAMES.get(sim_key, sim_key.capitalize())
+
+    # MNRAS single column width is ~84mm ≈ 3.3 inches
+    scatter_figsize = (4, 3)
+    corner_figsize = (5, 4)
+
+    # Create scatter plot
+    add_one_to_one = (y_variable == "M500")
+    fig_scatter, ax_scatter = plt.subplots(figsize=scatter_figsize)
+    fig_scatter, ax_scatter = fitter.plot_fit(
+        x, y, xerr, yerr,
+        ax=ax_scatter,
+        add_one_to_one=add_one_to_one
+    )
+    ax_scatter.set_xlabel(rf'$\log M_{{\rm {sim_display}}} ~ '
+                          rf'[h^{{-1}}\,M_\odot]$')
+    ax_scatter.set_ylabel(y_label)
+    fig_scatter.tight_layout()
+    fig_scatter.savefig(output_dir / f"{base_name}_scatter.png", dpi=450,
+                        bbox_inches='tight')
+    plt.close(fig_scatter)
+
+    # Create corner plot
     if y_variable in ["L500", "YSZ"]:
         truths = [5/3, None, None]
     else:
         truths = [1., 0, None]
-    fig_corner = fitter.plot_corner(truths=truths)
+    fig_corner = plt.figure(figsize=corner_figsize)
+    fig_corner = fitter.plot_corner(fig_corner, truths=truths)
     fig_corner.savefig(output_dir / f"{base_name}_corner.png", dpi=450,
                        bbox_inches='tight')
     plt.close(fig_corner)
@@ -262,6 +339,30 @@ def process_combination(sim_key, catalogue_name, y_variable, cfg, mass_cfg):
     )
     (catalogue_matched, assoc_matched, pvals, distances,
      n_matched, n_total) = result
+
+    # Create matching fraction plot if we have matches and this is M500
+    if y_variable == "M500" and len(catalogue_matched) > 0:
+        output_dir = mass_cfg.get("output_dir")
+        if output_dir is not None:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            h = mass_cfg.get("h", 0.68)
+
+            # Create match array for original catalogue
+            if "index" in data:
+                matched_indices = set(catalogue_matched["index"])
+                matches_full = [idx in matched_indices
+                                for idx in data["index"]]
+            else:
+                # Fallback: assume all entries up to n_total, matched first
+                matches_full = ([True] * n_matched
+                                + [False] * (n_total - n_matched))
+
+            fname = f"{sim_key}_{catalogue_name}_matching_fraction.png"
+            plot_path = output_dir / fname
+            plot_matching_fraction_vs_mass(
+                data, matches_full, h, plot_path, catalogue_name
+            )
 
     if len(catalogue_matched) == 0:
         fprint("  -> No matches found, skipping.")
@@ -403,7 +504,7 @@ def main():
             "See config.toml for the required parameters."
         ) from exc
 
-    simulations = ["csiborg1", "csiborg2", "manticore"]
+    simulations = ["csiborg2", "manticore"]
     catalogues = ["planck", "mcxc", "erass"]
     # simulations = ["manticore"]
     # catalogues = ["erass"]
