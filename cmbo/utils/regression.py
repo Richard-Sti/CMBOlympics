@@ -18,7 +18,6 @@ import numpy as np
 from jax import numpy as jnp
 from jax import random
 from jax.scipy.special import logsumexp
-from matplotlib import pyplot as plt
 from numpyro import factor, sample
 from numpyro.distributions import Normal, Uniform
 from numpyro.infer import MCMC, NUTS
@@ -344,7 +343,7 @@ class BaseLinearFitter:
 
         return pval, sigma
 
-    def plot_corner(self, truths=None, quantiles=[0.16, 0.5, 0.84],
+    def plot_corner(self, fig, truths=None, quantiles=[0.16, 0.5, 0.84],
                     show_titles=True, title_fmt='.2f', **kwargs):
         """
         Plot corner plot of posterior distributions for slope, intercept,
@@ -354,6 +353,8 @@ class BaseLinearFitter:
 
         Parameters
         ----------
+        fig : matplotlib.figure.Figure
+            Figure to plot on.
         truths : list, optional
             True parameter values to mark on plot.
         quantiles : list
@@ -412,13 +413,13 @@ class BaseLinearFitter:
             quantiles=quantiles,
             show_titles=show_titles,
             title_fmt=title_fmt,
+            fig=fig,
             **kwargs
         )
 
-        plt.close()
         return fig
 
-    def plot_fit(self, x, y, xerr, yerr, figsize=(6, 4), n_pred=1000,
+    def plot_fit(self, x, y, xerr, yerr, ax, n_pred=1000,
                  add_one_to_one=False):
         """
         Plot the data with errorbars and show the 16th-84th percentile
@@ -434,8 +435,8 @@ class BaseLinearFitter:
             X errors.
         yerr : ndarray
             Y errors.
-        figsize : tuple
-            Figure size.
+        ax : matplotlib.axes.Axes
+            Axes to plot on.
         n_pred : int
             Number of points for prediction line.
 
@@ -449,11 +450,7 @@ class BaseLinearFitter:
         if self._result is None:
             raise ValueError("Must call fit() first")
 
-        try:
-            with plt.style.context('science'):
-                fig, ax = plt.subplots(figsize=figsize)
-        except OSError:
-            fig, ax = plt.subplots(figsize=figsize)
+        fig = ax.figure
 
         # Plot all data with errorbars
         ax.errorbar(x, y, xerr=xerr, yerr=yerr,
@@ -474,8 +471,6 @@ class BaseLinearFitter:
                       label='1:1 line', zorder=0)
 
         ax.legend()
-        plt.tight_layout()
-        plt.close()
 
         return fig, ax
 
