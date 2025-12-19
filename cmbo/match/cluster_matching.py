@@ -196,6 +196,105 @@ def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
     return pval_matrix, dist_matrix
 
 
+def greedy_global_matching(pval_matrix, dist_matrix, associations,
+                           obs_clusters=None, threshold=0.05,
+                           mass_preference_threshold=None, verbose=True):
+    """
+    Assign association-cluster matches using global greedy algorithm.
+
+    Iteratively selects the pair with the lowest p-value, assigns the match,
+    and removes both from further consideration. Continues until all pairs
+    are matched or the threshold is exceeded.
+
+    When `mass_preference_threshold` is set, the algorithm prioritizes massive
+    associations among good matches: if multiple pairs have p-values below this
+    threshold, it selects the pair with the most massive association (by mean
+    log mass). If no pairs satisfy this criterion, it falls back to selecting
+    the lowest p-value pair.
+
+    Parameters
+    ----------
+    pval_matrix : ndarray of shape (n_obs_clusters, n_associations)
+        Average p-value for each cluster-association pair.
+    dist_matrix : ndarray of shape (n_obs_clusters, n_associations)
+        Distance between association centroid and observed cluster position.
+    associations
+        Iterable of associations.
+    obs_clusters, optional
+        Observed clusters with a `names` attribute.
+    threshold : float, optional
+        Maximum p-value to accept as a match. If None, matches all pairs.
+    mass_preference_threshold : float, optional
+        When set, among pairs with p-value below this threshold, prefer the
+        association with the highest mean log mass. If None, always pick the
+        lowest p-value pair (default behavior).
+    verbose : bool, optional
+        If True, print matching progress and eliminated clusters.
+
+    Returns
+    -------
+    matches : list
+        List of length n_obs_clusters. For each cluster:
+        - (association_idx, association, pval, distance) if matched
+        - None if not matched
+    """
+    pval = pval_matrix.copy()
+    n_obs = pval_matrix.shape[0]
+    associations = list(associations)
+    matches = [None] * n_obs
+    orphaned = set()
+
+    if mass_preference_threshold is not None:
+        assoc_mean_log_mass = np.array([np.mean(np.log10(assoc.masses))
+                                        for assoc in associations])
+
+    while True:
+        if mass_preference_threshold is not None:
+            good_matches = pval < mass_preference_threshold
+            if np.any(good_matches):
+                good_indices = np.where(good_matches)
+                j_candidates = good_indices[1]
+                best_mass_idx = np.argmax(assoc_mean_log_mass[j_candidates])
+                i = int(good_indices[0][best_mass_idx])
+                j = int(j_candidates[best_mass_idx])
+            else:
+                i, j = np.unravel_index(np.argmin(pval), pval.shape)
+                i, j = int(i), int(j)
+        else:
+            i, j = np.unravel_index(np.argmin(pval), pval.shape)
+            i, j = int(i), int(j)
+
+        min_pval = float(pval[i, j])
+
+        if threshold is not None and min_pval > threshold:
+            break
+        if not np.isfinite(min_pval):
+            break
+
+        matches[i] = (associations[j], min_pval, float(dist_matrix[i, j]))
+
+        # Mark this cluster and association as used
+        pval[i, :] = np.inf
+        pval[:, j] = np.inf
+
+        if verbose and obs_clusters is not None:
+            # Check if any remaining clusters now have no good options
+            for k in range(pval.shape[0]):
+                if k != i and k not in orphaned:
+                    finite_vals = pval[k, :][np.isfinite(pval[k, :])]
+                    has_remaining = len(finite_vals) > 0
+                    all_bad = np.all(finite_vals >= threshold)
+                    if has_remaining and all_bad:
+                        best_remaining = np.min(finite_vals)
+                        name = getattr(
+                            obs_clusters, "names", [None] * pval.shape[0])[k]
+                        print(f"Cluster {k} ({name}) now orphaned "
+                              f"(best remaining p={best_remaining:.3e})")
+                        orphaned.add(k)
+
+    return matches
+
+
 def compute_angular_separation(ra1, dec1, ra2, dec2):
     """
     Compute angular separation between two points on the.
