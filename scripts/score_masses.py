@@ -35,7 +35,12 @@ plt.style.use('science')
 SIM_DISPLAY_NAMES = {
     "csiborg1": "CSiBORG1",
     "csiborg2": "CSiBORG2",
-    "manticore": "Manticore"
+    "manticore": "Manticore-Local"
+}
+
+SIM_LABEL_NAMES = {
+    "csiborg2": r"\texttt{CB2}",
+    "manticore": r"\texttt{CBM}",
 }
 
 CATALOGUE_DISPLAY_NAMES = {
@@ -107,8 +112,10 @@ def extract_y_data(catalogue_matched, y_variable, catalogue_name, h):
         y = np.log10(catalogue_matched["M500"] * h)
         yerr = (catalogue_matched["eM500"] /
                 (catalogue_matched["M500"] * np.log(10)))
-        y_label = (rf'$\log M_{{\rm {cat_display}}} ~ '
-                   rf'[h^{{-1}}\,M_\odot]$')
+        if catalogue_name in ["mcxc", "erass"]:
+            y_label = r'$\log M^{\rm X-ray}_{500\mathrm{c}} ~ [h^{-1}\,M_\odot]$'
+        else:
+            y_label = r'$\log M^{\rm tSZ}_{500\mathrm{c}} ~ [h^{-1}\,M_\odot]$'
         y_description = (f'log10(M_{{obs}}) for {catalogue_name} '
                          f'catalogue [h^-1 M_sun]')
         yerr_description = 'Uncertainty in log10(M_obs) from catalogue errors'
@@ -116,8 +123,8 @@ def extract_y_data(catalogue_matched, y_variable, catalogue_name, h):
         y = np.log10(catalogue_matched["L500"])
         yerr = (catalogue_matched["eL500"] /
                 (catalogue_matched["L500"] * np.log(10)))
-        y_label = (rf'$\log L_{{\rm {cat_display}}} ~ '
-                   rf'[10^{{44}}\,\mathrm{{erg\,s}}^{{-1}}]$')
+        y_label = (r'$\log L^{\rm X-ray}_{500\mathrm{c}} ~ '
+                   r'[10^{44}\,\mathrm{erg\,s}^{-1}]$')
         y_description = (f'log10(L500) for {catalogue_name} catalogue '
                          f'[10^44 erg/s]')
         yerr_description = 'Uncertainty in log10(L500) from catalogue errors'
@@ -125,8 +132,7 @@ def extract_y_data(catalogue_matched, y_variable, catalogue_name, h):
         y = np.log10(catalogue_matched["Y500_scaled"])
         yerr = (catalogue_matched["eY500_scaled"] /
                 (catalogue_matched["Y500_scaled"] * np.log(10)))
-        y_label = (rf'$\log Y_{{500,{{\rm {cat_display}}}}} ~ '
-                   rf'[\mathrm{{arcmin}}^2]$')
+        y_label = r'$\log Y^{\rm tSZ}_{500\mathrm{c}} ~ [\mathrm{arcmin}^2]$'
         y_description = (f'log10(Y500_scaled) for {catalogue_name} '
                          f'catalogue [arcmin^2]')
         yerr_description = 'Uncertainty in log10(Y500_scaled) from catalogue errors'  # noqa
@@ -161,7 +167,8 @@ def save_mcmc_samples(result_dict, output_path, data_dict=None):
 
         if data_dict is not None:
             data_grp = f.create_group('data')
-            for key in ['x', 'xerr', 'y', 'yerr', 'pvals', 'distances']:
+            for key in ['x', 'xerr', 'y', 'yerr', 'z_obs', 'pvals',
+                        'distances']:
                 if key in data_dict:
                     data_grp.create_dataset(key, data=data_dict[key])
             if 'metadata' in data_dict:
@@ -208,89 +215,156 @@ def save_fit_summary(fit_output, corr_results, sig_result, y_variable,
                     f"sigma={slope_sig[1]:.2f}\n")
 
 
-def plot_matching_fraction_vs_mass(catalogue_data, matches, h, output_path,
-                                   catalogue_name):
+def compute_matching_fractions(catalogue_data, matches, h, bin_edges=None,
+                               nbins=5):
     """
-    Plot the fraction of matched clusters as a function of M500.
-
-    Shows cumulative matching fraction: for each mass threshold, what fraction
-    of clusters above that mass are matched.
+    Compute matching fractions in mass bins.
 
     Parameters
     ----------
     catalogue_data : dict
-        Full catalogue with all clusters including M500 and eM500.
+        Catalogue with M500 field.
     matches : list
         Match results (None for unmatched clusters).
     h : float
         Hubble parameter for mass conversion.
+    bin_edges : array, optional
+        Pre-computed bin edges. If None, computed from percentiles.
+    nbins : int
+        Number of percentile-spaced mass bins (used if bin_edges is None).
+
+    Returns
+    -------
+    bin_centres, fractions, errors, bin_edges, n_matched, n_total
+    """
+    logM500 = np.log10(catalogue_data["M500"] * h)
+    is_matched = np.array([m is not None for m in matches])
+
+    # Create percentile-spaced bins if not provided
+    if bin_edges is None:
+        percentiles = np.linspace(0, 100, nbins + 1)
+        bin_edges = np.percentile(logM500, percentiles)
+
+    nbins = len(bin_edges) - 1
+
+    # Compute matching fraction in each bin
+    bin_centres = []
+    fractions = []
+    errors = []
+    for i in range(nbins):
+        mask = (logM500 >= bin_edges[i]) & (logM500 < bin_edges[i + 1])
+        if i == nbins - 1:  # Include right edge for last bin
+            mask = (logM500 >= bin_edges[i]) & (logM500 <= bin_edges[i + 1])
+
+        n_bin = mask.sum()
+        if n_bin == 0:
+            bin_centres.append(0.5 * (bin_edges[i] + bin_edges[i + 1]))
+            fractions.append(np.nan)
+            errors.append(np.nan)
+            continue
+
+        n_matched_bin = is_matched[mask].sum()
+        frac = n_matched_bin / n_bin
+
+        # Poisson error: sqrt(n_matched) / n_total
+        if n_matched_bin > 0:
+            err = np.sqrt(n_matched_bin) / n_bin
+        else:
+            err = 1 / n_bin
+
+        bin_centres.append(np.mean(logM500[mask]))
+        fractions.append(frac)
+        errors.append(err)
+
+    return (np.array(bin_centres), np.array(fractions), np.array(errors),
+            bin_edges, np.sum(is_matched), len(is_matched))
+
+
+def plot_matching_fraction_combined(matching_data, output_path,
+                                    catalogue_name, bin_edges=None):
+    """
+    Plot matching fractions for multiple simulations on a single plot.
+
+    Parameters
+    ----------
+    matching_data : dict
+        Dictionary mapping sim_key to (bin_centres, fractions, errors,
+        n_matched, n_total).
     output_path : Path
         Where to save the figure.
     catalogue_name : str
         Name of the catalogue for labeling.
+    bin_edges : array, optional
+        Bin edges to draw as vertical lines.
     """
-    # Extract masses for all clusters
-    M500_all = catalogue_data["M500"] * h  # Convert to h^-1 M_sun
-    is_matched = np.array([m is not None for m in matches])
+    fig, ax = plt.subplots()
 
-    # Sort by mass (descending)
-    sort_idx = np.argsort(M500_all)[::-1]
-    M500_sorted = M500_all[sort_idx]
-    matched_sorted = is_matched[sort_idx]
+    n_sims = len(matching_data)
+    offsets = np.linspace(-0.005, 0.005, n_sims) if n_sims > 1 else [0]
 
-    # Calculate cumulative matching fraction
-    cumulative_matched = np.cumsum(matched_sorted)
-    cumulative_total = np.arange(1, len(M500_sorted) + 1)
-    matching_fraction = cumulative_matched / cumulative_total
+    for i, (sim_key, (centres, fracs, errs, n_matched, n_total)) in \
+            enumerate(matching_data.items()):
+        sim_label = SIM_LABEL_NAMES.get(sim_key, sim_key)
+        label = rf'${sim_label}$ ({n_matched}/{n_total})'
+        # Clip lower error bar at 0
+        err_lower = np.minimum(errs, fracs)
+        err_upper = errs
+        ax.errorbar(centres + offsets[i], fracs, yerr=[err_lower, err_upper],
+                    fmt='o', capsize=3, markersize=5, label=label)
 
-    # Create figure
-    figsize = (4, 3)
-    fig, ax = plt.subplots(figsize=figsize)
+    if catalogue_name in ["mcxc", "erass"]:
+        ax.set_xlabel(r'$\log M^{\rm X-ray}_{500\mathrm{c}} ~ [h^{-1}\,M_\odot]$')
+    else:
+        ax.set_xlabel(r'$\log M^{\rm tSZ}_{500\mathrm{c}} ~ [h^{-1}\,M_\odot]$')
+    ax.set_ylabel(r'$\mathrm{Matched~fraction}$')
 
-    ax.plot(M500_sorted, matching_fraction * 100, 'o-', markersize=3,
-            linewidth=1)
-    ax.set_xlabel(r'$M_{500\mathrm{c}} ~ [h^{-1} \, M_\odot]$')
-    ax.set_ylabel('Matching fraction above mass [%]')
-    ax.set_xscale('log')
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 105)
+    # Set ylim based on data
+    all_fracs = []
+    all_errs = []
+    for centres, fracs, errs, _, _ in matching_data.values():
+        valid = ~np.isnan(fracs)
+        all_fracs.extend(fracs[valid])
+        all_errs.extend(errs[valid])
+    if all_fracs:
+        upper = np.array(all_fracs) + np.array(all_errs)
+        ymax = max(1.0, np.max(upper) * 1.05)
+    else:
+        ymax = 1.0
+    ax.set_ylim(0, ymax)
 
-    # Add annotation showing total matched
-    n_matched = np.sum(is_matched)
-    n_total = len(is_matched)
-    ax.text(0.05, 0.95,
-            f'{catalogue_name.upper()}\n'
-            f'{n_matched}/{n_total} matched ({100*n_matched/n_total:.1f}%)',
-            transform=ax.transAxes, va='top', fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    # Draw bin edges as vertical dashed lines
+    if bin_edges is not None:
+        lw = ax.spines['bottom'].get_linewidth()
+        for edge in bin_edges:
+            ax.axvline(edge, color='k', ls='--', lw=lw, zorder=0)
+
+    ax.legend(fontsize=8)
+    cat_display = CATALOGUE_DISPLAY_NAMES.get(catalogue_name, catalogue_name)
+    ax.set_title(rf'$\mathrm{{{cat_display}}}$')
 
     fig.tight_layout()
-    fig.savefig(output_path, dpi=450, bbox_inches='tight')
+    fig.savefig(output_path, dpi=450, bbox_inches='tight', format='pdf')
     plt.close(fig)
 
 
 def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
                output_dir, base_name):
-    """Save scatter and corner plots with MNRAS single-column sizing."""
-    sim_display = SIM_DISPLAY_NAMES.get(sim_key, sim_key.capitalize())
-
-    # MNRAS single column width is ~84mm ≈ 3.3 inches
-    scatter_figsize = (4, 3)
-    corner_figsize = (5, 4)
+    """Save scatter and corner plots."""
+    sim_label = SIM_LABEL_NAMES.get(sim_key, sim_key.capitalize())
 
     # Create scatter plot
     add_one_to_one = (y_variable == "M500")
-    fig_scatter, ax_scatter = plt.subplots(figsize=scatter_figsize)
+    fig_scatter, ax_scatter = plt.subplots()
     fig_scatter, ax_scatter = fitter.plot_fit(
         x, y, xerr, yerr,
         ax=ax_scatter,
         add_one_to_one=add_one_to_one
     )
-    ax_scatter.set_xlabel(rf'$\log M_{{\rm {sim_display}}} ~ '
+    ax_scatter.set_xlabel(rf'$\log M^{{{sim_label}}}_{{500c}} ~ '
                           rf'[h^{{-1}}\,M_\odot]$')
     ax_scatter.set_ylabel(y_label)
     fig_scatter.tight_layout()
-    fig_scatter.savefig(output_dir / f"{base_name}_scatter.png", dpi=450,
+    fig_scatter.savefig(output_dir / f"{base_name}_scatter.pdf", dpi=450,
                         bbox_inches='tight')
     plt.close(fig_scatter)
 
@@ -299,9 +373,9 @@ def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
         truths = [5/3, None, None]
     else:
         truths = [1., 0, None]
-    fig_corner = plt.figure(figsize=corner_figsize)
+    fig_corner = plt.figure()
     fig_corner = fitter.plot_corner(fig_corner, truths=truths)
-    fig_corner.savefig(output_dir / f"{base_name}_corner.png", dpi=450,
+    fig_corner.savefig(output_dir / f"{base_name}_corner.pdf", dpi=450,
                        bbox_inches='tight')
     plt.close(fig_corner)
 
@@ -338,35 +412,27 @@ def process_combination(sim_key, catalogue_name, y_variable, cfg, mass_cfg):
         verbose=False,
     )
     (catalogue_matched, assoc_matched, pvals, distances,
-     n_matched, n_total) = result
+     n_matched, n_total, matched_mask, filtered_data) = result
 
-    # Create matching fraction plot if we have matches and this is M500
-    if y_variable == "M500" and len(catalogue_matched) > 0:
-        output_dir = mass_cfg.get("output_dir")
-        if output_dir is not None:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            h = mass_cfg.get("h", 0.68)
-
-            # Create match array for original catalogue
-            if "index" in data:
-                matched_indices = set(catalogue_matched["index"])
-                matches_full = [idx in matched_indices
-                                for idx in data["index"]]
-            else:
-                # Fallback: assume all entries up to n_total, matched first
-                matches_full = ([True] * n_matched
-                                + [False] * (n_total - n_matched))
-
-            fname = f"{sim_key}_{catalogue_name}_matching_fraction.png"
-            plot_path = output_dir / fname
-            plot_matching_fraction_vs_mass(
-                data, matches_full, h, plot_path, catalogue_name
-            )
+    # Compute matching fraction data for M500 variable
+    matching_result = None
+    if y_variable == "M500":
+        h = mass_cfg.get("h", 0.68)
+        matches_full = [True if m else None for m in matched_mask]
+        matching_result = (filtered_data, matches_full, h)
 
     if len(catalogue_matched) == 0:
         fprint("  -> No matches found, skipping.")
-        return
+        return matching_result
+
+    # Sort by observed redshift
+    z_obs = assoc_matched.centroid_obs_redshift
+    sort_idx = np.argsort(z_obs)
+    catalogue_matched = catalogue_matched[sort_idx]
+    assoc_matched = assoc_matched[sort_idx]
+    pvals = pvals[sort_idx]
+    distances = distances[sort_idx]
+    z_obs = z_obs[sort_idx]
 
     # Ensure resampled masses are available and of uniform length
     max_len = max(len(assoc.masses) for assoc in assoc_matched)
@@ -447,6 +513,7 @@ def process_combination(sim_key, catalogue_name, y_variable, cfg, mass_cfg):
         data_dict = {
             'x': x[mask], 'xerr': xerr[mask],
             'y': y[mask], 'yerr': yerr[mask],
+            'z_obs': z_obs[mask],
             'pvals': pvals, 'distances': distances,
             'metadata': {
                 'x_description': (f'log10(M_{{sim}}) for {sim_key} '
@@ -455,6 +522,7 @@ def process_combination(sim_key, catalogue_name, y_variable, cfg, mass_cfg):
                                      'across realisations'),
                 'y_description': y_description,
                 'yerr_description': yerr_description,
+                'z_obs_description': 'Observed redshift (sorted ascending)',
                 'pvals_description': ('Matching p-values between observed '
                                       'clusters and associations'),
                 'distances_description': ('3D comoving distances between '
@@ -488,6 +556,8 @@ def process_combination(sim_key, catalogue_name, y_variable, cfg, mass_cfg):
     fprint(f"  -> Completed ({n_matched}/{n_total} matched "
            f"[{100*n_matched/n_total:.1f}%], {mask.sum()} points fitted)")
 
+    return matching_result
+
 
 def main():
     args = parse_args()
@@ -505,7 +575,7 @@ def main():
         ) from exc
 
     simulations = ["csiborg2", "manticore"]
-    catalogues = ["planck", "mcxc", "erass"]
+    catalogues = ["planck", "erass"]
     # simulations = ["manticore"]
     # catalogues = ["erass"]
 
@@ -527,13 +597,48 @@ def main():
     fprint(f"Processing {total_combinations} combinations")
     fprint("")
 
+    # Collect matching data for combined plots: {catalogue: {sim: data}}
+    matching_raw_data = {cat: {} for cat in catalogues}
+
     completed = 0
     for sim_key in simulations:
         for catalogue_name in catalogues:
             for y_variable in get_y_variables(catalogue_name):
-                process_combination(sim_key, catalogue_name, y_variable,
-                                    cfg, mass_cfg)
+                result = process_combination(sim_key, catalogue_name,
+                                             y_variable, cfg, mass_cfg)
+                # Store M500 matching data
+                if y_variable == "M500" and result is not None:
+                    matching_raw_data[catalogue_name][sim_key] = result
                 completed += 1
+
+    # Create combined matching fraction plots for each catalogue
+    output_dir = mass_cfg.get("output_dir")
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        for catalogue_name in catalogues:
+            raw_data = matching_raw_data[catalogue_name]
+            if not raw_data:
+                continue
+
+            # Compute bin edges from first simulation's data
+            first_sim = list(raw_data.keys())[0]
+            filtered_data, matches, h = raw_data[first_sim]
+            _, _, _, bin_edges, _, _ = compute_matching_fractions(
+                filtered_data, matches, h, nbins=5)
+
+            # Compute matching fractions for all simulations
+            matching_data = {}
+            for sim_key, (fdata, matches, h) in raw_data.items():
+                centres, fracs, errs, _, n_matched, n_total = \
+                    compute_matching_fractions(fdata, matches, h,
+                                               bin_edges=bin_edges)
+                matching_data[sim_key] = (centres, fracs, errs,
+                                          n_matched, n_total)
+
+            plot_path = output_dir / f"{catalogue_name}_matching_fraction.pdf"
+            fprint(f"Saving combined matching plot to {plot_path}")
+            plot_matching_fraction_combined(matching_data, plot_path,
+                                            catalogue_name, bin_edges)
 
     fprint(f"\nCompleted {completed}/{total_combinations} combinations "
            f"successfully.")

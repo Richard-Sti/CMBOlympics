@@ -259,6 +259,11 @@ def collect_luminosity_stats(root):
 def collect_mass_stats(root):
     sample_files = sorted(root.glob("*_samples.hdf5"))
     tensions = collect_mass_tensions(root)
+    spearman_map = {}
+    for rec in collect_spearman(root):
+        if rec["yvar"] == "M500":
+            spearman_map[(rec["sim"], rec["catalogue"], rec["threshold"])] = (
+                rec["spearman"], rec["spearman_err"])
     results = []
     for path in sample_files:
         parts = path.stem.split("_")
@@ -276,6 +281,8 @@ def collect_mass_stats(root):
             slope = np.asarray(mcmc["slope"], dtype=float)
             intercept = np.asarray(mcmc["intercept"], dtype=float)
             sig = np.asarray(mcmc["sig"], dtype=float)
+        spearman, spearman_err = spearman_map.get(
+            (sim, catalogue, threshold), (np.nan, np.nan))
         results.append({
             "sim": sim,
             "catalogue": catalogue,
@@ -286,6 +293,8 @@ def collect_mass_stats(root):
             "intercept_std": float(intercept.std()),
             "sig_mean": float(sig.mean()),
             "sig_std": float(sig.std()),
+            "spearman": spearman,
+            "spearman_err": spearman_err,
             "tension_2d": tensions.get(
                 (sim, catalogue, threshold), {}).get("2d", np.nan),
             "tension_slope": tensions.get(
@@ -374,11 +383,12 @@ def main():
     mass_results = collect_mass_stats(root)
     if mass_results:
         lines.append("\nMass–mass relations (mean ± std for m, c, sigma_int; "
-                     "tensions to 1:1 for joint m,c and marginals):")
+                     "Spearman; tensions to 1:1 for joint m,c and marginals):")
         col_names = ["Simulation", "Threshold",
                      "m_mean", "m_std",
                      "c_mean", "c_std",
                      "sig_mean", "sig_std",
+                     "spearman", "spearman_err",
                      "tension_1to1", "tension_m", "tension_c"]
         col_widths = [max(len(cn), 10) for cn in col_names]
 
@@ -402,6 +412,10 @@ def main():
                     f"{row['intercept_std']:.3f}",
                     f"{row['sig_mean']:.3f}",
                     f"{row['sig_std']:.3f}",
+                    f"{row['spearman']:.3f}"
+                    if np.isfinite(row["spearman"]) else "n/a",
+                    f"{row['spearman_err']:.3f}"
+                    if np.isfinite(row["spearman_err"]) else "n/a",
                     f"{row['tension_2d']:.3f}"
                     if np.isfinite(row["tension_2d"]) else "n/a",
                     f"{row['tension_slope']:.3f}"

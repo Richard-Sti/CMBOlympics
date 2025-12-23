@@ -30,26 +30,257 @@ import cmbo
 import matplotlib.pyplot as plt
 import numpy as np
 import scienceplots  # noqa: F401
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from cmbo.constants import SPEED_OF_LIGHT_KMS
 from cmbo.match.cluster_matching import (compute_matching_matrix_obs,
                                          greedy_global_matching,
                                          )
+from cmbo.utils.coords import heliocentric_to_cmb
 from matplotlib.lines import Line2D
 from scipy.stats import combine_pvalues
 
 plt.style.use("science")
 
+SIM_LABEL_NAMES = {
+    "csiborg2": r"$\texttt{CB2}$",
+    "CSiBORG2": r"$\texttt{CB2}$",
+    "manticore": r"$\texttt{CBM}$",
+    "Manticore": r"$\texttt{CBM}$",
+    "Manticore-Local": r"$\texttt{CBM}$",
+}
+
+
+def match_obs_clusters_to_catalogue(
+    obs_clusters,
+    catalogue,
+    ra_key="RA",
+    dec_key="DEC",
+    z_key="BEST_Z",
+    mass_key=None,
+    max_sep_arcmin=15.0,
+    max_cz_diff_kms=500.0,
+    convert_helio_to_cmb=False,
+    prefer_massive=False,
+):
+    """
+    Match observed clusters to an external catalogue (e.g. eRASS, Planck).
+
+    Parameters
+    ----------
+    obs_clusters : ObservedClusterCatalogue
+        Observed cluster catalogue.
+    catalogue : dict or structured array
+        External catalogue with RA, Dec, and redshift columns.
+    ra_key, dec_key, z_key : str
+        Column names for RA (deg), Dec (deg), and redshift in the catalogue.
+    mass_key : str, optional
+        Column name for mass. Required if prefer_massive=True.
+    max_sep_arcmin : float
+        Maximum angular separation in arcminutes.
+    max_cz_diff_kms : float
+        Maximum cz difference in km/s.
+    convert_helio_to_cmb : bool
+        If True, convert catalogue redshifts from heliocentric to CMB frame.
+    prefer_massive : bool
+        If True, prefer the most massive match instead of the closest.
+
+    Returns
+    -------
+    matches : list
+        For each observed cluster, the index into `catalogue` of the best
+        match, or None if no match found.
+    ang_sep : ndarray
+        Angular separation in arcminutes for each match.
+    delta_cz : ndarray
+        cz difference in km/s for each match.
+    """
+    if prefer_massive and mass_key is None:
+        raise ValueError("mass_key must be provided when prefer_massive=True")
+
+    obs_ra = np.array([c.ra_deg for c in obs_clusters], dtype=float)
+    obs_dec = np.array([c.dec_deg for c in obs_clusters], dtype=float)
+    obs_cz = np.array([
+        c.cz_cmb if c.cz_cmb is not None else np.nan
+        for c in obs_clusters
+    ], dtype=float)
+
+    cat_ra = np.asarray(catalogue[ra_key], dtype=float)
+    cat_dec = np.asarray(catalogue[dec_key], dtype=float)
+    cat_z = np.asarray(catalogue[z_key], dtype=float)
+    if convert_helio_to_cmb:
+        cat_z = heliocentric_to_cmb(cat_z, cat_ra, cat_dec)
+    cat_cz = cat_z * SPEED_OF_LIGHT_KMS
+
+    obs_coord = SkyCoord(obs_ra * u.deg, obs_dec * u.deg)
+    cat_coord = SkyCoord(cat_ra * u.deg, cat_dec * u.deg)
+
+    idx_cat, idx_obs, sep2d, _ = obs_coord.search_around_sky(
+        cat_coord, max_sep_arcmin * u.arcmin
+    )
+
+    n_obs = len(obs_clusters)
+    matches = [None] * n_obs
+    ang_sep = np.full(n_obs, np.nan, dtype=float)
+    delta_cz = np.full(n_obs, np.nan, dtype=float)
+
+    if idx_obs.size:
+        ocz = obs_cz[idx_obs]
+        ccz = cat_cz[idx_cat]
+        valid = (
+            np.isfinite(ocz)
+            & np.isfinite(ccz)
+            & (ocz > 0.0)
+            & (ccz > 0.0)
+            & (np.abs(ocz - ccz) <= max_cz_diff_kms)
+        )
+
+        idx_obs_valid = idx_obs[valid]
+        idx_cat_valid = idx_cat[valid]
+        sep2d_valid = sep2d[valid]
+        dcz_valid = (ocz - ccz)[valid]
+
+        if prefer_massive:
+            # Loop over catalogue entries by decreasing mass
+            cat_masses = np.asarray(catalogue[mass_key], dtype=float)
+            matched_obs = set()
+            for c_idx in np.argsort(cat_masses)[::-1]:
+                # Find observed clusters matching this catalogue entry
+                mask = idx_cat_valid == c_idx
+                if not np.any(mask):
+                    continue
+                candidates_o = idx_obs_valid[mask]
+                candidates_sep = sep2d_valid[mask]
+                candidates_dcz = dcz_valid[mask]
+                # Pick closest unmatched observed cluster
+                seps_arcmin = [s.to_value(u.arcmin) for s in candidates_sep]
+                for j in np.argsort(seps_arcmin):
+                    o_idx = candidates_o[j]
+                    if o_idx not in matched_obs:
+                        matched_obs.add(o_idx)
+                        matches[o_idx] = int(c_idx)
+                        sep_val = candidates_sep[j].to_value(u.arcmin)
+                        ang_sep[o_idx] = float(sep_val)
+                        delta_cz[o_idx] = float(candidates_dcz[j])
+                        break
+        else:
+            # Default: pick closest match for each observed cluster
+            for o_idx, c_idx, sep, dz in zip(
+                idx_obs_valid, idx_cat_valid, sep2d_valid, dcz_valid
+            ):
+                sep_arcmin = float(sep.to_value(u.arcmin))
+                is_closer = sep_arcmin < ang_sep[o_idx]
+                if not np.isfinite(ang_sep[o_idx]) or is_closer:
+                    ang_sep[o_idx] = sep_arcmin
+                    delta_cz[o_idx] = float(dz)
+                    matches[o_idx] = int(c_idx)
+
+    return matches, ang_sep, delta_cz
+
+
+def print_obs_cluster_catalogue_matches(
+    obs_clusters,
+    catalogue,
+    ra_key="RA",
+    dec_key="DEC",
+    z_key="BEST_Z",
+    mass_key="M500",
+    max_sep_arcmin=15.0,
+    max_cz_diff_kms=500.0,
+    convert_helio_to_cmb=False,
+    prefer_massive=True,
+):
+    """
+    Print a table of observed clusters matched to an external catalogue.
+
+    Parameters
+    ----------
+    obs_clusters : ObservedClusterCatalogue
+        Observed cluster catalogue.
+    catalogue : dict or structured array
+        External catalogue with RA, Dec, redshift, and mass columns.
+    ra_key, dec_key, z_key, mass_key : str
+        Column names in the catalogue.
+    max_sep_arcmin : float
+        Maximum angular separation in arcminutes.
+    max_cz_diff_kms : float
+        Maximum cz difference in km/s.
+    convert_helio_to_cmb : bool
+        If True, convert catalogue redshifts from heliocentric to CMB frame.
+    prefer_massive : bool
+        If True, most massive catalogue entries get matched first.
+    """
+    matches, ang_sep, delta_cz = match_obs_clusters_to_catalogue(
+        obs_clusters, catalogue,
+        ra_key=ra_key, dec_key=dec_key, z_key=z_key,
+        mass_key=mass_key,
+        max_sep_arcmin=max_sep_arcmin, max_cz_diff_kms=max_cz_diff_kms,
+        convert_helio_to_cmb=convert_helio_to_cmb,
+        prefer_massive=prefer_massive,
+    )
+
+    masses = np.asarray(catalogue[mass_key], dtype=float)
+    names = obs_clusters.names
+    galactic = obs_clusters.galactic_coordinates
+
+    header = (
+        f"{'Cluster':<22} {'ell [deg]':>10} {'b [deg]':>10} "
+        f"{'Sep [arcmin]':>12} {'dcz [km/s]':>12} {'log M500':>10}"
+    )
+    print(header)
+    print("-" * len(header))
+
+    for i, name in enumerate(names):
+        ell, b = galactic[i]
+        if matches[i] is not None:
+            idx = matches[i]
+            log_m500 = np.log10(masses[idx])
+            print(
+                f"{name:<22} {ell:>10.2f} {b:>10.2f} "
+                f"{ang_sep[i]:>12.2f} {delta_cz[i]:>12.1f} {log_m500:>10.2f}"
+            )
+        else:
+            print(
+                f"{name:<22} {ell:>10.2f} {b:>10.2f} "
+                f"{'--':>12} {'--':>12} {'--':>10}"
+            )
+
 
 def attach_associations_to_obs_clusters(
-    obs_clusters, associations, cfg, verbose=True
+    obs_clusters, associations, cfg, verbose=True,
+    cluster_priority=None, prioritize_hercules=True
 ):
-    """Match associations to observed clusters via greedy matching."""
+    """Match associations to observed clusters via greedy matching.
+
+    Parameters
+    ----------
+    obs_clusters
+        ObservedClusterCatalogue instance.
+    associations
+        List of associations.
+    cfg
+        Configuration dictionary.
+    verbose
+        If True, print progress.
+    cluster_priority
+        Optional list of cluster names in priority order. Clusters earlier
+        in the list are matched first when they have good p-values.
+    prioritize_hercules
+        If True and cluster_priority is None, prioritize matching
+        "Hercules (A2147)" before "Hercules (A2151)". Default: True.
+    """
     if obs_clusters is None:
         raise ValueError("obs_clusters must be provided.")
     if verbose:
         print(f"Using {len(obs_clusters)} observed clusters.")
     if not associations:
         raise ValueError("No associations provided.")
-    pval_matrix, dist_matrix = compute_matching_matrix_obs(
+
+    # Default priority: A2147 before A2151
+    if cluster_priority is None and prioritize_hercules:
+        cluster_priority = ["Hercules (A2147)", "Hercules (A2151)"]
+
+    pval_matrix, dist_matrix, pval_per_halo = compute_matching_matrix_obs(
         obs_clusters,
         associations,
         box_size=None,
@@ -60,6 +291,8 @@ def attach_associations_to_obs_clusters(
         associations,
         obs_clusters=obs_clusters,
         threshold=cfg["analysis"].get("matching_pvalue_threshold", 0.05),
+        cluster_priority=cluster_priority,
+        pval_per_halo=pval_per_halo,
     )
     return matches
 
@@ -160,15 +393,24 @@ def print_cluster_scores(
     if observer_centre.shape != (3,):
         raise ValueError("observer_centre must have shape (3,).")
 
+    # Get observed cluster Cartesian positions for 3D separation
+    obs_cartesian = obs_clusters.icrs_cartesian()
+
+    # Sort by observed redshift
+    redshifts = np.asarray(obs_clusters.redshifts, dtype=float)
+    sort_order = np.argsort(redshifts)
+
     percentiles = tuple(percentiles)
     rows = []
     perc_header = " ".join(
         f"P{int(p):02d}%".rjust(8) for p in percentiles
     ) if percentiles else ""
     base_header = (
-        f"{'Cluster':<22} {'Assoc':>7} {'Frac':>6} "
+        f"{'Cluster':<22} {'z':>6} {'Assoc':>7} {'Frac':>6} "
         f"{'logM [Msun/h]':>14} {'Pfeifer pval':>12} "
-        f"{'Dist [Mpc/h]':>13} {'ell [deg]':>10} {'b [deg]':>10}"
+        f"{'Dist [Mpc/h]':>13} {'Sep [Mpc/h]':>12} "
+        f"{'ell [deg]':>10} {'b [deg]':>10} "
+        f"{'Med tSZ pval':>12}"
     )
     tsz_block = f"{'Frac p<0.05':>14}"
     if perc_header:
@@ -185,7 +427,9 @@ def print_cluster_scores(
 
     tsz_cluster_pvals = []
 
-    for idx, name in enumerate(names):
+    for idx in sort_order:
+        name = names[idx]
+        z = redshifts[idx]
         entry = matches[idx]
         assoc_label = "-"
         frac_present = np.nan
@@ -193,6 +437,7 @@ def print_cluster_scores(
         match_p = np.nan
         combined = np.nan
         centroid_dist = np.nan
+        separation_3d = np.nan
         ell_deg = np.nan
         b_deg = np.nan
         perc_vals = np.full(len(percentiles), np.nan)
@@ -210,6 +455,15 @@ def print_cluster_scores(
             masses = masses[np.isfinite(masses) & (masses > 0)]
             if masses.size:
                 median_logm = float(np.nanmedian(np.log10(masses)))
+
+            # Compute 3D separation in redshift space
+            obs_pos = obs_cartesian[idx]
+            box_size = getattr(assoc, "box_size", None)
+            if box_size is not None:
+                assoc_centroid = np.mean(
+                    assoc.redshift_position - box_size / 2, axis=0)
+                separation_3d = float(np.linalg.norm(obs_pos - assoc_centroid))
+
             if observer_centre is not None:
                 try:
                     ell_deg, b_deg = assoc.centroid_galactic_angular
@@ -239,19 +493,23 @@ def print_cluster_scores(
             match_display = None
         else:
             match_display = match_p if np.isfinite(match_p) else 1.0
-        match_display_str = (
-            f"{match_display:>12.1e}" if match_display is not None else " " * 12  # noqa
-        )
+        if match_display is not None:
+            match_display_str = f"{match_display:>12.1e}"
+        else:
+            match_display_str = " " * 12
 
         row = (
             f"{name:<22} "
+            f"{z:>6.4f} "
             f"{str(assoc_label):>7} "
             f"{frac_present:>6.2f} "
             f"{median_logm:>14.2f} "
             f"{match_display_str} "
             f"{centroid_dist:>13.3f} "
+            f"{separation_3d:>12.3f} "
             f"{ell_deg:>10.2f} "
             f"{b_deg:>10.2f} "
+            f"{median_tsz:>12.1e} "
             f"{frac_low_p:>14.2%}"
         )
         if percentiles:
@@ -261,12 +519,14 @@ def print_cluster_scores(
         rows.append(
             {
                 "name": name,
+                "redshift": z,
                 "association_label": assoc_label,
                 "fraction_present": frac_present,
                 "median_log_mass": median_logm,
                 "match_p": match_p,
                 "combined_p": combined,
                 "distance_mpc_h": centroid_dist,
+                "separation_3d_mpc_h": separation_3d,
                 "ell_deg": ell_deg,
                 "b_deg": b_deg,
                 "frac_low_p": frac_low_p,
@@ -294,6 +554,13 @@ def print_cluster_scores(
                 method=method,
             )
             print(f"  - {method:<17}: {combined_val: .3e}")
+
+    separations = np.array([r["separation_3d_mpc_h"] for r in rows])
+    separations = separations[np.isfinite(separations)]
+    if separations.size:
+        mean_sep = np.mean(separations)
+        std_sep = np.std(separations)
+        print(f"\nMean 3D separation: {mean_sep:.2f} +/- {std_sep:.2f} Mpc/h")
 
 
 def plot_cluster_pvalue_percentiles(
@@ -424,6 +691,7 @@ def plot_cluster_pvalue_percentiles(
             raise ValueError(
                 "suite_labels must match the number of match collections."
             )
+        suite_labels = [SIM_LABEL_NAMES.get(lbl, lbl) for lbl in suite_labels]
     else:
         suite_labels = [f"Suite {idx + 1}" for idx in range(num_suites)]
     if suite_colors is not None:
@@ -435,7 +703,8 @@ def plot_cluster_pvalue_percentiles(
             )
         if len(suite_colors) < num_suites:
             raise ValueError(
-                "suite_colors sequence must provide at least one entry per suite."  # noqa
+                "suite_colors sequence must provide at least one entry "
+                "per suite."
             )
         suite_colors = list(suite_colors)
 
@@ -474,7 +743,7 @@ def plot_cluster_pvalue_percentiles(
     with plt.style.context("science"):
         if ax is None:
             # width = max(8.0, 0.7 * len(filtered_names))
-            fig, ax = plt.subplots(figsize=(9, 3.5))
+            fig, ax = plt.subplots(figsize=(9, 2.5))
         else:
             fig = ax.figure
 
@@ -577,55 +846,104 @@ def plot_pfeifer_vs_tsz(
     matches,
     default_pfeifer=1.0,
     default_tsz=0.5,
+    percentiles=(16, 84),
     ax=None,
 ):
     """
-    Plot correlation between Pfeifer matching p-values and median tSZ p-values.
+    Plot correlation between LUM matching p-values and median tSZ p-values.
     """
-    pfeifer_vals = []
+    lum_vals = []
+    lum_lo = []
+    lum_hi = []
     tsz_vals = []
+    tsz_lo = []
+    tsz_hi = []
     labels = []
     for idx, entry in enumerate(matches):
         if entry is None:
-            pfeifer_vals.append(default_pfeifer)
+            lum_vals.append(default_pfeifer)
+            lum_lo.append(default_pfeifer)
+            lum_hi.append(default_pfeifer)
             tsz_vals.append(default_tsz)
+            tsz_lo.append(default_tsz)
+            tsz_hi.append(default_tsz)
             labels.append(idx)
             continue
         assoc, match_p, _ = entry
-        pfeifer_vals.append(
-            match_p if np.isfinite(match_p) else default_pfeifer
-        )
-        tsz_vals.append(
-            float(getattr(assoc, "median_pval", default_tsz))
-            if np.isfinite(getattr(assoc, "median_pval", np.nan))
-            else default_tsz
-        )
+
+        # LUM (x-axis)
+        lum_median = match_p if np.isfinite(match_p) else default_pfeifer
+        lum_vals.append(lum_median)
+
+        lum_pvals = np.asarray(getattr(assoc, "lum_pvals", []), dtype=float)
+        finite_lum = lum_pvals[np.isfinite(lum_pvals)]
+        if len(finite_lum) >= 2:
+            lo_lum, hi_lum = np.percentile(finite_lum, percentiles)
+        else:
+            lo_lum, hi_lum = lum_median, lum_median
+        lum_lo.append(lo_lum)
+        lum_hi.append(hi_lum)
+
+        # tSZ (y-axis)
+        median_pval = float(getattr(assoc, "median_pval", default_tsz))
+        if not np.isfinite(median_pval):
+            median_pval = default_tsz
+        tsz_vals.append(median_pval)
+
+        halo_pvals = np.asarray(
+            getattr(assoc, "halo_pvals", []), dtype=float)
+        finite = halo_pvals[np.isfinite(halo_pvals)]
+        if len(finite) >= 2:
+            lo, hi = np.percentile(finite, percentiles)
+        else:
+            lo, hi = median_pval, median_pval
+        tsz_lo.append(lo)
+        tsz_hi.append(hi)
         labels.append(idx)
 
-    pfeifer_vals = np.clip(np.asarray(pfeifer_vals, dtype=float), 1e-6, 1.0)
+    lum_vals = np.clip(np.asarray(lum_vals, dtype=float), 1e-6, 1.0)
+    lum_lo = np.clip(np.asarray(lum_lo, dtype=float), 1e-6, 1.0)
+    lum_hi = np.clip(np.asarray(lum_hi, dtype=float), 1e-6, 1.0)
     tsz_vals = np.clip(np.asarray(tsz_vals, dtype=float), 1e-6, 1.0)
+    tsz_lo = np.clip(np.asarray(tsz_lo, dtype=float), 1e-6, 1.0)
+    tsz_hi = np.clip(np.asarray(tsz_hi, dtype=float), 1e-6, 1.0)
+
+    xerr_lo = lum_vals - lum_lo
+    xerr_hi = lum_hi - lum_vals
+    yerr_lo = tsz_vals - tsz_lo
+    yerr_hi = tsz_hi - tsz_vals
 
     with plt.style.context("science"):
         if ax is None:
-            fig, ax = plt.subplots(figsize=(5.0, 4.0))
+            fig, ax = plt.subplots()
         else:
             fig = ax.figure
 
-        ax.scatter(pfeifer_vals, tsz_vals, c="tab:blue", s=30, alpha=0.8)
+        ax.errorbar(
+            lum_vals, tsz_vals,
+            xerr=[xerr_lo, xerr_hi],
+            yerr=[yerr_lo, yerr_hi],
+            fmt='o', c="#731dd8", ms=5, alpha=0.8,
+            elinewidth=1.0, capsize=3,
+        )
         ax.set_xscale("log")
         ax.set_yscale("log")
-        ax.set_xlabel(r"$p_{\mathrm{Pfeifer}}$")
-        ax.set_ylabel(r"$p_{\mathrm{tSZ,median}}$")
+        ax.set_xlabel(r"$p_{\rm LUM}$")
+        ax.set_ylabel(r"$p_{\mathrm{tSZ}}$")
         ax.grid(False)
-        x_min, x_max = ax.get_xlim()
-        line_x = np.logspace(np.log10(x_min), np.log10(x_max), 1000)
-        ax.plot(
-            line_x,
-            line_x,
-            color="red",
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        lower = min(xlim[0], ylim[0])
+        upper = max(xlim[1], ylim[1])
+        ax.set_xlim(lower, upper)
+        ax.set_ylim(lower, upper)
+        ax.axline(
+            (1e-3, 1e-3), (1, 1),
+            color="#ef476f",
             linestyle="--",
-            linewidth=1.0,
-            alpha=0.5,
+            label=r"$1$:$1$",
         )
+        ax.legend(frameon=False)
+        fig.tight_layout()
 
     return fig, ax
