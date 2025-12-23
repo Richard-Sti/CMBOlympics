@@ -658,7 +658,8 @@ def plot_cluster_cutout(cutout, extent, ell, b, ellc, bc,
 def _plot_cutout_on_axis(ax, obs_cluster, association=None,
                          obs_pos=None, zoom_arcmin=None,
                          cmap=None, show_legend=True,
-                         show_xlabel=True, show_ylabel=True):
+                         show_xlabel=True, show_ylabel=True,
+                         all_clusters=None, current_idx=None):
     """
     Plot cluster cutout on a given axis (helper function).
 
@@ -682,11 +683,18 @@ def _plot_cutout_on_axis(ax, obs_cluster, association=None,
         Whether to show x-axis label. Default: True.
     show_ylabel
         Whether to show y-axis label. Default: True.
+    all_clusters
+        Optional ObservedClusterCatalogue to check for other clusters
+        in the field of view.
+    current_idx
+        Index of the current cluster in all_clusters (to exclude it).
 
     Returns
     -------
     im
         The image object from imshow.
+    nearby_clusters : list of str
+        Names of other clusters found within the field of view.
     """
     if cmap is None:
         cmap = cmr.fusion_r
@@ -729,6 +737,28 @@ def _plot_cutout_on_axis(ax, obs_cluster, association=None,
                    edgecolor="k", lw=0.5, zorder=3,
                    label="Association")
 
+    # Check for other clusters in the field of view
+    nearby_clusters = []
+    if all_clusters is not None:
+        # Determine field of view limits
+        if zoom_arcmin is not None:
+            fov_limit = zoom_arcmin
+        else:
+            fov_limit = max(abs(extent[0]), abs(extent[1]),
+                            abs(extent[2]), abs(extent[3]))
+
+        for k, other_cluster in enumerate(all_clusters):
+            if k == current_idx:
+                continue
+            ell_other, b_other = other_cluster.galactic_coordinates
+            x_other, y_other = tangent_offsets_arcmin(
+                ell_other, b_other, ellc, bc
+            )
+            if abs(x_other) <= fov_limit and abs(y_other) <= fov_limit:
+                ax.scatter(x_other, y_other, marker="s", c="cyan", s=24,
+                           edgecolor="k", lw=1, zorder=5)
+                nearby_clusters.append(other_cluster.name)
+
     if show_xlabel:
         ax.set_xlabel(r"$\xi\,[\mathrm{arcmin}]$")
     if show_ylabel:
@@ -746,7 +776,7 @@ def _plot_cutout_on_axis(ax, obs_cluster, association=None,
         ax.set_xlim(-zoom_arcmin, zoom_arcmin)
         ax.set_ylim(-zoom_arcmin, zoom_arcmin)
 
-    return im
+    return im, nearby_clusters
 
 
 def plot_observed_cluster_cutout(obs_cluster, association=None,
@@ -794,7 +824,7 @@ def plot_observed_cluster_cutout(obs_cluster, association=None,
     with plt.style.context("science"):
         fig, ax = plt.subplots(figsize=(6, 5))
 
-        im = _plot_cutout_on_axis(
+        im, _ = _plot_cutout_on_axis(
             ax, obs_cluster, association=association, obs_pos=obs_pos,
             zoom_arcmin=zoom_arcmin, cmap=cmap, show_legend=False
         )
@@ -917,13 +947,19 @@ def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
             is_leftmost_col = (col == 0)
 
             # Plot on this axis
-            im = _plot_cutout_on_axis(
+            im, nearby = _plot_cutout_on_axis(
                 ax, obs, association=assoc, obs_pos=obs_pos,
                 zoom_arcmin=zoom_arcmin, cmap=cmap,
                 show_legend=show_legend,
                 show_xlabel=is_bottom_row,
-                show_ylabel=is_leftmost_col
+                show_ylabel=is_leftmost_col,
+                all_clusters=obs_clusters,
+                current_idx=cluster_idx
             )
+
+            # Print nearby clusters if any
+            if nearby:
+                print(f"{obs.name}: nearby clusters in FOV: {nearby}")
 
             # Add colorbar to this panel (no label)
             fig.colorbar(im, ax=ax, pad=0.01, fraction=0.046, aspect=20)

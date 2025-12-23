@@ -61,6 +61,8 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
     dist_matrix : ndarray of shape (n_obs, n_associations)
         Distance between association centroid and observed cluster position
         in Mpc/h.
+    pval_per_halo : dict
+        Dictionary mapping (obs_idx, assoc_idx) to per-halo p-value arrays.
     """
     if cosmo_params is None:
         cosmo_params = {
@@ -104,6 +106,7 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
 
     pval_matrix = np.empty((n_obs, n_assoc))
     dist_matrix = np.empty((n_obs, n_assoc))
+    pval_per_halo = {}
 
     if use_median_mass:
         median_log_mass = np.median(
@@ -128,6 +131,7 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
             pval, _, _ = matcher.cdf_per_halo(x_obs[i])
             pval_matrix[i, j] = np.median(pval)
             dist_matrix[i, j] = np.linalg.norm(x_obs[i] - centroid)
+            pval_per_halo[(i, j)] = pval
 
     if verbose:
         for i in range(n_obs):
@@ -135,7 +139,7 @@ def compute_matching_matrix_cartesian(x_obs, associations, box_size=None,
             if min_pval > 0.05:
                 print(f"Position {i}: min p-value = {min_pval:.3e}")
 
-    return pval_matrix, dist_matrix
+    return pval_matrix, dist_matrix, pval_per_halo
 
 
 def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
@@ -173,9 +177,11 @@ def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
         Matrix of average p-values with shape ``(n_obs, n_assoc)``.
     dist_matrix : ndarray
         Matrix of centroid distances (Mpc/h) with the same shape.
+    pval_per_halo : dict
+        Dictionary mapping (obs_idx, assoc_idx) to per-halo p-value arrays.
     """
     x_obs = obs_clusters.icrs_cartesian()
-    pval_matrix, dist_matrix = compute_matching_matrix_cartesian(
+    pval_matrix, dist_matrix, pval_per_halo = compute_matching_matrix_cartesian(
         x_obs,
         associations,
         box_size,
@@ -193,12 +199,14 @@ def compute_matching_matrix_obs(obs_clusters, associations, box_size=None,
             if verbose:
                 print(f"{name}: min p-value = {min_pval:.3e}")
 
-    return pval_matrix, dist_matrix
+    return pval_matrix, dist_matrix, pval_per_halo
 
 
 def greedy_global_matching(pval_matrix, dist_matrix, associations,
                            obs_clusters=None, threshold=0.05,
-                           mass_preference_threshold=None, verbose=True):
+                           mass_preference_threshold=None,
+                           cluster_priority=None, pval_per_halo=None,
+                           verbose=True):
     """
     Assign association-cluster matches using global greedy algorithm.
 
@@ -211,6 +219,10 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
     threshold, it selects the pair with the most massive association (by mean
     log mass). If no pairs satisfy this criterion, it falls back to selecting
     the lowest p-value pair.
+
+    When `cluster_priority` is set, clusters earlier in the priority list are
+    matched first when they have p-values below threshold. This helps resolve
+    conflicts when nearby clusters compete for the same association.
 
     Parameters
     ----------
@@ -228,6 +240,13 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
         When set, among pairs with p-value below this threshold, prefer the
         association with the highest mean log mass. If None, always pick the
         lowest p-value pair (default behavior).
+    cluster_priority : list of str, optional
+        List of cluster names in priority order. Clusters appearing earlier
+        in this list are matched first when they have p-values below threshold.
+        Default: None (no priority ordering).
+    pval_per_halo : dict, optional
+        Dictionary mapping (obs_idx, assoc_idx) to per-halo p-value arrays.
+        If provided, stores these on matched associations as `lum_pvals`.
     verbose : bool, optional
         If True, print matching progress and eliminated clusters.
 
@@ -235,7 +254,7 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
     -------
     matches : list
         List of length n_obs_clusters. For each cluster:
-        - (association_idx, association, pval, distance) if matched
+        - (association, pval, distance) if matched
         - None if not matched
     """
     pval = pval_matrix.copy()
@@ -248,21 +267,51 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
         assoc_mean_log_mass = np.array([np.mean(np.log10(assoc.masses))
                                         for assoc in associations])
 
+    # Build cluster priority index mapping
+    cluster_priority_idx = {}
+    if cluster_priority is not None and obs_clusters is not None:
+        names = getattr(obs_clusters, "names", [])
+        for priority_rank, priority_name in enumerate(cluster_priority):
+            for cluster_idx, name in enumerate(names):
+                if name == priority_name:
+                    cluster_priority_idx[cluster_idx] = priority_rank
+                    break
+
     while True:
-        if mass_preference_threshold is not None:
-            good_matches = pval < mass_preference_threshold
-            if np.any(good_matches):
-                good_indices = np.where(good_matches)
-                j_candidates = good_indices[1]
-                best_mass_idx = np.argmax(assoc_mean_log_mass[j_candidates])
-                i = int(good_indices[0][best_mass_idx])
-                j = int(j_candidates[best_mass_idx])
+        # Check for priority clusters with good matches first
+        i, j = None, None
+        if cluster_priority_idx and threshold is not None:
+            # Find priority clusters that have good matches (p < threshold)
+            for cluster_idx in sorted(cluster_priority_idx.keys(),
+                                       key=lambda x: cluster_priority_idx[x]):
+                if matches[cluster_idx] is not None:
+                    continue  # Already matched
+                row_pvals = pval[cluster_idx, :]
+                valid_mask = row_pvals < threshold
+                if np.any(valid_mask):
+                    # Pick best association for this priority cluster
+                    best_j = np.argmin(row_pvals)
+                    if row_pvals[best_j] < threshold:
+                        i, j = cluster_idx, int(best_j)
+                        break
+
+        # Fall back to standard selection if no priority match found
+        if i is None:
+            if mass_preference_threshold is not None:
+                good_matches = pval < mass_preference_threshold
+                if np.any(good_matches):
+                    good_indices = np.where(good_matches)
+                    j_candidates = good_indices[1]
+                    best_mass_idx = np.argmax(
+                        assoc_mean_log_mass[j_candidates])
+                    i = int(good_indices[0][best_mass_idx])
+                    j = int(j_candidates[best_mass_idx])
+                else:
+                    i, j = np.unravel_index(np.argmin(pval), pval.shape)
+                    i, j = int(i), int(j)
             else:
                 i, j = np.unravel_index(np.argmin(pval), pval.shape)
                 i, j = int(i), int(j)
-        else:
-            i, j = np.unravel_index(np.argmin(pval), pval.shape)
-            i, j = int(i), int(j)
 
         min_pval = float(pval[i, j])
 
@@ -271,7 +320,10 @@ def greedy_global_matching(pval_matrix, dist_matrix, associations,
         if not np.isfinite(min_pval):
             break
 
-        matches[i] = (associations[j], min_pval, float(dist_matrix[i, j]))
+        assoc = associations[j]
+        if pval_per_halo is not None and (i, j) in pval_per_halo:
+            assoc.lum_pvals = pval_per_halo[(i, j)]
+        matches[i] = (assoc, min_pval, float(dist_matrix[i, j]))
 
         # Mark this cluster and association as used
         pval[i, :] = np.inf

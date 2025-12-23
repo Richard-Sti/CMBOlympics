@@ -18,8 +18,11 @@ n_jobs = 4
 # --- Input Maps ---
 # Paths to the HEALPix maps for the tSZ signal and random pointings.
 [input_map]
-signal_map = "data/deproject_CMB_CIB_default_standard_full.fits"
-random_pointing = "data/deproject_CMB_CIB_default_standard_full_RAND_POINTING.hdf5"
+# signal_map = "data/deproject_CMB_CIB_default_standard_full.fits"
+# random_pointing = "data/deproject_CMB_CIB_default_standard_full_RAND_POINTING.hdf5"
+signal_map = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
+random_pointing = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
+
 # FWHM in arcminutes for smoothing the input map.
 smooth_fwhm = 9.6
 
@@ -101,13 +104,13 @@ return_random_profiles = false     # Save all individual random 1D profiles to t
 z_max = 0.05                   # Maximum redshift for matching
 m500_min = 1e14                 # Minimum M500 for matching [M_sun]
 max_angular_sep = 60.0          # Classical matching: max angular separation [arcmin]
-max_delta_cz = 350.0            # Classical matching: max |cz| difference [km/s]
+max_delta_cz = 300.0            # Classical matching: max |cz| difference [km/s]
 median_halo_tsz_pval_max = 0.1  # Classical matching: max median halo pval (optional)
 use_median_halo_tsz_pval = false # Classical matching: minimise median halo pval instead of distance
 min_member_fraction = 0.5       # Classical matching: minimum member fraction passing angular/redshift cuts
-remove_near_target = true       # If true, drop associations near the Shapley A3581 target
-target_ra_deg = 201.989583      # Shapley A3581 RA in degrees (used when remove_near_target is true)
-target_dec_deg = -31.5025       # Shapley A3581 DEC in degrees
+remove_near_target = true       # If true, drop associations near the Shapley A3558 target
+target_ra_deg = 201.989583      # Shapley A3558 RA in degrees (used when remove_near_target is true)
+target_dec_deg = -31.5025       # Shapley A3558 DEC in degrees
 target_cz_kms = 14784.0         # Target cz in km/s
 remove_max_sep_arcmin = 180.0   # Angular window for removing associations (arcmin)
 remove_max_cz_diff_kms = 500.0  # |cz - target_cz_kms| window for removing associations (km/s)

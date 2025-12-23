@@ -99,6 +99,9 @@ class HaloAssociation:
     halo_signals: np.ndarray = field(default=None)
     halo_pvals: np.ndarray = field(default=None)
 
+    # LUM matching p-values (populated by greedy_global_matching)
+    lum_pvals: np.ndarray = field(default=None)
+
     def keys(self):
         """Return a list of available data fields."""
         keys = [
@@ -362,6 +365,12 @@ class HaloAssociationList(list):
     Behaves like a regular list but provides properties for computing
     statistics across all associations.
     """
+
+    def __getitem__(self, key):
+        if isinstance(key, np.ndarray):
+            return HaloAssociationList([list.__getitem__(self, int(i))
+                                        for i in key])
+        return list.__getitem__(self, key)
 
     @property
     def mean_log_mass(self):

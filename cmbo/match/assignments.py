@@ -87,6 +87,9 @@ def match_catalogue_to_associations(
         Number of successfully matched objects.
     n_total : int
         Total number of objects in the catalogue.
+    matches_mask : ndarray of bool
+        Boolean mask indicating which entries in the input catalogue were
+        matched (same length as input catalogue).
     """
     if not associations:
         raise ValueError("At least one association is required.")
@@ -141,7 +144,7 @@ def match_catalogue_to_associations(
 
     return (filtered_catalogue, matched_associations,
             pvals[matched_mask], distances[matched_mask],
-            n_matched, n_total)
+            n_matched, n_total, matched_mask)
 
 
 def match_planck_catalog_to_associations(
@@ -201,7 +204,7 @@ def match_planck_catalog_to_associations(
 
     filtered_data = mask_structured_array(data_tsz, selection)
 
-    return match_catalogue_to_associations(
+    result = match_catalogue_to_associations(
         filtered_data,
         associations,
         ra_key="RA",
@@ -215,6 +218,7 @@ def match_planck_catalog_to_associations(
         cosmo_params=cosmo_params,
         verbose=verbose,
     )
+    return result + (filtered_data,)
 
 
 def match_mcxc_catalog_to_associations(
@@ -275,7 +279,7 @@ def match_mcxc_catalog_to_associations(
     kwargs.pop("median_halo_tsz_pval_max", None)
     kwargs.pop("use_median_halo_tsz_pval", None)
 
-    return match_catalogue_to_associations(
+    result = match_catalogue_to_associations(
         filtered_data,
         associations,
         ra_key="RA",
@@ -288,6 +292,7 @@ def match_mcxc_catalog_to_associations(
         verbose=verbose,
         **kwargs,
     )
+    return result + (filtered_data,)
 
 
 def match_erass_catalog_to_associations(
@@ -347,7 +352,7 @@ def match_erass_catalog_to_associations(
     kwargs.pop("median_halo_tsz_pval_max", None)
     kwargs.pop("use_median_halo_tsz_pval", None)
 
-    return match_catalogue_to_associations(
+    result = match_catalogue_to_associations(
         filtered_data,
         associations,
         ra_key="RA",
@@ -360,3 +365,4 @@ def match_erass_catalog_to_associations(
         verbose=verbose,
         **kwargs,
     )
+    return result + (filtered_data,)

@@ -24,6 +24,14 @@ from matplotlib.lines import Line2D
 
 from cmbo.io import TSZMassBinResults
 
+SIM_LABEL_NAMES = {
+    "csiborg2": r"$\texttt{CB2}$",
+    "CSiBORG2": r"$\texttt{CB2}$",
+    "manticore": r"$\texttt{CBM}$",
+    "Manticore": r"$\texttt{CBM}$",
+    "Manticore-Local": r"$\texttt{CBM}$",
+}
+
 
 def load_mass_bin_results(
     cfg,
@@ -267,9 +275,13 @@ def plot_stacked_profiles(
             raise ValueError(
                 "row_labels must match the number of result objects."
             )
+        row_labels = [SIM_LABEL_NAMES.get(lbl, lbl) for lbl in row_labels]
     else:
         row_labels = [
-            Path(getattr(item, "path", f"suite_{idx}")).stem
+            SIM_LABEL_NAMES.get(
+                Path(getattr(item, "path", f"suite_{idx}")).stem,
+                Path(getattr(item, "path", f"suite_{idx}")).stem
+            )
             for idx, item in enumerate(res_list)
         ]
     nbins_to_plot = min(block["nbins"] for block in blocks)
@@ -301,7 +313,8 @@ def plot_stacked_profiles(
 
         lw = plt.rcParams["lines.linewidth"]
         any_tfit_used = False
-        for block_idx, (block, row_label) in enumerate(zip(blocks, row_labels)):
+        block_iter = enumerate(zip(blocks, row_labels))
+        for block_idx, (block, row_label) in block_iter:
             profile_axes = axes[block_idx, 0]
             sig_axes = axes[block_idx, 1]
             radii_norm = block["radii_norm"]
@@ -429,7 +442,8 @@ def plot_stacked_profiles(
                     )
                     if multi_sim:
                         pv_clean = pv.copy()
-                        pv_clean[~np.isfinite(pv_clean) | (pv_clean <= 0)] = np.nan
+                        invalid = ~np.isfinite(pv_clean) | (pv_clean <= 0)
+                        pv_clean[invalid] = np.nan
                         low = np.nanpercentile(pv_clean, 16.0, axis=0)
                         high = np.nanpercentile(pv_clean, 84.0, axis=0)
                         band = (
@@ -463,9 +477,10 @@ def plot_stacked_profiles(
                 r"$\langle y(<\theta) \rangle$ (mean enclosed)")
             if block_idx == 0:
                 profile_axes[0].legend(frameon=False, loc="upper right")
-            y_label = (
-                r"$p_{t}(\theta)$" if any_tfit_used else r"$p_{\rm KS}(\theta)$"
-            )
+            if any_tfit_used:
+                y_label = r"$p_{t}(\theta)$"
+            else:
+                y_label = r"$p_{\rm KS}(\theta)$"
             sig_axes[0].set_ylabel(y_label)
             for ax_sig in sig_axes:
                 ax_sig.set_xlabel(theta_label)
@@ -558,7 +573,8 @@ def plot_cutout_maps(
             if isinstance(simulation, int):
                 if simulation < 0 or simulation >= nsim:
                     raise IndexError(
-                        f"Simulation index {simulation} outside [0, {nsim - 1}]."
+                        f"Simulation index {simulation} outside "
+                        f"[0, {nsim - 1}]."
                     )
                 sel_idx = simulation
             else:
@@ -640,9 +656,13 @@ def plot_cutout_maps(
     if row_labels is not None:
         if len(row_labels) != len(blocks):
             raise ValueError("row_labels must match number of result objects.")
+        row_labels = [SIM_LABEL_NAMES.get(lbl, lbl) for lbl in row_labels]
     else:
         row_labels = [
-            Path(block["path"]).stem if block["path"] else f"suite_{idx}"
+            SIM_LABEL_NAMES.get(
+                Path(block["path"]).stem if block["path"] else f"suite_{idx}",
+                Path(block["path"]).stem if block["path"] else f"suite_{idx}"
+            )
             for idx, block in enumerate(blocks)
         ]
 
@@ -829,12 +849,14 @@ def plot_stacked_profiles_overlay(
         res_list = [res]
     else:
         if not isinstance(res, Sequence) or isinstance(res, (str, bytes)):
-            raise ValueError("res must be a TSZMassBinResults instance or a sequence.")
+            raise ValueError(
+                "res must be a TSZMassBinResults instance or a sequence.")
         if not res:
             raise ValueError("res sequence must not be empty.")
         for idx, entry in enumerate(res):
             if not hasattr(entry, "iter_simulations"):
-                raise ValueError(f"Element {idx} of res is not a TSZMassBinResults.")
+                raise ValueError(
+                    f"Element {idx} of res is not a TSZMassBinResults.")
         res_list = list(res)
 
     blocks = [_prepare_profile_block(item, nbins, simulation)
@@ -848,9 +870,13 @@ def plot_stacked_profiles_overlay(
     if suite_labels is not None:
         if len(suite_labels) != nsuites:
             raise ValueError("suite_labels must match the number of suites.")
+        suite_labels = [SIM_LABEL_NAMES.get(lbl, lbl) for lbl in suite_labels]
     else:
         suite_labels = [
-            Path(getattr(item, "path", f"suite_{idx}")).stem
+            SIM_LABEL_NAMES.get(
+                Path(getattr(item, "path", f"suite_{idx}")).stem,
+                Path(getattr(item, "path", f"suite_{idx}")).stem
+            )
             for idx, item in enumerate(res_list)
         ]
 
@@ -890,13 +916,15 @@ def plot_stacked_profiles_overlay(
             )
 
         fig, axes = plt.subplots(
-            1,
             nbins_to_plot,
-            figsize=(9, 3.0),
+            1,
+            figsize=(3.5, 2.5 * nbins_to_plot),
             constrained_layout=True,
         )
         if nbins_to_plot == 1:
             axes = [axes]
+        else:
+            axes = list(axes)
         lw = plt.rcParams["lines.linewidth"]
 
         x_min = min(block["x_min"] for block in blocks)
@@ -980,10 +1008,10 @@ def plot_stacked_profiles_overlay(
                         rand_mean = rm[0]
                         rand_spread = re[0]
 
-                    rand_color = random_color_cycle[suite_idx % len(random_color_cycle)]
-                    label_rand = (
-                        "Random" if suite_idx == len(blocks) - 1 and j_bin == 0 else None
-                    )
+                    n_colors = len(random_color_cycle)
+                    rand_color = random_color_cycle[suite_idx % n_colors]
+                    is_last = suite_idx == len(blocks) - 1 and j_bin == 0
+                    label_rand = "Random" if is_last else None
                     ax.plot(
                         radii_norm,
                         rand_mean,
@@ -1015,14 +1043,14 @@ def plot_stacked_profiles_overlay(
                         lw=lw * 0.3,
                         color=rand_color,
                         alpha=0.25,
-                )
+                        )
 
             ax.axhline(0.0, lw=lw * 0.7, alpha=0.6, color="k")
             ax.set_xlim(x_min, x_max)
-            ax.set_xlabel(theta_label)
+            if j_bin == nbins_to_plot - 1:
+                ax.set_xlabel(theta_label)
+            ax.set_ylabel(r"$\langle y(<\theta) \rangle$")
             ax.legend(frameon=False, loc="upper right", fontsize="small")
-
-        axes[0].set_ylabel(r"$\langle y(<\theta) \rangle$ (mean enclosed)")
 
     plt.close()
     return fig, axes
