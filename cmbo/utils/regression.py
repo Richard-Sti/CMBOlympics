@@ -453,8 +453,8 @@ class BaseLinearFitter:
         fig = ax.figure
 
         # Plot all data with errorbars
-        ax.errorbar(x, y, xerr=xerr, yerr=yerr,
-                    fmt='o', capsize=3, label='Data', zorder=2)
+        ax.errorbar(x, y, xerr=xerr, yerr=yerr, fmt='o', capsize=3,
+                    markersize=3, zorder=2)
 
         # Generate prediction band
         xlim = ax.get_xlim()
@@ -467,8 +467,8 @@ class BaseLinearFitter:
 
         if add_one_to_one:
             xmed = np.median(x)
-            ax.axline([xmed, xmed], slope=1, color='black', linestyle='--',
-                      label='1:1 line', zorder=0)
+            ax.axline([xmed, xmed], slope=1, color='#ef476f', linestyle='--',
+                      label=r'1:1', zorder=0)
 
         ax.legend()
 
