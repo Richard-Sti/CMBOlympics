@@ -169,3 +169,7 @@ radius_key = "Group_R_Crit500"
 box_size = 681.0  # [Mpc/h]
 omega_m = 0.306
 Vext = [-29.4, -17.9, -82.95]
+
+[halo_catalogues.SLOW]
+fname = "data/SLOW2024_clusters_galactic.txt"
+pvalue_only = true  # Only compute p-values, skip stacking/binning
