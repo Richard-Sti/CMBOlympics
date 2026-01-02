@@ -32,6 +32,55 @@ from scipy.stats import norm, t
 from tqdm import tqdm
 
 
+# Critical density at z=0 in Msun/Mpc^3 (for h=1)
+RHO_CRIT_0 = 2.775e11
+
+
+def m500_to_r500(m500, rho_crit=RHO_CRIT_0):
+    """Convert M500 to R500 assuming spherical overdensity."""
+    return (3 * m500 / (4 * np.pi * 500 * rho_crit)) ** (1 / 3)
+
+
+def load_slow_clusters(fpath):
+    """Load SLOW simulation cluster positions from text file."""
+    names, ell, b, dist, m500 = [], [], [], [], []
+
+    with open(fpath, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            parts = line.split()
+            if len(parts) < 8:
+                continue
+
+            names.append(parts[0])
+            ell.append(float(parts[4]))
+            b.append(float(parts[5]))
+            dist.append(float(parts[6]))
+            m500.append(float(parts[7]))
+
+    ell = np.array(ell)
+    b = np.array(b)
+    dist = np.array(dist)
+    m500 = np.array(m500) * 1e14  # Convert from 10^14 Msun to Msun
+
+    r500 = m500_to_r500(m500)
+    theta_arcmin = np.rad2deg(np.arctan(r500 / dist)) * 60
+
+    fprint(f"Loaded {len(names)} SLOW clusters from {fpath}")
+
+    return {
+        "name": np.array(names),
+        "ell": ell,
+        "b": b,
+        "r": dist,
+        "mass": m500,
+        "theta": theta_arcmin,
+    }
+
+
 def load_halo_catalogue(cfg, nsim):
     """Load halo phase-space information and apply selection cuts."""
 
@@ -138,7 +187,10 @@ def save_results_hdf5(path, simulations):
 
             halo_group = sim_group.create_group("halos")
             for key, values in data["halos"].items():
-                halo_group.create_dataset(key, data=np.asarray(values))
+                arr = np.asarray(values)
+                if arr.dtype.kind == 'U':  # Unicode string
+                    arr = arr.astype('S')  # Convert to bytes
+                halo_group.create_dataset(key, data=arr)
             halo_group.create_dataset(
                 "pval_data", data=np.asarray(data["halo_pvals"]))
             if data.get("halo_bins") is not None:
@@ -531,6 +583,47 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
     }
 
 
+def process_slow_simulation(cfg, profiler, theta_rand, tsz_rand_signal):
+    """Compute p-values only for SLOW simulation clusters."""
+    analysis_cfg = cfg["analysis"]
+    catalogue_cfg = cfg["halo_catalogues"]["SLOW"]
+
+    clusters = load_slow_clusters(catalogue_cfg["fname"])
+    aperture = analysis_cfg["aperture_scale"] * clusters["theta"]
+
+    signal = profiler.get_profiles_per_source(
+        clusters["ell"],
+        clusters["b"],
+        aperture,
+    )
+
+    pval_data = profiler.signal_to_pvalue(
+        aperture,
+        signal,
+        theta_rand,
+        tsz_rand_signal,
+    )
+
+    fprint(f"Computed p-values for {len(clusters['name'])} SLOW clusters.")
+
+    # Sort by mass (descending)
+    mass_order = np.argsort(-clusters["mass"])
+    clusters_sorted = {
+        key: np.asarray(values)[mass_order]
+        for key, values in clusters.items()
+    }
+
+    return {
+        "halos": clusters_sorted,
+        "halo_pvals": pval_data[mass_order],
+        "halo_bins": None,
+        "original_index": mass_order,
+        "halo_pvals_original": pval_data.copy(),
+        "catalogue_index_original": None,
+        "results": None,
+    }
+
+
 def determine_simulations(catalogue_cfg, requested):
     """Return the list of simulation identifiers to process."""
 
@@ -634,23 +727,34 @@ def main():
 
     sim_key = analysis_cfg["which_simulation"]
     catalogue_cfg = cfg["halo_catalogues"][sim_key]
-    sim_ids = determine_simulations(catalogue_cfg, catalogue_cfg.get("nsim"))
 
-    results_by_sim = {}
-    total_sims = len(sim_ids)
-    for idx, sim_id in enumerate(sim_ids):
-        fprint(f"Processing simulation {sim_id} ({idx + 1}/{total_sims})")
-        results_by_sim[sim_id] = process_simulation(
-            cfg,
-            sim_id,
-            profiler,
-            radii_stack,
-            theta_rand,
-            tsz_rand_signal,
-            cutout_extractor,
-            cutout_params,
-            idx,
-        )
+    # Handle SLOW simulation (p-values only)
+    if catalogue_cfg.get("pvalue_only", False):
+        fprint(f"Processing {sim_key} (p-values only mode)")
+        results_by_sim = {
+            "0": process_slow_simulation(
+                cfg, profiler, theta_rand, tsz_rand_signal
+            )
+        }
+    else:
+        sim_ids = determine_simulations(
+            catalogue_cfg, catalogue_cfg.get("nsim"))
+
+        results_by_sim = {}
+        total_sims = len(sim_ids)
+        for idx, sim_id in enumerate(sim_ids):
+            fprint(f"Processing simulation {sim_id} ({idx + 1}/{total_sims})")
+            results_by_sim[sim_id] = process_simulation(
+                cfg,
+                sim_id,
+                profiler,
+                radii_stack,
+                theta_rand,
+                tsz_rand_signal,
+                cutout_extractor,
+                cutout_params,
+                idx,
+            )
 
     if not results_by_sim:
         fprint("No simulations produced results; aborting save.")
