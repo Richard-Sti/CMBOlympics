@@ -563,6 +563,37 @@ def print_cluster_scores(
         print(f"\nMean 3D separation: {mean_sep:.2f} +/- {std_sep:.2f} Mpc/h")
 
 
+def load_slow_pvalues(slow_path, slow_data_path):
+    """Load SLOW p-values and match to observed cluster names."""
+    import h5py
+
+    with h5py.File(slow_path, 'r') as f:
+        names = f['0/halos/name'][:].astype(str)
+        pvals = f['0/halos/pval_data'][:]
+
+    # Load TOML matches from original data file
+    toml_matches = {}
+    with open(slow_data_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) >= 8:
+                name = parts[0]
+                toml_match = ' '.join(parts[8:]) if len(parts) > 8 else ''
+                if toml_match:
+                    toml_matches[name] = toml_match
+
+    # Build mapping: observed cluster name -> p-value
+    slow_pvals = {}
+    for i, name in enumerate(names):
+        if name in toml_matches:
+            slow_pvals[toml_matches[name]] = pvals[i]
+
+    return slow_pvals
+
+
 def plot_cluster_pvalue_percentiles(
     cfg,
     matches,
@@ -573,6 +604,9 @@ def plot_cluster_pvalue_percentiles(
     suite_labels=None,
     suite_colors=None,
     exclude_prefixes=None,
+    slow_path=None,
+    slow_label=r"\texttt{SLOW} (Hern\'andez-Mart\'inez et al. 2024)",
+    slow_color=None,
 ):
     """
     Plot per-cluster percentile summaries of per-halo tSZ p-values.
@@ -584,6 +618,13 @@ def plot_cluster_pvalue_percentiles(
     exclude_prefixes
         Optional list of strings. Clusters whose names start with any of these
         prefixes will be excluded from the plot.
+    slow_path
+        Optional path to SLOW results HDF5 file. If provided, SLOW p-values
+        will be plotted as markers for matched clusters.
+    slow_label
+        Label for SLOW in legend (default: r"\\texttt{SLOW}").
+    slow_color
+        Color for SLOW markers (default: uses next color in cycle).
     """
     if obs_clusters is None:
         try:
@@ -796,6 +837,45 @@ def plot_cluster_pvalue_percentiles(
                 )
             )
 
+        # Plot SLOW p-values if provided
+        if slow_path is not None:
+            slow_data_path = cfg["halo_catalogues"]["SLOW"]["fname"]
+            slow_pvals = load_slow_pvalues(slow_path, slow_data_path)
+
+            slow_positions = []
+            slow_values = []
+            for plot_position, orig_idx in enumerate(sorted_filtered_indices,
+                                                     start=1):
+                cluster_name = original_names[orig_idx]
+                if cluster_name in slow_pvals:
+                    slow_positions.append(plot_position)
+                    slow_values.append(slow_pvals[cluster_name])
+
+            if slow_positions:
+                slow_offset = 0.3 if num_suites > 0 else 0.0
+                if slow_color is None:
+                    slow_color = colors[num_suites % len(colors)]
+
+                slow_markersize = np.sqrt(marker_size)
+                ax.scatter(
+                    np.array(slow_positions) + slow_offset,
+                    slow_values,
+                    marker='o',
+                    s=slow_markersize**2,  # scatter uses area
+                    color=slow_color,
+                    zorder=10,
+                )
+                legend_handles.append(
+                    Line2D(
+                        [0], [0],
+                        marker='o',
+                        color=slow_color,
+                        linestyle='None',
+                        markersize=slow_markersize,
+                        label=slow_label,
+                    )
+                )
+
         ax.set_xticks(positions, filtered_names)
         ax.tick_params(axis="x", which="both", length=0)
         for label in ax.get_xticklabels():
@@ -821,7 +901,9 @@ def plot_cluster_pvalue_percentiles(
                 framealpha=1.0,
                 facecolor="white",
                 edgecolor="none",
-                loc="upper right",
+                loc="upper center",
+                bbox_to_anchor=(0.55, 1.17),
+                ncol=len(legend_handles),
             )
             legend.get_frame().set_linewidth(0.0)
         ax.set_yscale("log")
