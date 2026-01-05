@@ -105,17 +105,17 @@ def get_y_variables(catalogue_name):
 
 def extract_y_data(catalogue_matched, y_variable, catalogue_name, h):
     """Extract y-axis data and labels based on variable type."""
-    cat_display = CATALOGUE_DISPLAY_NAMES.get(
-        catalogue_name, catalogue_name.upper())
 
     if y_variable == "M500":
         y = np.log10(catalogue_matched["M500"] * h)
         yerr = (catalogue_matched["eM500"] /
                 (catalogue_matched["M500"] * np.log(10)))
         if catalogue_name in ["mcxc", "erass"]:
-            y_label = r'$\log M^{\rm X-ray}_{500\mathrm{c}} ~ [h^{-1}\,M_\odot]$'
+            y_label = (r'$\log M^{\rm X-ray}_{500\mathrm{c}}'
+                       r' ~ [h^{-1}\,M_\odot]$')
         else:
-            y_label = r'$\log M^{\rm tSZ}_{500\mathrm{c}} ~ [h^{-1}\,M_\odot]$'
+            y_label = (r'$\log M^{\rm tSZ}_{500\mathrm{c}}'
+                       r' ~ [h^{-1}\,M_\odot]$')
         y_description = (f'log10(M_{{obs}}) for {catalogue_name} '
                          f'catalogue [h^-1 M_sun]')
         yerr_description = 'Uncertainty in log10(M_obs) from catalogue errors'
@@ -149,7 +149,12 @@ def compute_significance(fitter, y_variable):
         slope_1d = fitter.get_param_significance("slope", 1.0)
         intercept_1d = fitter.get_param_significance("intercept", 0.0)
         return joint, slope_1d, intercept_1d
-    elif y_variable in ["L500", "YSZ"]:
+    elif y_variable == "L500":
+        # Self-similar slope for soft-band X-ray luminosity is 4/3
+        slope_1d = fitter.get_param_significance("slope", 4/3)
+        return None, slope_1d, None
+    elif y_variable == "YSZ":
+        # Self-similar slope for integrated Compton-y is 5/3
         slope_1d = fitter.get_param_significance("slope", 5/3)
         return None, slope_1d, None
     else:
@@ -210,7 +215,10 @@ def save_fit_summary(fit_output, corr_results, sig_result, y_variable,
                     f"sigma={slope_sig[1]:.4f}\n")
             f.write(f"Intercept=0 (1D): p={intercept_sig[0]:.4f}, "
                     f"sigma={intercept_sig[1]:.4f}\n")
-        elif y_variable in ["L500", "YSZ"]:
+        elif y_variable == "L500":
+            f.write(f"Slope=4/3 (1D): p={slope_sig[0]:.4f}, "
+                    f"sigma={slope_sig[1]:.2f}\n")
+        elif y_variable == "YSZ":
             f.write(f"Slope=5/3 (1D): p={slope_sig[0]:.4f}, "
                     f"sigma={slope_sig[1]:.2f}\n")
 
@@ -313,9 +321,11 @@ def plot_matching_fraction_combined(matching_data, output_path,
                     fmt='o', capsize=3, markersize=5, label=label)
 
     if catalogue_name in ["mcxc", "erass"]:
-        ax.set_xlabel(r'$\log M^{\rm X-ray}_{500\mathrm{c}} ~ [h^{-1}\,M_\odot]$')
+        ax.set_xlabel(r'$\log M^{\rm X-ray}_{500\mathrm{c}}'
+                      r' ~ [h^{-1}\,M_\odot]$')
     else:
-        ax.set_xlabel(r'$\log M^{\rm tSZ}_{500\mathrm{c}} ~ [h^{-1}\,M_\odot]$')
+        ax.set_xlabel(r'$\log M^{\rm tSZ}_{500\mathrm{c}}'
+                      r' ~ [h^{-1}\,M_\odot]$')
     ax.set_ylabel(r'$\mathrm{Matched~fraction}$')
 
     # Set ylim based on data
