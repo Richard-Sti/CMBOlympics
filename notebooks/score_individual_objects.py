@@ -185,6 +185,7 @@ def print_obs_cluster_catalogue_matches(
     dec_key="DEC",
     z_key="BEST_Z",
     mass_key="M500",
+    mass_err_key="eM500",
     max_sep_arcmin=15.0,
     max_cz_diff_kms=500.0,
     convert_helio_to_cmb=False,
@@ -201,6 +202,8 @@ def print_obs_cluster_catalogue_matches(
         External catalogue with RA, Dec, redshift, and mass columns.
     ra_key, dec_key, z_key, mass_key : str
         Column names in the catalogue.
+    mass_err_key : str or None
+        Column name for mass uncertainty. If None or not found, omitted.
     max_sep_arcmin : float
         Maximum angular separation in arcminutes.
     max_cz_diff_kms : float
@@ -220,6 +223,11 @@ def print_obs_cluster_catalogue_matches(
     )
 
     masses = np.asarray(catalogue[mass_key], dtype=float)
+    cat_keys = catalogue.dtype.names if hasattr(catalogue, 'dtype') else catalogue.keys()
+    has_err = mass_err_key and mass_err_key in cat_keys
+    if has_err:
+        mass_errs = np.asarray(catalogue[mass_err_key], dtype=float)
+
     names = obs_clusters.names
     galactic = obs_clusters.galactic_coordinates
 
@@ -227,6 +235,8 @@ def print_obs_cluster_catalogue_matches(
         f"{'Cluster':<22} {'ell [deg]':>10} {'b [deg]':>10} "
         f"{'Sep [arcmin]':>12} {'dcz [km/s]':>12} {'log M500':>10}"
     )
+    if has_err:
+        header += f" {'sig logM':>10}"
     print(header)
     print("-" * len(header))
 
@@ -235,15 +245,22 @@ def print_obs_cluster_catalogue_matches(
         if matches[i] is not None:
             idx = matches[i]
             log_m500 = np.log10(masses[idx])
-            print(
+            line = (
                 f"{name:<22} {ell:>10.2f} {b:>10.2f} "
                 f"{ang_sep[i]:>12.2f} {delta_cz[i]:>12.1f} {log_m500:>10.2f}"
             )
+            if has_err:
+                sig_log = mass_errs[idx] / (masses[idx] * np.log(10))
+                line += f" {sig_log:>10.2f}"
+            print(line)
         else:
-            print(
+            line = (
                 f"{name:<22} {ell:>10.2f} {b:>10.2f} "
                 f"{'--':>12} {'--':>12} {'--':>10}"
             )
+            if has_err:
+                line += f" {'--':>10}"
+            print(line)
 
 
 def attach_associations_to_obs_clusters(
@@ -407,7 +424,7 @@ def print_cluster_scores(
     ) if percentiles else ""
     base_header = (
         f"{'Cluster':<22} {'z':>6} {'Assoc':>7} {'Frac':>6} "
-        f"{'logM [Msun/h]':>14} {'Pfeifer pval':>12} "
+        f"{'logM [Msun/h]':>14} {'sig logM':>9} {'Pfeifer pval':>12} "
         f"{'Dist [Mpc/h]':>13} {'Sep [Mpc/h]':>12} "
         f"{'ell [deg]':>10} {'b [deg]':>10} "
         f"{'Med tSZ pval':>12}"
@@ -434,6 +451,7 @@ def print_cluster_scores(
         assoc_label = "-"
         frac_present = np.nan
         median_logm = np.nan
+        std_logm = np.nan
         match_p = np.nan
         combined = np.nan
         centroid_dist = np.nan
@@ -454,7 +472,9 @@ def print_cluster_scores(
             masses = np.asarray(getattr(assoc, "masses", []), dtype=float)
             masses = masses[np.isfinite(masses) & (masses > 0)]
             if masses.size:
-                median_logm = float(np.nanmedian(np.log10(masses)))
+                log_masses = np.log10(masses)
+                median_logm = float(np.nanmedian(log_masses))
+                std_logm = float(np.nanstd(log_masses))
 
             # Compute 3D separation in redshift space
             obs_pos = obs_cartesian[idx]
@@ -504,6 +524,7 @@ def print_cluster_scores(
             f"{str(assoc_label):>7} "
             f"{frac_present:>6.2f} "
             f"{median_logm:>14.2f} "
+            f"{std_logm:>9.2f} "
             f"{match_display_str} "
             f"{centroid_dist:>13.3f} "
             f"{separation_3d:>12.3f} "
@@ -523,6 +544,7 @@ def print_cluster_scores(
                 "association_label": assoc_label,
                 "fraction_present": frac_present,
                 "median_log_mass": median_logm,
+                "std_log_mass": std_logm,
                 "match_p": match_p,
                 "combined_p": combined,
                 "distance_mpc_h": centroid_dist,
