@@ -20,8 +20,10 @@ n_jobs = 4
 [input_map]
 # signal_map = "data/deproject_CMB_CIB_default_standard_full.fits"
 # random_pointing = "data/deproject_CMB_CIB_default_standard_full_RAND_POINTING.hdf5"
-signal_map = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
-random_pointing = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
+signal_map = "data/PR4_NILC_y_map.fits"
+random_pointing = "data/PR4_NILC_y_map__RAND_POINTING.hdf5"
+# signal_map = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
+# random_pointing = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
 
 # FWHM in arcminutes for smoothing the input map.
 smooth_fwhm = 9.6
