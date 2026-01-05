@@ -12,14 +12,8 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+"""Package-wide physical constants."""
 
-__version__ = "0.1.0"
+SPEED_OF_LIGHT_KMS = 299792.458
 
-from cmbo import (                                                              # noqa
-    corr,                                                                       # noqa
-    io,                                                                         # noqa
-    match,                                                                      # noqa
-    mapgen,                                                                     # noqa
-    projection,                                                                 # noqa
-    utils,                                                                      # noqa
-    )                                                                           # noqa
+__all__ = ["SPEED_OF_LIGHT_KMS"]

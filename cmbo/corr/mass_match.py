@@ -81,8 +81,8 @@ def measure_mass_matched_cluster(
         )
 
     r500 = np.asarray(assoc.optional_data["Group_R_Crit500"], dtype=float)
-    da = np.asarray(assoc.to_da(obs_pos, Om), dtype=float)
-    z_arr = np.asarray(assoc.to_z(obs_pos, Om), dtype=float)
+    da = np.asarray(assoc.da, dtype=float)
+    z_arr = np.asarray(assoc.cosmo_redshift, dtype=float)
 
     valid = (
         np.isfinite(r500)

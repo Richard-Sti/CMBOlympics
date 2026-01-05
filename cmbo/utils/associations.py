@@ -1,11 +1,36 @@
+# Copyright (C) 2025 Richard Stiskalek
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the
+# Free Software Foundation; either version 3 of the License, or (at your
+# option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
+# Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
 """Utilities for identifying halo associations across realisations."""
 
+import re
 from dataclasses import dataclass, field
-import numpy as np
+from functools import cached_property
+from pathlib import Path
+
 import astropy.units as u
-from astropy.cosmology import z_at_value, FlatLambdaCDM
+import h5py
+import numpy as np
+from astropy.coordinates import SkyCoord
+from astropy.cosmology import FlatLambdaCDM
 from tqdm import tqdm
-from .coords import cartesian_icrs_to_galactic_spherical
+
+from ..constants import SPEED_OF_LIGHT_KMS
+from .coords import (cartesian_icrs_to_galactic_spherical, cartesian_to_radec,
+                     comoving_distance_to_cz, cz_to_comoving_distance,
+                     radec_to_cartesian)
 
 
 @dataclass
@@ -19,19 +44,66 @@ class HaloAssociation:
     realisations: np.ndarray
     member_indices: np.ndarray
     fraction_present: float
-    optional_data: dict = field(default=None)
+    velocities: np.ndarray | None = None
+    optional_data: dict = field(default_factory=dict)
+    _resampled_masses: np.ndarray | None = field(default=None)
+
+    @property
+    def resampled_masses(self):
+        """
+        Resampled masses array. Must call resample_association_masses first.
+        """
+        if self._resampled_masses is None:
+            raise ValueError(
+                "resampled_masses not generated. "
+                "Call resample_masses() first."
+            )
+        return self._resampled_masses
+
+    @resampled_masses.setter
+    def resampled_masses(self, value):
+        self._resampled_masses = value
+
+    def resample_masses(self, N, rng=None):
+        """
+        Resample masses with replacement.
+
+        Keeps the existing masses and adds additional masses sampled with
+        replacement such that the total is N.
+
+        Parameters
+        ----------
+        N : int
+            Total number of masses (original + resampled).
+        rng : numpy.random.Generator, optional
+            Random number generator. If None, uses default.
+        """
+        if rng is None:
+            rng = np.random.default_rng()
+
+        n_existing = len(self.masses)
+        n_additional = N - n_existing
+        if n_additional <= 0:
+            self._resampled_masses = self.masses.copy()
+        else:
+            indices = rng.choice(n_existing, size=n_additional, replace=True)
+            self._resampled_masses = np.concatenate(
+                [self.masses, self.masses[indices]]
+            )
 
     # Map signal fields (populated by compute_map_signals)
-    median_galactic: tuple = field(default=None)  # (r, ell, b)
     median_theta500: float = field(default=None)
     median_signal: float = field(default=None)
     median_pval: float = field(default=None)
-    halo_galactic: tuple = field(default=None)  # (r, ell, b) arrays
     halo_theta500: np.ndarray = field(default=None)
     halo_signals: np.ndarray = field(default=None)
     halo_pvals: np.ndarray = field(default=None)
 
+    # LUM matching p-values (populated by greedy_global_matching)
+    lum_pvals: np.ndarray = field(default=None)
+
     def keys(self):
+        """Return a list of available data fields."""
         keys = [
             "label",
             "centroid",
@@ -40,11 +112,14 @@ class HaloAssociation:
             "realisations",
             "member_indices",
         ]
+        if self.velocities is not None:
+            keys.append("velocities")
         if self.optional_data:
             keys.extend(self.optional_data.keys())
         return keys
 
     def as_dict(self):
+        """Return a dictionary representation of the association."""
         d = {
             "label": self.label,
             "centroid": self.centroid,
@@ -54,6 +129,8 @@ class HaloAssociation:
             "member_indices": self.member_indices,
             "fraction_present": self.fraction_present,
         }
+        if self.velocities is not None:
+            d["velocities"] = self.velocities
         if self.optional_data:
             d.update(self.optional_data)
         return d
@@ -65,140 +142,151 @@ class HaloAssociation:
             raise KeyError(key)
         return getattr(self, key)
 
-    def to_galactic_angular(self, center, coord_system="icrs"):
+    @cached_property
+    def Om0(self):
+        """Matter density parameter, read from 'omega_m' in optional_data."""
+        if self.optional_data and "omega_m" in self.optional_data:
+            return float(self.optional_data["omega_m"])
+        raise ValueError("omega_m must be present in optional_data.")
+
+    @cached_property
+    def box_size(self):
+        """Simulation box size for this association."""
+        if self.optional_data and "box_size" in self.optional_data:
+            return float(self.optional_data["box_size"])
+        raise ValueError("box_size must be present in optional_data.")
+
+    @cached_property
+    def radec(self):
         """
-        Convert positions to Galactic spherical coordinates (r, ell, b).
-
-        Parameters
-        ----------
-        center
-            Observer position in the same coordinate system as positions.
-            Array of shape (3,).
-        coord_system
-            Coordinate system of the positions. Currently only "icrs"
-            is supported.
-
-        Returns
-        -------
-        r : ndarray
-            Distances in same units as positions.
-        ell : ndarray
-            Galactic longitude in degrees.
-        b : ndarray
-            Galactic latitude in degrees.
+        Right ascension and declination for all halo members (degrees).
         """
-        if coord_system != "icrs":
-            raise ValueError(
-                f"coord_system='{coord_system}' not supported. "
-                "Currently only 'icrs' is available."
-            )
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        ra, dec = cartesian_to_radec(self.positions, center=center)
+        return np.column_stack((ra, dec))
 
-        return cartesian_icrs_to_galactic_spherical(self.positions, center)
-
-    def centroid_to_galactic_angular(self, center, coord_system="icrs"):
+    @cached_property
+    def galactic_angular(self):
         """
-        Convert centroid to Galactic spherical coordinates (r, ell, b).
-
-        Parameters
-        ----------
-        center
-            Observer position in the same coordinate system as centroid.
-            Array of shape (3,).
-        coord_system
-            Coordinate system of the centroid. Currently only "icrs"
-            is supported.
-
-        Returns
-        -------
-        r : float
-            Distance in same units as centroid.
-        ell : float
-            Galactic longitude in degrees.
-        b : float
-            Galactic latitude in degrees.
+        Galactic angular coordinates (ell, b) for all halo members.
         """
-        if coord_system != "icrs":
-            raise ValueError(
-                f"coord_system='{coord_system}' not supported. "
-                "Currently only 'icrs' is available."
-            )
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        _, ell, b = cartesian_icrs_to_galactic_spherical(
+            self.positions, center=center)
+        return np.column_stack((ell, b))
 
-        r, ell, b = cartesian_icrs_to_galactic_spherical(
-            self.centroid.reshape(1, 3), center
-        )
-        return float(r[0]), float(ell[0]), float(b[0])
-
-    def to_z(self, center, Om):
-        """
-        Compute cosmological redshifts from comoving distances.
-
-        Parameters
-        ----------
-        center : array-like
-            Observer position used as the comoving-distance origin.
-        Om : float
-            Matter density parameter of a flat LCDM cosmology with h=1.
-
-        Returns
-        -------
-        ndarray
-            Redshifts corresponding to each halo position.
-        """
-        center = np.asarray(center, dtype=float)
-        if center.shape != (3,):
-            raise ValueError("center must be a 3-vector.")
-
+    @cached_property
+    def distance(self):
+        """Comoving distances (Mpc/h) of all halo members."""
+        center = np.full(3, self.box_size / 2.0, dtype=float)
         positions = np.asarray(self.positions, dtype=float)
         if positions.ndim != 2 or positions.shape[1] != 3:
             raise ValueError("positions must have shape (N, 3).")
+        return np.linalg.norm(positions - center, axis=1)
 
-        rel = positions - center
-        comoving = np.linalg.norm(rel, axis=1)
-
-        z = np.full_like(comoving, np.nan, dtype=float)
-        mask = np.isfinite(comoving) & (comoving >= 0)
-        if not np.any(mask):
-            return z
-
-        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
-        distances = comoving * u.Mpc
-        idx = np.where(mask)[0]
-        for i in idx:
-            dist = distances[i]
-            z[i] = float(z_at_value(cosmo.comoving_distance, dist))
-
-        return z
-
-    def to_da(self, center, Om):
+    @cached_property
+    def cosmo_redshift(self):
         """
-        Compute angular diameter distances for halo members.
-
-        Parameters
-        ----------
-        center : array-like
-            Observer position used as the comoving-distance origin.
-        Om : float
-            Matter density parameter of a flat LCDM cosmology with h=1.
-
-        Returns
-        -------
-        ndarray
-            Angular diameter distances in Mpc for each halo in this
-            association.
+        Cosmological redshifts for halo members assuming the observer
+        sits at the box centre and Om0 from optional_data.
         """
-        z = self.to_z(center, Om)
-        da = np.full_like(z, np.nan, dtype=float)
-        mask = np.isfinite(z) & (z >= 0)
-        if not np.any(mask):
-            return da
+        cz = comoving_distance_to_cz(
+            self.distance, h=1.0, Om0=self.Om0)
+        return cz / SPEED_OF_LIGHT_KMS
 
-        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(Om))
-        da[mask] = cosmo.angular_diameter_distance(z[mask]).to_value(u.Mpc)
+    @cached_property
+    def obs_redshift(self):
+        """
+        Observed redshifts for halo members (including peculiar velocities).
+        """
+        if self.velocities is None:
+            raise ValueError(
+                "Velocities are required to compute the observed redshift."
+            )
+        runit = (self.positions - self.box_size / 2.0) / self.distance[:, None]
+        Vlos = np.sum(self.velocities * runit, axis=1)
+        zcosmo = self.cosmo_redshift
+        return (1 + zcosmo) * (1 + Vlos / SPEED_OF_LIGHT_KMS) - 1.0
 
-        return da
+    @cached_property
+    def redshift_position(self):
+        """
+        Reconstruct Cartesian positions (Mpc/h) from angular coordinates and
+        observed redshifts.
 
-    def compute_map_signals(self, profiler, obs_pos, theta_rand, map_rand,
-                            r_key="Group_R_Crit500", coord_system="icrs"):
+        Uses observed redshifts (including peculiar velocities) and angular
+        positions to infer comoving distances, then converts back to Cartesian
+        coordinates centered on the box.
+        """
+        radec = self.radec
+        ra = radec[:, 0]
+        dec = radec[:, 1]
+        unit_vectors = radec_to_cartesian(ra, dec)
+        cz = self.obs_redshift * SPEED_OF_LIGHT_KMS
+        distances = cz_to_comoving_distance(cz, h=1.0, Om0=self.Om0)
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        return (unit_vectors.T * distances).T + center
+
+    @cached_property
+    def da(self):
+        """
+        Angular diameter distances (Mpc) for halo members inferred from
+        the cosmological redshifts.
+        """
+        cosmo = FlatLambdaCDM(H0=100.0, Om0=float(self.Om0))
+        return cosmo.angular_diameter_distance(
+            self.cosmo_redshift).to_value(u.Mpc)
+
+    @cached_property
+    def centroid_radec(self):
+        """
+        RA/Dec centroid coordinates (degrees) assuming the box centre observer.
+        """
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        ra, dec = cartesian_to_radec(
+            self.centroid.reshape(1, 3), center=center)
+        return float(ra[0]), float(dec[0])
+
+    @cached_property
+    def centroid_galactic_angular(self):
+        """
+        Centroid Galactic longitude/latitude (degrees) assuming ICRS input.
+        """
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        __, ell, b = cartesian_icrs_to_galactic_spherical(
+            self.centroid.reshape(1, 3), center)
+        return float(ell[0]), float(b[0])
+
+    @cached_property
+    def centroid_distance(self):
+        """Centroid comoving distance from the observer (Mpc/h)."""
+        rel = self.centroid - self.box_size / 2.0
+        return float(np.linalg.norm(rel))
+
+    @cached_property
+    def centroid_obs_redshift(self):
+        """Compute observed centroid redshift including peculiar velocity."""
+        return np.mean(self.obs_redshift)
+
+    @cached_property
+    def centroid_cosmo_redshift(self):
+        """Compute centroid cosmological redshift (no peculiar velocity)."""
+        cz = comoving_distance_to_cz(
+            self.centroid_distance, h=1.0, Om0=self.Om0)
+        return cz / SPEED_OF_LIGHT_KMS
+
+    @cached_property
+    def redshift_space_centroid(self):
+        """
+        Redshift space centroid (Mpc/h), computed as the mean of member
+        redshift space positions relative to the observer at box center.
+        """
+        redshift_positions = self.redshift_position
+        center = np.full(3, self.box_size / 2.0, dtype=float)
+        return np.mean(redshift_positions - center, axis=0)
+
+    def compute_map_signals(self, profiler, theta_rand, map_rand,
+                            r_key="Group_R_Crit500"):
         """
         Compute and store map signals and p-values for this association.
 
@@ -209,9 +297,6 @@ class HaloAssociation:
         ----------
         profiler
             PointingEnclosedProfile instance for measuring map signals.
-        obs_pos
-            Observer position (3D array) in same coordinate system as
-            association positions.
         theta_rand
             Angular sizes for random signal profiles (arcmin).
         map_rand
@@ -219,30 +304,24 @@ class HaloAssociation:
             (n_random, n_theta).
         r_key
             Key in optional_data for halo radii (e.g., 'Group_R_Crit500').
-        coord_system
-            Coordinate system of positions. Currently only "icrs".
         """
-        if coord_system != "icrs":
-            raise ValueError(
-                f"coord_system='{coord_system}' not supported. "
-                "Currently only 'icrs' is available."
-            )
-
         if r_key not in self.optional_data:
             raise KeyError(
                 f"Association {self.label} missing '{r_key}' in "
                 "optional_data."
             )
 
-        # Get galactic coordinates for all haloes
-        r, ell, b = self.to_galactic_angular(obs_pos, coord_system)
+        # Get galactic coordinates and distances for all haloes
+        ell_b = self.galactic_angular
+        r = self.distance
+        ell = ell_b[:, 0]
+        b = ell_b[:, 1]
         radii = self.optional_data[r_key]
 
         # Compute aperture sizes
         theta500 = np.rad2deg(np.arctan(radii / r)) * 60
 
         # Compute median position and aperture
-        median_r = float(np.median(r))
         median_ell = float(np.median(ell))
         median_b = float(np.median(b))
         median_theta500 = float(np.median(theta500))
@@ -271,20 +350,120 @@ class HaloAssociation:
         )
 
         # Store results
-        self.median_galactic = (median_r, median_ell, median_b)
         self.median_theta500 = median_theta500
         self.median_signal = median_signal
         self.median_pval = median_pval
-        self.halo_galactic = (r, ell, b)
         self.halo_theta500 = theta500
         self.halo_signals = halo_signals
         self.halo_pvals = halo_pvals
 
 
-def compute_association_signals(associations, profiler, obs_pos,
-                                theta_rand, map_rand,
-                                r_key="Group_R_Crit500",
-                                coord_system="icrs"):
+class HaloAssociationList(list):
+    """
+    List-like container for HaloAssociation objects with convenience methods.
+
+    Behaves like a regular list but provides properties for computing
+    statistics across all associations.
+    """
+
+    def __getitem__(self, key):
+        if isinstance(key, np.ndarray):
+            return HaloAssociationList([list.__getitem__(self, int(i))
+                                        for i in key])
+        return list.__getitem__(self, key)
+
+    @property
+    def mean_log_mass(self):
+        """Mean log mass for each association."""
+        return np.array([np.mean(np.log10(assoc.masses)) for assoc in self])
+
+    @property
+    def std_log_mass(self):
+        """Standard deviation of log mass for each association."""
+        return np.array([np.log10(assoc.masses).std() for assoc in self])
+
+    @property
+    def log_halo_masses(self):
+        """Log masses for all haloes in each association."""
+        return [np.log10(assoc.masses) for assoc in self]
+
+    @property
+    def centroid_radec(self):
+        """Right ascension and declination centroid pairs in degrees."""
+        return np.array([assoc.centroid_radec for assoc in self])
+
+    @property
+    def centroid_cosmo_redshift(self):
+        """Cosmological redshift of each association centroid."""
+        return np.array([assoc.centroid_cosmo_redshift for assoc in self])
+
+    @property
+    def centroid_obs_redshift(self):
+        """
+        Observed redshift of each association centroid (including peculiar
+        velocities).
+        """
+        return np.array([assoc.centroid_obs_redshift for assoc in self])
+
+    @property
+    def centroid_cartesian(self):
+        """Centroid positions as Cartesian coordinates."""
+        return np.array([assoc.centroid for assoc in self])
+
+    @property
+    def centroid_distance(self):
+        """Centroid comoving distances (Mpc/h)."""
+        return np.array([assoc.centroid_distance for assoc in self])
+
+    @property
+    def redshift_space_centroid(self):
+        """Redshift space centroids relative to observer (Mpc/h)."""
+        return np.array([assoc.redshift_space_centroid for assoc in self])
+
+    @property
+    def box_size(self):
+        """Simulation box size inferred from the first association."""
+        if not self:
+            raise ValueError("Cannot determine box_size for an empty list.")
+
+        return self[0].box_size
+
+    @property
+    def Om0(self):
+        """Matter density parameter inferred from the first association."""
+        if not self:
+            raise ValueError("Cannot determine Om0 for an empty list.")
+
+        return self[0].Om0
+
+    @property
+    def resampled_halo_masses(self):
+        """
+        Resampled halo masses for all associations.
+
+        Returns
+        -------
+        (n_associations, N) array
+        """
+        return np.array([assoc.resampled_masses for assoc in self])
+
+    def resample_masses(self, N, rng=None):
+        """
+        Resample masses for all associations in the list.
+
+        Parameters
+        ----------
+        N : int
+            Total number of masses per association (original + resampled).
+        rng : numpy.random.Generator, optional
+            Random number generator. If None, uses default.
+        """
+        for assoc in self:
+            assoc.resample_masses(N, rng=rng)
+
+
+def compute_association_signals(associations, profiler, theta_rand, map_rand,
+                                r_key="Group_R_Crit500"):
     """
     Compute map signals for all associations in a list.
 
@@ -297,27 +476,31 @@ def compute_association_signals(associations, profiler, obs_pos,
         List of HaloAssociation objects.
     profiler
         PointingEnclosedProfile instance for measuring map signals.
-    obs_pos
-        Observer position (3D array).
     theta_rand
         Angular sizes for random pointings (arcmin).
     map_rand
         Map signals for random pointings, shape (n_random, n_theta).
     r_key
         Key in optional_data for halo radii.
-    coord_system
-        Coordinate system of positions. Currently only "icrs".
     """
     for assoc in tqdm(associations, desc="Computing association signals"):
         assoc.compute_map_signals(
-            profiler, obs_pos, theta_rand, map_rand,
+            profiler, theta_rand, map_rand,
             r_key=r_key,
-            coord_system=coord_system
         )
 
 
-def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
-                               mass_sigma=0.3, optional_data=None):
+def identify_halo_associations(
+    positions,
+    masses,
+    eps=1.75,
+    min_samples=9,
+    mass_sigma=0.4,
+    optional_data=None,
+    mass_dependent_eps=True,
+    eps_iterations=3,
+    verbose=False,
+):
     """
     Cluster haloes from multiple realisations into physical associations.
 
@@ -330,7 +513,7 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         Sequence of arrays with shape (Ni,) storing halo masses matched to
         ``positions``.
     eps
-        DBSCAN linking length in comoving Mpc.
+        Initial DBSCAN linking length in comoving Mpc.
     min_samples
         Minimum number of members required to keep an association.
     mass_sigma
@@ -340,11 +523,18 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         Dictionary mapping key names to sequences of arrays (one per
         realisation), matched to ``positions``. These will be filtered and
         stored in the associations.
+    mass_dependent_eps
+        If True, iteratively prune associations using an eps that scales with
+        the mean association mass as eps = eps * (M / 1e14)^(1/3).
+    eps_iterations
+        Maximum number of pruning iterations for mass-dependent eps.
+    verbose
+        If True, print pruning diagnostics.
 
     Returns
     -------
-    list[HaloAssociation]
-        List of surviving associations sorted by cluster label.
+    HaloAssociationList
+        List-like container of surviving associations sorted by cluster label.
     """
 
     if len(positions) != len(masses):
@@ -380,7 +570,7 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
 
     counts = [pos.shape[0] for pos in pos_arrays]
     if not counts or sum(counts) == 0:
-        return []
+        return HaloAssociationList()
 
     real_ids = np.concatenate(
         [np.full(count, idx, dtype=int) for idx, count in enumerate(counts)]
@@ -399,7 +589,7 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
     finite_mask = np.isfinite(all_masses).astype(bool)
     finite_mask &= np.all(np.isfinite(all_positions), axis=1)
     if not np.any(finite_mask):
-        return []
+        return HaloAssociationList()
 
     all_positions = all_positions[finite_mask]
     all_masses = all_masses[finite_mask]
@@ -418,7 +608,14 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
     clustering = DBSCAN(eps=eps, min_samples=min_samples)
     labels = clustering.fit_predict(all_positions)
 
+    index_lookup = {
+        (int(r), int(h)): idx for idx, (r, h) in enumerate(
+            zip(real_ids.tolist(), halo_ids.tolist())
+        )
+    }
+
     associations = []
+    global_indices_list = []
     for label in sorted(lab for lab in np.unique(labels) if lab >= 0):
         cluster_mask = labels == label
         cluster_indices = np.where(cluster_mask)[0]
@@ -478,18 +675,573 @@ def identify_halo_associations(positions, masses, eps=1.75, min_samples=9,
         centroid = cluster_pos.mean(axis=0)
         member_indices = np.column_stack((cluster_real, cluster_local))
         fraction_present = cluster_real.size / len(positions)
-
-        associations.append(
-            HaloAssociation(
-                label=int(label),
-                centroid=centroid,
-                positions=cluster_pos,
-                masses=cluster_mass,
-                realisations=cluster_real,
-                member_indices=member_indices,
-                fraction_present=fraction_present,
-                optional_data=cluster_opt if cluster_opt else None,
-            )
+        assoc = HaloAssociation(
+            label=int(label),
+            centroid=centroid,
+            positions=cluster_pos,
+            masses=cluster_mass,
+            realisations=cluster_real,
+            member_indices=member_indices,
+            fraction_present=fraction_present,
+            optional_data=cluster_opt,
         )
+        associations.append(assoc)
+        global_indices_list.append(np.array(
+            [index_lookup[(int(r), int(h))] for r, h in member_indices],
+            dtype=int,
+        ))
+
+    associations = HaloAssociationList(associations)
+    if not mass_dependent_eps or not associations:
+        return associations
+
+    cache = {}
+    base_eps = float(eps)
+    for i in range(max(int(eps_iterations), 1)):
+        before = len(associations)
+        survivors = []
+        survivor_indices = []
+        for assoc, global_idx in zip(associations, global_indices_list):
+            mean_mass = float(np.mean(assoc.masses))
+            eps_dyn = base_eps * (mean_mass / 1e14) ** (1.0 / 3.0)
+            eps_dyn = float(min(eps_dyn, base_eps))
+            labels_dyn = cache.get(eps_dyn)
+            if labels_dyn is None:
+                labels_dyn = DBSCAN(
+                    eps=eps_dyn, min_samples=min_samples
+                ).fit_predict(all_positions)
+                cache[eps_dyn] = labels_dyn
+            assoc_labels = labels_dyn[global_idx]
+            valid = assoc_labels >= 0
+            if not np.all(valid):
+                continue
+            unique_labels = np.unique(assoc_labels)
+            if unique_labels.size != 1:
+                continue
+            cluster_label = unique_labels[0]
+            cluster_size = int(np.sum(labels_dyn == cluster_label))
+            if cluster_size < min_samples:
+                continue
+            survivors.append(assoc)
+            survivor_indices.append(global_idx)
+        pruned = before - len(survivors)
+        if verbose:
+            print(
+                f"Mass-dependent eps iteration {i + 1}: "
+                f"pruned {pruned} / {before} associations."
+            )
+        if pruned == 0:
+            break
+        associations = HaloAssociationList(survivors)
+        global_indices_list = survivor_indices
+
+    return associations
+
+
+def _infer_mass_definition(mass_key):
+    """Infer mass definition (e.g. 500c) from a halo mass key."""
+    key = mass_key.lower()
+    match = re.search(r"m\s*(\d+)([cm])", key)
+    if match:
+        if match.group(1) not in ("200", "500"):
+            raise ValueError(
+                f"Unsupported mass scale '{match.group(1)}' in '{mass_key}'.")
+        if match.group(2) != "c":
+            raise ValueError("Mass definition must be 'c' (critical), "
+                             f"got '{match.group(2)}'.")
+        return f"{match.group(1)}c"
+    match = re.search(r"(crit|mean)\s*(\d+)", key)
+    if match:
+        if match.group(2) not in ("200", "500"):
+            raise ValueError(f"Unsupported mass scale '{match.group(2)}' "
+                             f"in '{mass_key}'.")
+        if match.group(1) != "crit":
+            raise ValueError(
+                f"Mass definition must be critical, got '{match.group(1)}'.")
+        return f"{match.group(2)}c"
+    raise ValueError(
+        f"Cannot infer mass definition from mass key '{mass_key}'. "
+        "Expected patterns like 'M200c' or 'Group_M_Crit500'."
+    )
+
+
+def _load_simulation_halos(cfg, sim_key):
+    """Return filtered halo data across all realisations."""
+    import cmbo
+
+    try:
+        catalogue_cfg = cfg["halo_catalogues"][sim_key]
+    except KeyError as exc:
+        raise ValueError(
+            f"Simulation '{sim_key}' not defined in config."
+        ) from exc
+
+    fname = catalogue_cfg["fname"]
+    position_key = catalogue_cfg["position_key"]
+    mass_key = catalogue_cfg["mass_key"]
+    radius_key = catalogue_cfg["radius_key"]
+    velocity_key = catalogue_cfg.get("velocity_key")
+    box_size = float(catalogue_cfg["box_size"])
+    omega_m = catalogue_cfg.get("omega_m")
+    if omega_m is None:
+        omega_m = catalogue_cfg.get("Om0", 0.3111)
+    omega_m = float(omega_m)
+    vext = catalogue_cfg.get("Vext")
+    if vext is not None:
+        vext = np.asarray(vext, dtype=float)
+        if vext.shape != (3,):
+            raise ValueError("Vext must be a sequence of three numbers.")
+    centre = np.array(catalogue_cfg.get(
+        "observer_position",
+        [box_size / 2.0, box_size / 2.0, box_size / 2.0],
+    ), dtype=float)
+    if centre.shape != (3,):
+        raise ValueError("observer_position must be a 3-element sequence.")
+
+    sim_ids = cmbo.io.list_simulations_hdf5(fname)
+    if not sim_ids:
+        raise ValueError(f"No simulations found in {fname}.")
+
+    mass_floor = cfg["halo_catalogues"].get(
+        "min_association_mass", 0.0
+    )
+    positions_all = []
+    masses_all = []
+    r500_all = []
+    theta_all = []
+    selection_all = []
+    velocity_all = [] if velocity_key else None
+    catalogue_sizes = []
+    theta_catalogues = []
+    sim_ids_kept = []
+
+    for sim_id in sim_ids:
+        reader = cmbo.io.SimulationHaloReader(fname, sim_id)
+        pos = np.asarray(reader[position_key], dtype=float)
+        mass = np.asarray(reader[mass_key], dtype=float)
+        r500 = np.asarray(reader[radius_key], dtype=float)
+        if velocity_key:
+            velocity = np.asarray(reader[velocity_key], dtype=float)
+        indices = np.arange(pos.shape[0], dtype=int)
+
+        r, ell, b = cartesian_icrs_to_galactic_spherical(pos, centre)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.divide(r500, r, out=np.zeros_like(r500), where=r > 0)
+            theta_arcmin = np.rad2deg(np.arctan(ratio)) * 60.0
+
+        mask = np.isfinite(mass)
+        mask &= mass > 0
+        mask &= np.isfinite(r)
+        mask &= np.isfinite(theta_arcmin)
+        mask &= mass >= mass_floor
+
+        if not np.any(mask):
+            continue
+
+        positions_all.append(pos[mask])
+        masses_all.append(mass[mask])
+        r500_all.append(r500[mask])
+        if velocity_key:
+            if vext is not None:
+                velocity = velocity + vext
+            velocity_all.append(velocity[mask])
+        theta_masked = theta_arcmin[mask]
+        theta_all.append(theta_masked)
+        selection_all.append(indices[mask])
+        catalogue_sizes.append(pos.shape[0])
+        theta_catalogues.append(theta_arcmin)
+        sim_ids_kept.append(str(sim_id))
+
+    if not positions_all:
+        raise ValueError(
+            "No haloes survive the selection cuts across any simulation."
+        )
+
+    mass_definition = _infer_mass_definition(mass_key)
+
+    data = {
+        "positions": positions_all,
+        "masses": masses_all,
+        "r500": r500_all,
+        "theta_arcmin": theta_all,
+        "selection_indices": selection_all,
+        "sim_ids": sim_ids_kept,
+        "catalogue_sizes": catalogue_sizes,
+        "theta_catalogues": theta_catalogues,
+        "box_size": box_size,
+        "centre": centre,
+        "mass_definition": mass_definition,
+        "omega_m": omega_m,
+    }
+    if velocity_key:
+        data["velocities"] = velocity_all
+        data["velocity_key"] = velocity_key
+    return data
+
+
+def _results_path(cfg, sim_key):
+    analysis_cfg = cfg["analysis"]
+    output_dir = Path(analysis_cfg.get("output_folder", "."))
+    tag = analysis_cfg.get("output_tag")
+    stem = sim_key if not tag else f"{sim_key}_{tag}"
+    return (output_dir / f"{stem}.hdf5").resolve()
+
+
+def _load_original_order_dataset(
+    results_path,
+    sim_ids,
+    catalogue_sizes,
+    dataset_names,
+    required=True,
+):
+    results_path = Path(results_path)
+    if not results_path.exists():
+        raise FileNotFoundError(
+            f"Results file '{results_path}' not found. "
+            "Run scripts/run_suite.py first."
+        )
+
+    if len(sim_ids) != len(catalogue_sizes):
+        raise ValueError(
+            "sim_ids and catalogue_sizes must have the same length."
+        )
+
+    if isinstance(dataset_names, str):
+        dataset_names = (dataset_names,)
+    elif not dataset_names:
+        raise ValueError("dataset_names must not be empty.")
+
+    lookups = {}
+    with h5py.File(results_path, "r") as h5:
+        for sim_id, n_obj in zip(sim_ids, catalogue_sizes):
+            sim_id = str(sim_id)
+            if sim_id not in h5:
+                raise KeyError(
+                    f"Simulation group '{sim_id}' missing from {results_path}."
+                )
+            halos = h5[sim_id]["halos"]
+            try:
+                catalogue_idx = np.asarray(
+                    halos["catalogue_index_original"][...],
+                    dtype=int,
+                )
+            except KeyError as exc:
+                raise KeyError(
+                    "Result file missing 'catalogue_index_original' dataset."
+                ) from exc
+
+            dataset = None
+            dataset_name = None
+            for candidate in dataset_names:
+                if candidate in halos:
+                    dataset = np.asarray(halos[candidate][...], dtype=float)
+                    dataset_name = candidate
+                    break
+            if dataset is None:
+                if required:
+                    raise KeyError(
+                        f"Dataset(s) {dataset_names} missing for simulation "
+                        f"{sim_id} in {results_path}."
+                    )
+                continue
+
+            if catalogue_idx.shape != dataset.shape:
+                raise ValueError(
+                    f"Dataset '{dataset_name}' mis-sized for "
+                    f"simulation {sim_id}."
+                )
+
+            if np.any(catalogue_idx < 0) or np.any(catalogue_idx >= n_obj):
+                raise ValueError(
+                    f"Catalogue indices out of bounds for simulation {sim_id}."
+                )
+
+            array = np.full(n_obj, np.nan, dtype=float)
+            array[catalogue_idx] = dataset
+            lookups[sim_id] = array
+
+    return lookups
+
+
+def _load_pval_lookup(results_path, sim_ids, catalogue_sizes):
+    return _load_original_order_dataset(
+        results_path,
+        sim_ids,
+        catalogue_sizes,
+        dataset_names="pval_original_order",
+        required=True,
+    )
+
+
+def _load_signal_lookup(results_path, sim_ids, catalogue_sizes):
+    return _load_original_order_dataset(
+        results_path,
+        sim_ids,
+        catalogue_sizes,
+        dataset_names=(
+            "signal_original_order",
+            "halo_signal_original",
+        ),
+        required=False,
+    )
+
+
+def _attach_per_halo_data(
+    associations,
+    selection_indices,
+    sim_ids,
+    pval_lookup,
+    signal_lookup,
+    theta_lookup,
+):
+    for assoc in associations:
+        n_members = assoc.member_indices.shape[0]
+        member_pvals = np.full(n_members, np.nan, dtype=float)
+        member_signals = (
+            np.full(n_members, np.nan, dtype=float)
+            if signal_lookup
+            else None
+        )
+        member_theta = (
+            np.full(n_members, np.nan, dtype=float)
+            if theta_lookup
+            else None
+        )
+        for i, (real_idx, local_idx) in enumerate(assoc.member_indices):
+            try:
+                per_real_indices = selection_indices[real_idx]
+            except IndexError as exc:
+                raise IndexError(
+                    "Association references unknown realisation index "
+                    f"{real_idx}."
+                ) from exc
+            if local_idx >= per_real_indices.size:
+                raise IndexError(
+                    f"Local halo index {local_idx} out of range for "
+                    f"realisation {real_idx}."
+                )
+            catalogue_idx = int(per_real_indices[local_idx])
+            sim_id = sim_ids[real_idx]
+            per_sim_lookup = pval_lookup.get(sim_id)
+            if per_sim_lookup is None:
+                continue
+            if catalogue_idx < per_sim_lookup.size:
+                member_pvals[i] = per_sim_lookup[catalogue_idx]
+            if member_signals is not None:
+                per_sim_signals = signal_lookup.get(sim_id)
+                if (
+                    per_sim_signals is not None
+                    and catalogue_idx < per_sim_signals.size
+                ):
+                    member_signals[i] = per_sim_signals[catalogue_idx]
+            if member_theta is not None:
+                per_sim_theta = theta_lookup.get(sim_id)
+                if (
+                    per_sim_theta is not None
+                    and catalogue_idx < per_sim_theta.size
+                ):
+                    member_theta[i] = per_sim_theta[catalogue_idx]
+        assoc.halo_pvals = member_pvals
+        if member_pvals.size and np.any(np.isfinite(member_pvals)):
+            assoc.median_pval = float(np.nanmedian(member_pvals))
+        else:
+            assoc.median_pval = np.nan
+        if member_signals is not None:
+            assoc.halo_signals = member_signals
+            if member_signals.size and np.any(np.isfinite(member_signals)):
+                assoc.median_signal = float(np.nanmedian(member_signals))
+            else:
+                assoc.median_signal = np.nan
+        if member_theta is not None:
+            assoc.halo_theta500 = member_theta
+            if member_theta.size and np.any(np.isfinite(member_theta)):
+                assoc.median_theta500 = float(np.nanmedian(member_theta))
+            else:
+                assoc.median_theta500 = np.nan
+
+
+def _filter_associations_near_target(
+    associations,
+    target_ra_deg,
+    target_dec_deg,
+    target_cz_kms,
+    max_sep_arcmin,
+    max_cz_diff_kms,
+):
+    """Remove associations near a specified (RA, DEC, cz)."""
+    target_coord = SkyCoord(target_ra_deg * u.deg, target_dec_deg * u.deg)
+    kept = HaloAssociationList()
+    removed = 0
+    for assoc in associations:
+        center = np.full(3, assoc.box_size / 2.0, dtype=float)
+        ra, dec = cartesian_to_radec(assoc.centroid[None, :], center=center)
+        ra = float(np.asarray(ra).ravel()[0])
+        dec = float(np.asarray(dec).ravel()[0])
+        assoc_coord = SkyCoord(ra * u.deg, dec * u.deg)
+        sep_arcmin = float(np.asarray(
+            assoc_coord.separation(target_coord).arcmin))
+        dist = np.linalg.norm(assoc.centroid - center)
+        cz = float(np.asarray(comoving_distance_to_cz(dist, Om0=assoc.Om0)))
+        is_near = (
+            np.isfinite(sep_arcmin)
+            and np.isfinite(cz)
+            and sep_arcmin <= max_sep_arcmin
+            and abs(cz - target_cz_kms) <= max_cz_diff_kms
+        )
+        if is_near:
+            removed += 1
+            continue
+        kept.append(assoc)
+    return kept, removed
+
+
+def load_associations(
+    sim_key,
+    cfg,
+    verbose=True,
+    remove_near_target=False,
+    target_ra_deg=201.989583,
+    target_dec_deg=-31.5025,
+    target_cz_kms=14784.0,
+    max_sep_arcmin=180.0,
+    max_cz_diff_kms=500.0,
+):
+    """
+    Identify halo associations and attach per-halo data.
+
+    Parameters
+    ----------
+    sim_key
+        Simulation key from the config's halo_catalogues section.
+    cfg
+        CMBO configuration dictionary.
+    verbose
+        Print progress messages.
+    remove_near_target : bool, optional
+        If True, drop associations near a specified (RA, DEC, cz).
+    target_ra_deg, target_dec_deg, target_cz_kms : float, optional
+        Target sky position (deg) and CMB-frame velocity (km/s) used when
+        ``remove_near_target`` is True.
+    max_sep_arcmin, max_cz_diff_kms : float, optional
+        Maximum angular separation (arcmin) and |cz - cz_target| (km/s)
+        tolerances for filtering associations when ``remove_near_target`` is
+        True.
+
+    Returns
+    -------
+    HaloAssociationList
+        List of associations with attached p-values and signals.
+    """
+    halo_cfg = cfg.get("halo_catalogues", {})
+    halo_data = _load_simulation_halos(cfg, sim_key)
+    if verbose:
+        print(f"Loaded {len(halo_data['positions'])} simulation realisations.")
+    catalogue_cfg = halo_cfg[sim_key]
+    radius_key = catalogue_cfg["radius_key"]
+    velocity_key = catalogue_cfg.get("velocity_key")
+    eps = float(catalogue_cfg.get(
+        "association_eps",
+        halo_cfg.get("association_eps", 1.75),
+    ))
+    min_samples = int(catalogue_cfg.get(
+        "association_min_samples",
+        halo_cfg.get("association_min_samples", 9),
+    ))
+    mass_sigma = float(catalogue_cfg.get(
+        "association_mass_sigma",
+        halo_cfg.get("association_mass_sigma", 0.4),
+    ))
+    eps_iterations = int(catalogue_cfg.get(
+        "association_eps_iterations",
+        halo_cfg.get("association_eps_iterations", 3),
+    ))
+    mass_dependent_eps = bool(catalogue_cfg.get(
+        "association_mass_dependent_eps",
+        halo_cfg.get("association_mass_dependent_eps", True),
+    ))
+    optional = {
+        radius_key: halo_data["r500"],
+        "theta500_arcmin": halo_data["theta_arcmin"],
+    }
+    if velocity_key and "velocities" in halo_data:
+        optional[velocity_key] = halo_data["velocities"]
+    associations = identify_halo_associations(
+        halo_data["positions"],
+        halo_data["masses"],
+        eps=eps,
+        min_samples=min_samples,
+        mass_sigma=mass_sigma,
+        mass_dependent_eps=mass_dependent_eps,
+        eps_iterations=eps_iterations,
+        verbose=verbose,
+        optional_data=optional,
+    )
+    frac_thresh = cfg["halo_catalogues"].get(
+        "min_fraction_present", 0.0
+    )
+    if frac_thresh > 0.0 and associations:
+        associations = HaloAssociationList([
+            assoc for assoc in associations
+            if assoc.fraction_present >= frac_thresh
+        ])
+    if verbose:
+        print(f"Identified {len(associations)} halo associations.")
+    results_path = _results_path(cfg, sim_key)
+    pval_lookup = _load_pval_lookup(
+        results_path,
+        halo_data["sim_ids"],
+        halo_data["catalogue_sizes"],
+    )
+    signal_lookup = _load_signal_lookup(
+        results_path,
+        halo_data["sim_ids"],
+        halo_data["catalogue_sizes"],
+    )
+    if signal_lookup:
+        if verbose:
+            print("Loaded halo signal lookup tables from run_suite output.")
+    elif verbose:
+        print("Halo signal datasets were not found in run_suite output.")
+    theta_lookup = {
+        sim_id: np.asarray(theta, dtype=float)
+        for sim_id, theta in zip(
+            halo_data["sim_ids"], halo_data["theta_catalogues"]
+        )
+    }
+    _attach_per_halo_data(
+        associations,
+        halo_data["selection_indices"],
+        halo_data["sim_ids"],
+        pval_lookup,
+        signal_lookup,
+        theta_lookup,
+    )
+    for assoc in associations:
+
+        assoc.optional_data.setdefault("box_size", halo_data["box_size"])
+        assoc.optional_data.setdefault(
+            "mass_definition", halo_data["mass_definition"]
+        )
+        assoc.optional_data.setdefault("omega_m", halo_data["omega_m"])
+
+        if velocity_key and velocity_key in assoc.optional_data:
+            assoc.velocities = assoc.optional_data[velocity_key]
+
+    if remove_near_target and associations:
+        associations, removed = _filter_associations_near_target(
+            associations,
+            target_ra_deg=target_ra_deg,
+            target_dec_deg=target_dec_deg,
+            target_cz_kms=target_cz_kms,
+            max_sep_arcmin=max_sep_arcmin,
+            max_cz_diff_kms=max_cz_diff_kms,
+        )
+        if verbose:
+            print(
+                f"Removed {removed} associations within "
+                f"{max_sep_arcmin:.1f} arcmin and {max_cz_diff_kms:.0f} km/s "
+                f"of (RA, DEC, cz)=({target_ra_deg}, {target_dec_deg}, "
+                f"{target_cz_kms})."
+            )
 
     return associations

@@ -19,9 +19,10 @@ import numpy as np
 from astropy.coordinates import (ICRS, CartesianRepresentation, Galactic,
                                  SkyCoord, SphericalRepresentation)
 from astropy.cosmology import FlatLambdaCDM
+from scipy.interpolate import interp1d
 from tqdm import trange
 
-_C_LIGHT_KMS = 299792.458
+from ..constants import SPEED_OF_LIGHT_KMS
 
 
 def cartesian_to_r_theta_phi(x, y, z, center=[0.0, 0.0, 0.0]):
@@ -33,6 +34,24 @@ def cartesian_to_r_theta_phi(x, y, z, center=[0.0, 0.0, 0.0]):
     phi = np.mod(np.arctan2(y - y0, x - x0), 2.0 * np.pi)
 
     return r, theta, phi
+
+
+def cartesian_to_radec(pos, center=[0.0, 0.0, 0.0]):
+    """Convert Cartesian coordinates to right ascension and declination."""
+    pos = np.asarray(pos, dtype=float)
+    if pos.ndim != 2 or pos.shape[1] != 3:
+        raise ValueError("pos must have shape (N, 3).")
+
+    center = np.asarray(center, dtype=float)
+    if center.shape != (3,):
+        raise ValueError("center must have shape (3,).")
+
+    __, theta, phi = cartesian_to_r_theta_phi(
+        pos[:, 0], pos[:, 1], pos[:, 2], center=center
+    )
+    ra = np.degrees(phi)
+    dec = np.degrees(np.pi / 2 - theta)
+    return ra, dec
 
 
 def radec_to_galactic(ra_deg, dec_deg):
@@ -66,13 +85,64 @@ def cz_to_comoving_distance(cz, h=1.0, Om0=0.3111):
         return float(out[0]) if scalar_input else out
 
     cosmo_obj = FlatLambdaCDM(H0=100.0 * h, Om0=Om0)
-    redshift = cz_arr[mask] / _C_LIGHT_KMS
+    redshift = cz_arr[mask] / SPEED_OF_LIGHT_KMS
     distance = cosmo_obj.comoving_distance(redshift).value * cosmo_obj.h
 
     out[mask] = distance
     if scalar_input:
         return float(out[0])
     return out
+
+
+def comoving_distance_to_cz(distance, h=1.0, Om0=0.3111, zmax=0.5,
+                            nz_interp=1000):
+    """
+    Convert comoving distance (in Mpc/h if h = 1) to CMB-frame
+    velocity (km/s), by interpolating redshift vs. comoving distance.
+    """
+    scalar_input = np.isscalar(distance)
+    dist_arr = np.array(distance, dtype=float, ndmin=1)
+
+    cosmo = FlatLambdaCDM(H0=h * 100, Om0=Om0)
+
+    # Build redshift grid and corresponding comoving distances (in Mpc/h)
+    z_grid = np.linspace(1e-6, zmax, nz_interp)
+    d_grid = cosmo.comoving_distance(z_grid).value
+
+    # Build interpolation: d_grid → z_grid
+    inv_interp = interp1d(d_grid, z_grid, kind='cubic', assume_sorted=True,
+                          bounds_error=True)
+    z_out = inv_interp(dist_arr)
+
+    velocities = z_out * SPEED_OF_LIGHT_KMS
+
+    if scalar_input:
+        return float(velocities[0])
+    return velocities
+
+
+def radec_to_cartesian(ra_deg, dec_deg):
+    """
+    Convert RA, Dec to a Cartesian unit vector.
+
+    Parameters
+    ----------
+    ra_deg, dec_deg : array_like
+        RA, Dec (in degrees).
+
+    Returns
+    -------
+    pos : ndarray
+        Cartesian unit vectors of shape (N, 3).
+    """
+    ra = np.deg2rad(ra_deg)
+    dec = np.deg2rad(dec_deg)
+
+    x = np.cos(dec) * np.cos(ra)
+    y = np.cos(dec) * np.sin(ra)
+    z = np.sin(dec)
+
+    return np.stack([x, y, z], axis=-1)
 
 
 def cartesian_icrs_to_galactic_spherical(pos, center):
@@ -230,3 +300,44 @@ def build_mass_bins(mass, step=0.2, top_counts=(10, 100, 1000),
         medians.append(med)
 
     return edges, medians
+
+
+def heliocentric_to_cmb(z_helio, RA, dec, e_z_helio=None):
+    """
+    Convert heliocentric redshift to CMB redshift using the Planck 2018 CMB
+    dipole.
+    """
+    # CMB dipole Planck 2018 values
+    vsun_mag = 369  # km/s
+    RA_sun = 167.942
+    dec_sun = -6.944
+    SPEED_OF_LIGHT = 299792.458  # km / s
+
+    theta_sun = np.pi / 2 - np.deg2rad(dec_sun)
+    phi_sun = np.deg2rad(RA_sun)
+
+    # Convert to theat/phi in radians
+    theta = np.pi / 2 - np.deg2rad(dec)
+    phi = np.deg2rad(RA)
+
+    # Unit vector in the direction of each galaxy
+    n = np.asarray([np.sin(theta) * np.cos(phi),
+                    np.sin(theta) * np.sin(phi),
+                    np.cos(theta)]).T
+    # CMB dipole unit vector
+    vsun_normvect = np.asarray([np.sin(theta_sun) * np.cos(phi_sun),
+                                np.sin(theta_sun) * np.sin(phi_sun),
+                                np.cos(theta_sun)])
+
+    # Project the CMB dipole onto the line of sight and normalize
+    vsun_projected = vsun_mag * np.dot(n, vsun_normvect) / SPEED_OF_LIGHT
+
+    zsun_tilde = np.sqrt((1 - vsun_projected) / (1 + vsun_projected))
+    zcmb = (1 + z_helio) / zsun_tilde - 1
+
+    # Optional linear error propagation
+    if e_z_helio is not None:
+        e_zcmb = np.abs(e_z_helio / zsun_tilde)
+        return zcmb, e_zcmb
+
+    return zcmb

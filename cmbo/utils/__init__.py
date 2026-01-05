@@ -13,38 +13,45 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+import numpy as np
+from scipy.stats import norm
+
 from .coords import (  # noqa: F401
     build_mass_bins,
     cartesian_icrs_to_galactic,
     cartesian_icrs_to_galactic_spherical,
     cartesian_to_r_theta_phi,
     cz_to_comoving_distance,
+    comoving_distance_to_cz,
     radec_to_galactic,
+    radec_to_cartesian,
+    cartesian_to_radec,
     galactic_to_radec,
 )
 from .associations import (  # noqa: F401
     HaloAssociation,
     identify_halo_associations,
     compute_association_signals,
+    load_associations,
 )
-from .cluster_matching import (  # noqa: F401
-    compute_matching_matrix,
-    greedy_global_matching,
+# Re-export matching helpers from the dedicated match package                   # noqa
+from ..match.crossmatch import (  # noqa: F401
+    crossmatch_planck_catalog,
+    crossmatch_mcxc,
+    crossmatch_erass,
 )
-from .crossmatch import crossmatch_planck_catalog  # noqa: F401
-from .pfeifer import MatchingProbability  # noqa: F401
 from .smoothing import smooth_map_gaussian  # noqa: F401
-
-from datetime import datetime
-import numpy as np
-from scipy.stats import norm
-
-
-def fprint(*args, verbose=True, **kwargs):
-    """Prints a message with a timestamp prepended."""
-    if verbose:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S%f")[:-6]
-        print(f"{timestamp}", *args, **kwargs)
+from .config_reader import (  # noqa: F401
+    load_config,
+    apply_root_to_config_paths,
+)
+from .logging import fprint  # noqa: F401
+from .regression import (  # noqa: F401
+    LinearRoxyFitter,
+    MarginalizedLinearFitter,
+    CorrelationWithSamples,
+    correlation_with_errors,
+)
 
 
 def pvalue_to_sigma(pval):

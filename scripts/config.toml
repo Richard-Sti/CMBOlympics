@@ -4,6 +4,10 @@
 # Base directory used to resolve relative paths in this config.
 [paths]
 root = "/Users/rstiskalek/Projects/CMBOlympics"
+observed_clusters = "data/observed_cluster_masses.toml"
+Planck_tSZ_catalogue = "data/HFI_PCCS_SZ-union_R2.08.fits"
+MCXC_catalogue = "data/MCXCII_2024.fits"
+eRASS_catalogue = "data/erass1cl_primary_v3.2.fits"
 # root = "/mnt/extraspace/rstiskalek/CMBOlympics"
 
 # --- Runtime ---
@@ -14,8 +18,13 @@ n_jobs = 4
 # --- Input Maps ---
 # Paths to the HEALPix maps for the tSZ signal and random pointings.
 [input_map]
-signal_map = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
-random_pointing = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
+# signal_map = "data/deproject_CMB_CIB_default_standard_full.fits"
+# random_pointing = "data/deproject_CMB_CIB_default_standard_full_RAND_POINTING.hdf5"
+signal_map = "data/PR4_NILC_y_map.fits"
+random_pointing = "data/PR4_NILC_y_map__RAND_POINTING.hdf5"
+# signal_map = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
+# random_pointing = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
+
 # FWHM in arcminutes for smoothing the input map.
 smooth_fwhm = 9.6
 
@@ -30,7 +39,7 @@ theta_max = 751.0
 n_theta = 1001
 # Random pointing sampling controls.
 n_points = 100_000
-abs_b_min = 10.0
+abs_b_min = 20.0
 fwhm_arcmin = 9.6
 seed = 42
 
@@ -40,7 +49,7 @@ seed = 42
 r_min = 0.0       # Minimum comoving distance [Mpc/h]
 r_max = 150.0     # Maximum comoving distance [Mpc/h]
 b_min = 10.0      # Minimum Galactic latitude (absolute value) [degrees]
-mass_min = 1e14   # Minimum halo mass (M_200c) [M_sun/h]
+mass_min = 5e13   # Minimum halo mass (M_200c) [M_sun/h]
 mass_max = 1e16   # Maximum halo mass (M_200c) [M_sun/h]
 theta_min = 5.0   # Minimum angular size (theta_500) [arcmin]
 theta_max = 6000  # Maximum angular size (theta_500) [arcmin]
@@ -58,6 +67,7 @@ verbose_bins = true # Print details about the created mass bins
 which_simulation = "csiborg2" # Key for the halo catalogue to use (see below)
 output_folder = "results" # Folder to save the HDF5 output file
 # output_tag = ""             # Optional tag to append to the output filename
+matching_pvalue_threshold = 0.05
 
 # Aperture and profile settings
 aperture_scale = 2.0          # Aperture size for per-halo p-value, as a multiple of theta_500
@@ -78,8 +88,8 @@ cutout_random_abs_b_min = 10 # Minimum Galactic latitude for random cutouts
 # Stacking and significance settings
 bootstrap = 10_000           # Number of bootstrap resamples for error estimation
 high_sample_bins = 3         # Number of high-mass bins to use more random samples for
-random_pool_samples_high = 10000 # Number of random stacks for high-mass bins
-random_pool_samples_low = 1000   # Number of random stacks for low-mass bins
+random_pool_samples_high = 100000 # Number of random stacks for high-mass bins
+random_pool_samples_low = 10000   # Number of random stacks for low-mass bins
 t_fit_nth_sample = 10        # Down-sampling factor for t-distribution fitting (1 for full)
 
 # General settings
@@ -89,34 +99,79 @@ seed = 42   # Random seed for reproducibility
 return_individual_profiles = false # Save all individual 1D profiles to the output file
 return_random_profiles = false     # Save all individual random 1D profiles to the output file
 
+# --- Mass Scoring ---
+# Settings for mass calibration scoring (scripts/score_masses.py)
+# Script loops over all catalogues (planck, mcxc, erass) and all simulations (csiborg1, csiborg2, manticore)
+[mass_scoring]
+z_max = 0.05                   # Maximum redshift for matching
+m500_min = 1e14                 # Minimum M500 for matching [M_sun]
+max_angular_sep = 60.0          # Classical matching: max angular separation [arcmin]
+max_delta_cz = 300.0            # Classical matching: max |cz| difference [km/s]
+median_halo_tsz_pval_max = 0.1  # Classical matching: max median halo pval (optional)
+use_median_halo_tsz_pval = false # Classical matching: minimise median halo pval instead of distance
+min_member_fraction = 0.5       # Classical matching: minimum member fraction passing angular/redshift cuts
+remove_near_target = true       # If true, drop associations near the Shapley A3558 target
+target_ra_deg = 201.989583      # Shapley A3558 RA in degrees (used when remove_near_target is true)
+target_dec_deg = -31.5025       # Shapley A3558 DEC in degrees
+target_cz_kms = 14784.0         # Target cz in km/s
+remove_max_sep_arcmin = 180.0   # Angular window for removing associations (arcmin)
+remove_max_cz_diff_kms = 500.0  # |cz - target_cz_kms| window for removing associations (km/s)
+h = 0.681                       # Hubble parameter for unit conversion
+x_pivot = 14.0                  # x-axis pivot for regression (log10 scale)
+y_pivot_M500 = 14.0             # y-axis pivot for M500 regression (log10 scale)
+y_pivot_L500 = 44.0             # y-axis pivot for L500 regression (log10 scale)
+y_pivot_YSZ = -4.0              # y-axis pivot for YSZ regression (log10 scale)
+mcmc_warmup = 1000              # Number of MCMC warmup/burn-in steps
+mcmc_samples = 10_000           # Number of MCMC sampling steps
+mcmc_chains = 1                 # Number of MCMC chains
+output_dir = "results/mass_scoring" # Output directory for plots
+clear_output_dir = true         # Clear output directory before running
+
 # --- Halo Catalogues ---
 # Definitions of available halo catalogues. The key is used in `analysis.which_simulation`.
 [halo_catalogues]
+min_association_mass = 5e13  # Minimum mass for associations [M_sun/h]
+min_fraction_present = 0.5  # Minimum fraction of realisations per association
+association_eps = 1.5        # DBSCAN linking length [Mpc/h]
+association_min_samples = 9  # Minimum members per association
+association_mass_sigma = 0.3  # Max |log10(M) - mean| before rejection
+association_eps_iterations = 3  # Iterations for mass-dependent eps pruning
+association_mass_dependent_eps = true  # Use eps scaling with mean association mass
 
 [halo_catalogues.csiborg1]
 fname = "data/csiborg1_fof.hdf5"
-nsim = 7540
-box_size = 677.7
+nsim = "all"
+box_size = 677.7  # [Mpc/h]
 omega_m = 0.307
 position_key = "Position"
-mass_key = "M200c"
+velocity_key = "Velocity"
+mass_key = "M500c"
 radius_key = "R500c"
+Vext = [67.4, 1.8, -309.1]  # External bulk velocity [km/s] added to peculiar velocities
 
 [halo_catalogues.csiborg2]
 fname = "data/csiborg2_fof.hdf5"
-nsim = 16417 # Which simulation number to process ("all" or a specific integer)
+nsim = "all"  # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
-mass_key = "Group_M_Crit200"
+velocity_key = "Velocities"
+mass_key = "Group_M_Crit500"
 radius_key = "Group_R_Crit500"
-box_size = 676.6
+box_size = 676.6  # [Mpc/h]
 omega_m = 0.3111
+Vext = [-6.1, -23.2, -98.2]
 
 
 [halo_catalogues.manticore]
 fname = "data/manticore_fof.hdf5"
-nsim = 16417 # Which simulation number to process ("all" or a specific integer)
+nsim = "all" # Which simulation number to process ("all" or a specific integer)
 position_key = "Coordinates"
-mass_key = "Group_M_Crit200"
+velocity_key = "Velocities"
+mass_key = "Group_M_Crit500"
 radius_key = "Group_R_Crit500"
-box_size = 681.0
+box_size = 681.0  # [Mpc/h]
 omega_m = 0.306
+Vext = [-29.4, -17.9, -82.95]
+
+[halo_catalogues.SLOW]
+fname = "data/SLOW2024_clusters_galactic.txt"
+pvalue_only = true  # Only compute p-values, skip stacking/binning

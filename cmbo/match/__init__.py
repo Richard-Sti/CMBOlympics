@@ -13,13 +13,22 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-__version__ = "0.1.0"
+"""Matching utilities (associations, crossmatches, Pfeifer probabilities)."""
 
-from cmbo import (                                                              # noqa
-    corr,                                                                       # noqa
-    io,                                                                         # noqa
-    match,                                                                      # noqa
-    mapgen,                                                                     # noqa
-    projection,                                                                 # noqa
-    utils,                                                                      # noqa
-    )                                                                           # noqa
+from .cluster_matching import (  # noqa: F401
+    compute_matching_matrix_cartesian,
+    compute_matching_matrix_obs,
+    greedy_global_matching,
+)
+from .crossmatch import (  # noqa: F401
+    crossmatch_planck_catalog,
+    crossmatch_mcxc,
+    crossmatch_erass,
+)
+from .pfeifer import MatchingProbability  # noqa: F401
+from .assignments import (  # noqa: F401
+    match_catalogue_to_associations,
+    match_planck_catalog_to_associations,
+    match_mcxc_catalog_to_associations,
+    match_erass_catalog_to_associations,
+)

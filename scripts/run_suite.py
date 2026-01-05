@@ -15,7 +15,7 @@
 """Analyse tSZ profiles in mass bins."""
 
 from pathlib import Path
-import sys
+import argparse
 
 import h5py
 import numpy as np
@@ -25,77 +25,60 @@ from cmbo.utils import (
     build_mass_bins,
     cartesian_icrs_to_galactic_spherical,
     fprint,
+    load_config,
     pvalue_to_sigma,
 )
 from scipy.stats import norm, t
 from tqdm import tqdm
 
-try:
-    import tomllib as _toml_loader  # Python 3.11+
-except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
-    try:
-        import tomli as _toml_loader  # type: ignore
-    except ModuleNotFoundError as exc:  # pragma: no cover
-        raise SystemExit(
-            "tomli is required to read the configuration file "
-            "(install with 'pip install tomli')."
-        ) from exc
 
-tomli = _toml_loader
+# Critical density at z=0 in Msun/Mpc^3 (for h=1)
+RHO_CRIT_0 = 2.775e11
 
 
-def _resolve_root_path(cfg):
-    """Return the absolute root directory for resolving relative paths."""
-
-    paths_cfg = cfg.get("paths", {})
-    root_value = paths_cfg.get("root")
-    if root_value is None:
-        return Path(__file__).resolve().parents[1]
-
-    root_path = Path(root_value).expanduser()
-    if not root_path.is_absolute():
-        root_path = (Path(__file__).resolve().parent / root_path).resolve()
-    return root_path
+def m500_to_r500(m500, rho_crit=RHO_CRIT_0):
+    """Convert M500 to R500 assuming spherical overdensity."""
+    return (3 * m500 / (4 * np.pi * 500 * rho_crit)) ** (1 / 3)
 
 
-def _resolve_with_root(root_path, value):
-    """Resolve a file path relative to the configured root directory."""
+def load_slow_clusters(fpath):
+    """Load SLOW simulation cluster positions from text file."""
+    names, ell, b, dist, m500 = [], [], [], [], []
 
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = root_path / path
-    return str(path)
+    with open(fpath, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
 
+            parts = line.split()
+            if len(parts) < 8:
+                continue
 
-def apply_root_to_config_paths(cfg):
-    """Resolve all known file paths in the config using the root directory."""
+            names.append(parts[0])
+            ell.append(float(parts[4]))
+            b.append(float(parts[5]))
+            dist.append(float(parts[6]))
+            m500.append(float(parts[7]))
 
-    root_path = _resolve_root_path(cfg)
+    ell = np.array(ell)
+    b = np.array(b)
+    dist = np.array(dist)
+    m500 = np.array(m500) * 1e14  # Convert from 10^14 Msun to Msun
 
-    map_cfg = cfg.get("input_map", {})
-    for key in ("signal_map", "random_pointing"):
-        if key in map_cfg:
-            map_cfg[key] = _resolve_with_root(root_path, map_cfg[key])
+    r500 = m500_to_r500(m500)
+    theta_arcmin = np.rad2deg(np.arctan(r500 / dist)) * 60
 
-    analysis_cfg = cfg.get("analysis", {})
-    if "output_folder" in analysis_cfg:
-        analysis_cfg["output_folder"] = _resolve_with_root(
-            root_path, analysis_cfg["output_folder"]
-        )
+    fprint(f"Loaded {len(names)} SLOW clusters from {fpath}")
 
-    for catalogue in cfg.get("halo_catalogues", {}).values():
-        if "fname" in catalogue:
-            catalogue["fname"] = _resolve_with_root(
-                root_path, catalogue["fname"])
-
-    return root_path
-
-
-def load_config(path):
-    """Return the raw configuration dictionary loaded from a TOML file."""
-
-    with open(path, "rb") as fh:
-        return tomli.load(fh)
+    return {
+        "name": np.array(names),
+        "ell": ell,
+        "b": b,
+        "r": dist,
+        "mass": m500,
+        "theta": theta_arcmin,
+    }
 
 
 def load_halo_catalogue(cfg, nsim):
@@ -139,6 +122,8 @@ def load_halo_catalogue(cfg, nsim):
     if mass_max is not None:
         mask &= mass <= mass_max
 
+    selection_index = np.nonzero(mask)[0]
+
     if not np.any(mask):
         raise ValueError(
             f"No haloes passed the selection cuts for simulation {nsim}."
@@ -153,6 +138,7 @@ def load_halo_catalogue(cfg, nsim):
         "b": b[mask],
         "mass": mass[mask],
         "theta": theta_arcmin[mask],
+        "catalogue_index": selection_index,
     }
 
 
@@ -201,7 +187,10 @@ def save_results_hdf5(path, simulations):
 
             halo_group = sim_group.create_group("halos")
             for key, values in data["halos"].items():
-                halo_group.create_dataset(key, data=np.asarray(values))
+                arr = np.asarray(values)
+                if arr.dtype.kind == 'U':  # Unicode string
+                    arr = arr.astype('S')  # Convert to bytes
+                halo_group.create_dataset(key, data=arr)
             halo_group.create_dataset(
                 "pval_data", data=np.asarray(data["halo_pvals"]))
             if data.get("halo_bins") is not None:
@@ -210,6 +199,16 @@ def save_results_hdf5(path, simulations):
             if data.get("original_index") is not None:
                 halo_group.create_dataset(
                     "original_index", data=np.asarray(data["original_index"]))
+            if data.get("halo_pvals_original") is not None:
+                halo_group.create_dataset(
+                    "pval_original_order",
+                    data=np.asarray(data["halo_pvals_original"]),
+                )
+            if data.get("catalogue_index_original") is not None:
+                halo_group.create_dataset(
+                    "catalogue_index_original",
+                    data=np.asarray(data["catalogue_index_original"]),
+                )
 
             bin_results = data.get("results") or []
             if not bin_results:
@@ -402,6 +401,7 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
     max_cutout_bins = cutout_params["max_bins"]
 
     results = []
+    catalogue_index_original = np.array(halos["catalogue_index"], copy=True)
     halo_pval_data = np.full(halos["mass"].shape, np.nan, dtype=float)
     halo_bin_index = np.full(halos["mass"].shape, -1, dtype=int)
 
@@ -564,6 +564,8 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
             }
         )
 
+    halo_pvals_original = halo_pval_data.copy()
+
     mass_order = np.argsort(-np.asarray(halos["mass"]))
     halos_sorted = {
         key: np.asarray(values)[mass_order]
@@ -575,7 +577,50 @@ def process_simulation(cfg, sim_id, profiler, radii_stack, theta_rand,
         "halo_pvals": halo_pval_data[mass_order],
         "halo_bins": halo_bin_index[mass_order],
         "original_index": mass_order,
+        "halo_pvals_original": halo_pvals_original,
+        "catalogue_index_original": catalogue_index_original,
         "results": results,
+    }
+
+
+def process_slow_simulation(cfg, profiler, theta_rand, tsz_rand_signal):
+    """Compute p-values only for SLOW simulation clusters."""
+    analysis_cfg = cfg["analysis"]
+    catalogue_cfg = cfg["halo_catalogues"]["SLOW"]
+
+    clusters = load_slow_clusters(catalogue_cfg["fname"])
+    aperture = analysis_cfg["aperture_scale"] * clusters["theta"]
+
+    signal = profiler.get_profiles_per_source(
+        clusters["ell"],
+        clusters["b"],
+        aperture,
+    )
+
+    pval_data = profiler.signal_to_pvalue(
+        aperture,
+        signal,
+        theta_rand,
+        tsz_rand_signal,
+    )
+
+    fprint(f"Computed p-values for {len(clusters['name'])} SLOW clusters.")
+
+    # Sort by mass (descending)
+    mass_order = np.argsort(-clusters["mass"])
+    clusters_sorted = {
+        key: np.asarray(values)[mass_order]
+        for key, values in clusters.items()
+    }
+
+    return {
+        "halos": clusters_sorted,
+        "halo_pvals": pval_data[mass_order],
+        "halo_bins": None,
+        "original_index": mass_order,
+        "halo_pvals_original": pval_data.copy(),
+        "catalogue_index_original": None,
+        "results": None,
     }
 
 
@@ -586,7 +631,6 @@ def determine_simulations(catalogue_cfg, requested):
         sims = cmbo.io.list_simulations_hdf5(catalogue_cfg["fname"])
 
         fprint(f"Processing simulations {sims}.")
-        sims = sims[:2]
 
         return [str(sim) for sim in sims]
 
@@ -601,11 +645,27 @@ def determine_simulations(catalogue_cfg, requested):
 def main():
     """Entry-point for the command-line script."""
 
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
-    else:
-        config_path = Path(__file__).with_name("config.toml")
+    parser = argparse.ArgumentParser(
+        description="Run the tSZ mass-bin analysis suite."
+    )
+    parser.add_argument(
+        "config",
+        nargs="?",
+        default=Path(__file__).with_name("config.toml"),
+        help="Path to the TOML configuration file (default: config.toml)",
+    )
+    parser.add_argument(
+        "--simulation",
+        dest="simulation",
+        help="Override analysis.which_simulation from the config file.",
+    )
+    args = parser.parse_args()
+
+    config_path = Path(args.config)
     cfg = load_config(config_path)
+    if args.simulation:
+        cfg.setdefault("analysis", {})["which_simulation"] = args.simulation
+
     try:
         runtime_cfg = cfg["runtime"]
     except KeyError as exc:
@@ -617,7 +677,8 @@ def main():
             f"'runtime.n_jobs' missing from {config_path}."
         )
 
-    root_path = apply_root_to_config_paths(cfg)
+    root_path = Path(
+        cfg.get("_root_path", Path(__file__).resolve().parents[1]))
     fprint(f"Loaded config from {config_path} with root {root_path}")
 
     analysis_cfg = cfg["analysis"]
@@ -666,22 +727,34 @@ def main():
 
     sim_key = analysis_cfg["which_simulation"]
     catalogue_cfg = cfg["halo_catalogues"][sim_key]
-    sim_ids = determine_simulations(catalogue_cfg, catalogue_cfg.get("nsim"))
 
-    results_by_sim = {}
-    for idx, sim_id in enumerate(sim_ids):
-        fprint(f"Processing simulation {sim_id}")
-        results_by_sim[sim_id] = process_simulation(
-            cfg,
-            sim_id,
-            profiler,
-            radii_stack,
-            theta_rand,
-            tsz_rand_signal,
-            cutout_extractor,
-            cutout_params,
-            idx,
-        )
+    # Handle SLOW simulation (p-values only)
+    if catalogue_cfg.get("pvalue_only", False):
+        fprint(f"Processing {sim_key} (p-values only mode)")
+        results_by_sim = {
+            "0": process_slow_simulation(
+                cfg, profiler, theta_rand, tsz_rand_signal
+            )
+        }
+    else:
+        sim_ids = determine_simulations(
+            catalogue_cfg, catalogue_cfg.get("nsim"))
+
+        results_by_sim = {}
+        total_sims = len(sim_ids)
+        for idx, sim_id in enumerate(sim_ids):
+            fprint(f"Processing simulation {sim_id} ({idx + 1}/{total_sims})")
+            results_by_sim[sim_id] = process_simulation(
+                cfg,
+                sim_id,
+                profiler,
+                radii_stack,
+                theta_rand,
+                tsz_rand_signal,
+                cutout_extractor,
+                cutout_params,
+                idx,
+            )
 
     if not results_by_sim:
         fprint("No simulations produced results; aborting save.")

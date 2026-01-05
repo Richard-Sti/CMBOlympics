@@ -14,13 +14,15 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 """Readers for observed cluster catalogues stored as TOML files."""
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from ..utils.coords import cz_to_comoving_distance, radec_to_galactic
+from ..constants import SPEED_OF_LIGHT_KMS
+from ..utils.coords import (cz_to_comoving_distance, radec_to_cartesian,
+                            radec_to_galactic)
 
 try:  # pragma: no cover - runtime import fallback for Python <3.11
     import tomllib as _toml_loader
@@ -38,9 +40,6 @@ if toml_loader is None:  # pragma: no cover - enforced via dependency list
     )
 
 
-_C_LIGHT_KMS = 299792.458
-
-
 @dataclass(slots=True)
 class ObservedCluster:
     """Container describing a single observed cluster."""
@@ -53,6 +52,8 @@ class ObservedCluster:
     cz_cmb_err: float | None
     map_fit: dict | None = None
     planck_match: dict | None = None
+    mcxc_match: dict | None = None
+    erass_match: dict | None = None
 
     @property
     def galactic_coordinates(self):
@@ -73,6 +74,8 @@ class ObservedCluster:
             "cz_cmb_err": self.cz_cmb_err,
             "map_fit": self.map_fit,
             "planck_match": self.planck_match,
+            "mcxc_match": self.mcxc_match,
+            "erass_match": self.erass_match,
         }
 
 
@@ -118,7 +121,7 @@ class ObservedClusterCatalogue:
             cluster.cz_cmb if cluster.cz_cmb is not None else np.nan
             for cluster in self._clusters
         ], dtype=float)
-        return cz / _C_LIGHT_KMS
+        return cz / SPEED_OF_LIGHT_KMS
 
     @property
     def names(self):
@@ -161,8 +164,7 @@ class ObservedClusterCatalogue:
         dec = np.array([cluster.dec_deg for cluster in self._clusters],
                        dtype=float)
 
-        ra_rad = np.deg2rad(ra)
-        dec_rad = np.deg2rad(dec)
+        unit_vec = radec_to_cartesian(ra, dec)
 
         cz = np.array([
             cluster.cz_cmb if cluster.cz_cmb is not None else np.nan
@@ -170,11 +172,7 @@ class ObservedClusterCatalogue:
         ], dtype=float)
         r = cz_to_comoving_distance(cz, h, Om0)
 
-        x = r * np.cos(dec_rad) * np.cos(ra_rad)
-        y = r * np.cos(dec_rad) * np.sin(ra_rad)
-        z = r * np.sin(dec_rad)
-
-        return np.stack((x, y, z), axis=-1)
+        return (unit_vec.T * r).T
 
 
 def _load_catalogue(path: Path):
@@ -186,10 +184,16 @@ def _load_catalogue(path: Path):
         return toml_loader.loads(fixed)
 
 
-def load_observed_clusters(fname):
+def load_observed_clusters(fname, skip_names=None, verbose=True):
     """Return the full observed cluster catalogue."""
     path = Path(fname)
     raw = _load_catalogue(path)
+    skip_set = None
+    if skip_names:
+        skip_iter = (
+            [skip_names] if isinstance(skip_names, str) else skip_names
+        )
+        skip_set = {str(name).lower() for name in skip_iter}
 
     clusters = []
     for identifier, entries in raw.items():
@@ -201,6 +205,10 @@ def load_observed_clusters(fname):
             continue
 
         name = details.get("name", identifier)
+        if skip_set and name.lower() in skip_set:
+            if verbose:
+                print(f"Skipping observed cluster '{name}'.")
+            continue
         ra = float(details["ra"])
         dec = float(details["dec"])
         cz_cmb = details.get("cz_cmb")

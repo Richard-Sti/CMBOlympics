@@ -13,13 +13,11 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
-__version__ = "0.1.0"
+from datetime import datetime
 
-from cmbo import (                                                              # noqa
-    corr,                                                                       # noqa
-    io,                                                                         # noqa
-    match,                                                                      # noqa
-    mapgen,                                                                     # noqa
-    projection,                                                                 # noqa
-    utils,                                                                      # noqa
-    )                                                                           # noqa
+
+def fprint(*args, verbose=True, **kwargs):
+    """Print with timestamp when verbose."""
+    if verbose:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S%f')[:-6]
+        print(f'{timestamp}', *args, **kwargs)
