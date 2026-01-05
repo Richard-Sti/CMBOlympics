@@ -1,55 +1,32 @@
-# Cosmic Microwave Background Olympics
+# Enhancing Thermal Sunyaev-Zel'dovich Analyses with Digital Twins of the Local Universe
 
-Toolkit for analysing cosmological “digital twin” simulations and Cosmic Microwave Background (CMB) observations. CMBO is built to measure the thermal Sunyaev–Zel’dovich (tSZ) signal at the locations of haloes drawn from the digital twins, and to test whether the digital-twin halo masses are consistent with both the SZ map amplitude and SZ-derived mass estimates.
+A toolkit for validating constrained simulations of the local Universe against thermal Sunyaev-Zel'dovich (tSZ) observations. The package connects tSZ data with digital twins—data-constrained posterior simulations whose initial conditions are inferred via Bayesian forward modelling (BORG)—enabling mutual validation: tSZ observations benchmark simulation fidelity, while simulations provide prior information on cluster positions, masses and density profiles for tSZ studies.
 
-# Disciplines
+## Key features
 
-We introduce three disciplines to assess the fidelity of the digital-twin simulations against observed tSZ data.
+- **Per-cluster angular positioning tests**: Measure the tSZ signal at halo positions and derive $p$-values against random sky locations to assess positional accuracy.
+- **Stacked radial profiles**: Stack 1D tSZ profiles as a function of halo mass to test mass-dependent signal recovery.
+- **Mass scaling relations**: Fit $Y$–mass and mass–mass scaling relations for matched cluster samples, with full uncertainty propagation from the ensemble of digital twin realisations.
+- **Halo associations**: Link the "same" halo across posterior realisations using DBSCAN clustering, enabling ensemble-level comparisons.
+- **Cluster matching**: Match observed clusters (Planck tSZ, eROSITA X-ray) to simulated halo associations using angular separation, redshift, or LUM significance criteria.
 
-## 1. Local cluster population tSZ significance.
+# Validation tests
 
-The discipline starts by constructing halo "associations" as defined in [1]. Each association is a stable, localised set of massive haloes collected across all digital-twin realisations with the constraint that no association contains more than one halo from the same twin. The halos in a single association act as posterior samples of a single observed cluster. Following the matching strategy of [2], every association is compared to a catalogue of 19 nearby, well-studied clusters. For each halo–cluster pair we evaluate an association p-value and then perform a greedy assignment so the most significant matches are fixed first. The outcome is a subset of associations that are paired with the observed clusters, each annotated with the corresponding Pfeifer significance value. Once a halo is matched, we quantify its tSZ detection significance by measuring the mean signal within a circular aperture of radius $\theta_{\rm 500c}$, derived from the halo’s size and distance. We then compare this signal to expectations from random sky pointings of identical aperture size, yielding a $p$-value that represents the probability of obtaining such a signal by chance.
+We introduce three tests to assess the fidelity of the digital-twin simulations against observed tSZ data.
 
-This metric quantifies how well the angular positions of digital-twin haloes align with the observed SZ amplitudes of nearby clusters, producing a distribution of $p$-values for each matched association. The first task is to compare these $p$-value distributions per cluster to identify any positional discrepancies. To this end, we generate a table of $p$-values for each cluster alongside a corresponding visualisation showing the tSZ cutout at the cluster’s position and the matched halo positions from the digital twins. We then compress this information into a single figure of merit per association. Since the $p$-values within an association are independent (being derived from independent posterior samples), we combine them using Stouffer’s method by converting each $p$-value to a $z$-score and then aggregating these scores to obtain a single combined $p$-value for the association. This combined value, along with the $p$-value percentiles, is reported in the table. Finally, we compress the set of association-level $p$-values into a single figure of merit for the entire discipline. As the associations are independent, we again apply Stouffer’s method by converting the association-level $p$-values to $z$-scores and combining them to obtain an overall $p$-value quantifying how well the digital-twin halo positions reproduce the observed SZ amplitudes across all 19 clusters. If an observed cluster is not matched to any association, we assign it a default $p$-value of 0.5.
+## 1. Local cluster population tSZ significance
 
-This is the set of 19, well-studied clusters: Abell 1644, Abell 119, Abell 548, Abell 1736, Abell 496, Hydra (A1060), Centaurus (A3526), Hercules (A2199), Hercules (A2147), Hercules (A2063), Hercules (A2151), Leo (A1367), Coma (A1656), Norma (A3627), Virgo Cluster, Shapley (A3571), Shapley (A3558), Shapley (A3562), and Perseus (A426).
+For each halo in a digital-twin realisation, we measure the mean Compton-$y$ signal within a circular aperture of radius $\theta_{500c}$ and compare it to the distribution of signals at random sky positions of identical aperture size. This yields a $p$-value quantifying the probability of obtaining such a signal by chance. Low $p$-values indicate that the simulated halo lies at an observed tSZ hotspot.
+
+We construct halo "associations" [1]—sets of haloes (at most one per realisation) at approximately the same position across realisations—and match them to 18 nearby, well-studied clusters using the LUM significance criterion [2]. Per-cluster $p$-values are combined via Stouffer's method to produce an overall figure of merit for the simulation suite.
 
 ## 2. Stacked tSZ signal as a function of halo mass
 
-In this discipline, we move beyond individual halo detections to assess the stacked tSZ signal as a function of halo mass across the entire digital-twin ensemble. For each simulated halo, we extract the 1D tSZ profile as a function of angular radius and stack these profiles in bins of halo mass, normalised by the halo’s angular size. The stacked profiles are then compared to a distribution of equally sized stacks drawn from random sky locations using identical aperture sizes. This yields a significance for the stacked tSZ signal in each mass bin as a function of normalised angular radius.
+For each halo, we extract the 1D tSZ profile as a function of angular radius normalised by $\theta_{500c}$, then stack profiles in mass-ranked bins. We compare the stacked signal to random stacks at uniformly distributed sky positions with matched aperture sizes. This tests how well simulated haloes trace real tSZ structures as a function of mass, identifying the mass threshold above which the digital twins reliably recover the observed signal.
 
-The aim is to test how the spatial alignment between simulated haloes and the observed tSZ signal depends on halo mass, identifying the mass range above which the digital twins trace real structures rather than random fluctuations. The binning scheme is defined as follows: the highest-mass bin contains the 10 most massive haloes in the simulation (within the selected radial range and sky area), the next bin includes the following 50 most massive haloes, and the remaining bins are spaced by $0.2~\mathrm{dex}$. Halo masses are defined using the FoF $M_{200c}$ measure, and we typically restrict the analysis to haloes with $M_{200c} > 10^{14}~M_\odot/h$. This discipline is sensitive not only to the angular positions of the haloes but also to the fraction of random objects included in each mass bin, as their presence dilutes the stacked signal.
+## 3. Mass scaling relations
 
-### 3. Agreement of tSZ-signal amplitude and digital twin halo masses
-
-....
-
-# Example
-
-To be added.
-
-## tSZ map painting (JAX, Healpix)
-
-A minimal example for painting a thermal SZ map on a Healpix grid using JAX:
-
-```python
-import jax.numpy as jnp
-from cmbo.mapgen.tsz_map import GNFWParameters, GNFWProfile, TSZMap
-
-nside = 512
-profile = GNFWProfile(GNFWParameters())
-mapper = TSZMap(nside, profile, theta_max_multiplier=4.0, batch_size=256)
-
-# Halo inputs: RA/Dec (rad), M200c (Msun), angular size (rad), redshift.
-halo_ra = jnp.array([0.1, -0.2])
-halo_dec = jnp.array([0.05, -0.1])
-halo_mass = jnp.array([3e14, 8e14])
-theta_200c = jnp.deg2rad(jnp.array([5.0, 6.0]) / 60.0)  # arcmin → rad
-redshift = jnp.array([0.3, 0.6])
-
-tsz_map = mapper.paint(halo_ra, halo_dec, halo_mass, theta_200c, redshift)
-```
-
+We match observed clusters from the Planck tSZ and eROSITA X-ray catalogues to halo associations using angular separation and redshift criteria. For matched pairs, we fit scaling relations of the form $\log Y = m \log M + c$, where $Y$ is either the integrated Compton parameter $Y_{500c}^{\rm tSZ}$ or the catalogue mass, and $M$ is the BORG halo mass. The fitting procedure marginalises over the ensemble of halo masses from each association, propagating the reconstruction uncertainty into the inferred slope, intercept and intrinsic scatter. We compare the fitted slopes to self-similar expectations ($m = 5/3$ for tSZ, $m = 4/3$ for X-ray luminosity) and test mass–mass relations against one-to-one correspondence.
 
 # Installation
 
@@ -66,10 +43,13 @@ Installing in editable mode pulls the dependencies declared in `setup.py`. Alter
 pip install -r requirements.txt
 ```
 
+# Acknowledgements
+
+To add.
+
 # References
 [1] McAlpine 2025, [arXiv:2510.16574](https://arxiv.org/abs/2510.16574)
 [2] Pfeifer S., et al., 2023, [arXiv:2305.05694](https://arxiv.org/abs/2305.05694)
-
 
 # License
 
