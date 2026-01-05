@@ -151,7 +151,8 @@ def collect_tension(root, yvar_filter):
         sigma_val = None
         with path.open() as f:
             for line in f:
-                if line.startswith("Slope=5/3"):
+                if (line.startswith("Slope=5/3")
+                        or line.startswith("Slope=4/3")):
                     tokens = line.strip().split()
                     try:
                         sigma_val = float(tokens[-1].split("=")[-1])
@@ -310,7 +311,10 @@ def format_luminosity_table(results, yvar_filter):
     if not rows:
         return ""
     label = "Luminosity" if yvar_filter == "L500" else "tSZ"
-    target_slope = "target m ≈ 5/3"
+    if yvar_filter == "L500":
+        target_slope = "target m ≈ 4/3"
+    else:
+        target_slope = "target m ≈ 5/3"
     catalogues = sorted({r["catalogue"] for r in rows})
     col_names = ["Simulation", "Threshold",
                  "m_mean", "m_std",
@@ -367,11 +371,13 @@ def main():
     root = load_output_root(args.config)
     lines = []
 
+    print("Collecting matched fractions...")
     fractions = collect_match_fractions(root)
     lines.append(
         "Matched fraction (matched / total) per simulation and catalogue:")
     lines.append(format_table(fractions))
 
+    print("Collecting luminosity statistics...")
     lum_results, skipped = collect_luminosity_stats(root)
     lum_L = format_luminosity_table(lum_results, "L500")
     lum_Y = format_luminosity_table(lum_results, "YSZ")
@@ -380,6 +386,7 @@ def main():
     if lum_Y:
         lines.append(lum_Y)
 
+    print("Collecting mass statistics...")
     mass_results = collect_mass_stats(root)
     if mass_results:
         lines.append("\nMass–mass relations (mean ± std for m, c, sigma_int; "
@@ -429,6 +436,7 @@ def main():
     print(output)
     outfile = root / "summary_overview.txt"
     outfile.write_text(output)
+    print(f"\nSaved summary to {outfile}")
 
 
 if __name__ == "__main__":
