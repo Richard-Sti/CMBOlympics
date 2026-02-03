@@ -370,6 +370,19 @@ def save_plots(fitter, x, y, xerr, yerr, y_label, y_variable, sim_key,
         ax=ax_scatter,
         add_one_to_one=add_one_to_one
     )
+
+    # Add theoretical slope lines for L500 and YSZ
+    if y_variable == "L500":
+        x_mean, y_mean = np.mean(x), np.mean(y)
+        ax_scatter.axline((x_mean, y_mean), slope=4/3, ls='--', color='C3',
+                          lw=1.5, label=r'$m = 4/3$', zorder=0)
+        ax_scatter.legend()
+    elif y_variable == "YSZ":
+        x_mean, y_mean = np.mean(x), np.mean(y)
+        ax_scatter.axline((x_mean, y_mean), slope=5/3, ls='--', color='C3',
+                          lw=1.5, label=r'$m = 5/3$', zorder=0)
+        ax_scatter.legend()
+
     ax_scatter.set_xlabel(rf'$\log M^{{{sim_label}}}_{{500c}} ~ '
                           rf'[h^{{-1}}\,M_\odot]$')
     ax_scatter.set_ylabel(y_label)

@@ -642,11 +642,12 @@ def plot_cluster_cutout(cutout, extent, ell, b, ellc, bc,
         )
         ax.scatter(0.0, 0.0, marker="+", c="r", s=64, zorder=4)
 
-        ax.set_xlabel(r"$\xi\,[\mathrm{arcmin}]$")
-        ax.set_ylabel(r"$\eta\,[\mathrm{arcmin}]$")
+        ax.set_xlabel(r"$\theta_x\,[\mathrm{arcmin}]$")
+        ax.set_ylabel(r"$\theta_y\,[\mathrm{arcmin}]$")
 
         cbar = fig.colorbar(im, ax=ax, pad=0.02)
-        cbar.set_label(cbar_label)
+        cbar.set_label(cbar_label, fontsize=12)
+        cbar.ax.tick_params(labelsize=10)
         fig.tight_layout()
 
     if output_path is not None:
@@ -865,7 +866,7 @@ def plot_observed_cluster_grid(obs_clusters, matches, boxsize,
     cmap
         Colormap name, default is cmasher.fusion_r.
     cbar_label
-        Label for the colorbar, default is "$y$".
+        Label for the colorbar, default is "Compton-$y$".
     show_legend
         Whether to show legend on each panel. Default: False.
     exclude_prefixes
@@ -1105,6 +1106,309 @@ def plot_mass_comparison(matches_a, matches_b, obs_clusters,
     return fig, ax_scatter
 
 
+def load_slow_galactic_coords(slow_path):
+    """
+    Load SLOW cluster positions from text file.
+
+    Parameters
+    ----------
+    slow_path
+        Path to SLOW2024_clusters_galactic.txt file.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping TOML_match names to (ell, b) in degrees.
+    """
+    slow_coords = {}
+    with open(slow_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split()
+            if len(parts) < 8:
+                continue
+            name = parts[0]
+            try:
+                ell = float(parts[4])
+                b = float(parts[5])
+            except (ValueError, IndexError):
+                continue
+            # Check for TOML_match (columns after index 7)
+            toml_match = ' '.join(parts[8:]) if len(parts) > 8 else ''
+            if toml_match:
+                slow_coords[toml_match] = (ell, b)
+            slow_coords[name] = (ell, b)
+    return slow_coords
+
+
+def plot_single_cluster(obs_cluster, association=None, boxsize=None,
+                        zoom_arcmin=None, cmap=None,
+                        cbar_label=r"Compton-$y$ [$\times 10^{-5}$]", output_path=None, dpi=450,
+                        slow_path=None, slow_label=r"SLOW",
+                        auto_zoom_pad=1.2, profiler=None,
+                        inset_zoom_arcmin=None, inset_loc="upper left",
+                        inset_size=0.35, cutout_npix=None):
+    """
+    Plot a single cluster cutout with colorbar label and axis labels.
+    Optionally overlay white dots for association halos.
+
+    Parameters
+    ----------
+    obs_cluster
+        ObservedCluster instance with map_fit populated.
+    association
+        Optional HaloAssociation instance.
+    boxsize
+        Simulation box size (needed to compute observer position if
+        association is provided).
+    zoom_arcmin
+        Optional zoom level in arcminutes. If None and slow_path is
+        provided, zoom is automatically set to include the SLOW position.
+    cmap
+        Colormap name, default is cmasher.fusion_r.
+    cbar_label
+        Label for the colorbar, default is "Compton-$y$".
+    output_path
+        When provided, save the figure to this location.
+    dpi
+        Figure DPI used when saving, default is 450.
+    slow_path
+        Optional path to SLOW2024_clusters_galactic.txt. If provided,
+        shows the SLOW position as a cyan square.
+    slow_label
+        Label for SLOW in legend (default: "SLOW").
+    auto_zoom_pad
+        Padding factor for automatic zoom (default: 1.2).
+    profiler
+        Optional Pointing2DCutout instance. If provided and the required
+        zoom exceeds the existing cutout, a larger cutout is generated.
+    inset_zoom_arcmin
+        If provided, adds an inset axes zoomed to this level (arcmin).
+    inset_loc
+        Location of inset: "upper left", "upper right", "lower left",
+        "lower right" (default: "upper left").
+    inset_size
+        Size of inset as fraction of main axes (default: 0.35).
+    cutout_npix
+        Pixel resolution for the cutout. If None, uses profiler default
+        (typically 301). Higher values give finer resolution.
+
+    Returns
+    -------
+    fig, ax
+    """
+    if cmap is None:
+        cmap = cmr.fusion_r
+
+    if obs_cluster.map_fit is None:
+        raise ValueError(
+            f"Cluster {obs_cluster.name} has no map_fit. "
+            "Run find_centers_observed_clusters first."
+        )
+
+    ellc = obs_cluster.map_fit['ell']
+    bc = obs_cluster.map_fit['b']
+
+    # Compute positions for auto-zoom calculation
+    x_slow, y_slow = None, None
+    x_halos, y_halos = None, None
+
+    if slow_path is not None:
+        slow_coords = load_slow_galactic_coords(slow_path)
+        cluster_name = obs_cluster.name
+        if cluster_name in slow_coords:
+            ell_slow, b_slow = slow_coords[cluster_name]
+            x_slow, y_slow = tangent_offsets_arcmin(
+                ell_slow, b_slow, ellc, bc)
+
+    if association is not None:
+        gal = association.galactic_angular
+        ell_halos, b_halos = gal[:, 0], gal[:, 1]
+        x_halos, y_halos = tangent_offsets_arcmin(
+            ell_halos, b_halos, ellc, bc)
+
+    # Auto-calculate zoom if not provided and SLOW position exists
+    if zoom_arcmin is None and x_slow is not None:
+        max_offset = max(abs(x_slow), abs(y_slow))
+        if x_halos is not None:
+            max_offset = max(max_offset, np.max(np.abs(x_halos)),
+                             np.max(np.abs(y_halos)))
+        zoom_arcmin = max_offset * auto_zoom_pad
+
+    # Get cutout - regenerate if needed and profiler is provided
+    current_extent = obs_cluster.map_fit['extent']
+    current_size = max(abs(current_extent[0]), abs(current_extent[1]))
+
+    need_larger = zoom_arcmin is not None and zoom_arcmin > current_size
+    need_higher_res = cutout_npix is not None
+
+    if (need_larger or need_higher_res) and profiler is not None:
+        # Temporarily override npix if requested
+        original_npix = profiler.npix
+        if cutout_npix is not None:
+            profiler.npix = cutout_npix
+
+        # size_arcmin is the full width, so multiply by 2 to get ±zoom_arcmin
+        size = 2 * zoom_arcmin if zoom_arcmin is not None else 2 * current_size
+        cutout, extent = profiler.get_cutout_2d(
+            ell_deg=ellc, b_deg=bc, size_arcmin=size)
+
+        # Restore original npix
+        profiler.npix = original_npix
+    else:
+        cutout = obs_cluster.map_fit['cutout']
+        extent = current_extent
+
+    with plt.style.context("science"):
+        fig, ax = plt.subplots(figsize=(5, 4))
+
+        im = ax.imshow(
+            cutout * 1e5,
+            origin="lower",
+            extent=extent,
+            cmap=cmap,
+            aspect="equal",
+        )
+
+        if x_halos is not None:
+            ax.scatter(x_halos, y_halos, marker="o", c="w", s=5,
+                       edgecolor="k", lw=0.4, zorder=3)
+
+        if x_slow is not None:
+            ax.scatter(x_slow, y_slow, marker="o", c="red", s=64,
+                       edgecolor="k", lw=1, zorder=4)
+
+        ax.set_xlabel(r"$\theta_x\,[\mathrm{arcmin}]$", fontsize=12)
+        ax.set_ylabel(r"$\theta_y\,[\mathrm{arcmin}]$", fontsize=12)
+
+        # Add title as text box in top left
+        # Strip parenthetical suffix like "(A1656)" from name and add "cluster"
+        display_name = obs_cluster.name.split(" (")[0] + " cluster"
+        name_latex = display_name.replace(" ", r"\ ")
+        ax.text(0.03, 0.97, rf"$\mathrm{{{name_latex}}}$",
+                transform=ax.transAxes, fontsize=14,
+                verticalalignment='top', horizontalalignment='left',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9,
+                          edgecolor='none'))
+
+        if zoom_arcmin is not None:
+            ax.set_xlim(-zoom_arcmin, zoom_arcmin)
+            ax.set_ylim(-zoom_arcmin, zoom_arcmin)
+
+        # Add legend with equal-sized markers
+        if association is not None or x_slow is not None:
+            from matplotlib.lines import Line2D
+            legend_handles = []
+            if x_halos is not None:
+                legend_handles.append(Line2D(
+                    [0], [0], marker='o', color='w', markeredgecolor='k',
+                    markeredgewidth=0.5, markersize=8, linestyle='None',
+                    label="BORG"))
+            if x_slow is not None:
+                legend_handles.append(Line2D(
+                    [0], [0], marker='o', color='red', markeredgecolor='k',
+                    markeredgewidth=1, markersize=8, linestyle='None',
+                    label=slow_label))
+            ax.legend(handles=legend_handles, loc="lower left", frameon=True,
+                      fancybox=True, framealpha=0.9, fontsize=11)
+
+        # Add inset if requested
+        if inset_zoom_arcmin is not None:
+            # Determine inset position
+            if inset_loc == "upper left":
+                inset_bounds = [0.02, 1 - inset_size - 0.02,
+                                inset_size, inset_size]
+            elif inset_loc == "upper right":
+                inset_bounds = [1 - inset_size - 0.02, 1 - inset_size - 0.02,
+                                inset_size, inset_size]
+            elif inset_loc == "lower left":
+                inset_bounds = [0.02, 0.02, inset_size, inset_size]
+            else:  # lower right
+                inset_bounds = [1 - inset_size - 0.02, 0.02,
+                                inset_size, inset_size]
+
+            ax_inset = ax.inset_axes(inset_bounds)
+            ax_inset.imshow(
+                cutout * 1e5,
+                origin="lower",
+                extent=extent,
+                cmap=cmap,
+                aspect="equal",
+            )
+            ax_inset.set_xlim(-inset_zoom_arcmin, inset_zoom_arcmin)
+            ax_inset.set_ylim(-inset_zoom_arcmin, inset_zoom_arcmin)
+
+            # Plot halos in inset too
+            if x_halos is not None:
+                ax_inset.scatter(x_halos, y_halos, marker="o", c="w", s=10,
+                                 edgecolor="k", lw=0.4, zorder=3)
+
+            ax_inset.set_xticks([])
+            ax_inset.set_yticks([])
+            for spine in ax_inset.spines.values():
+                spine.set_edgecolor('white')
+                spine.set_linewidth(1.5)
+
+            # Draw rectangle on main axes showing inset region
+            from matplotlib.patches import Rectangle, ConnectionPatch
+            rect = Rectangle(
+                (-inset_zoom_arcmin, -inset_zoom_arcmin),
+                2 * inset_zoom_arcmin, 2 * inset_zoom_arcmin,
+                linewidth=1.5, edgecolor='white', facecolor='none',
+                linestyle='-', zorder=5)
+            ax.add_patch(rect)
+
+            # Draw connector lines between inset and rectangle
+            # Lines converge from inset corners to nearest rect corners
+            # Inset axes coords: (0,0)=bottom-left, (1,0)=bottom-right,
+            #                    (0,1)=top-left, (1,1)=top-right
+            z = inset_zoom_arcmin
+            if inset_loc == "lower right":
+                # Inset is lower-right, rect is upper-left of it
+                connections = [
+                    ((0, 1), (z, -z)),   # inset top-left → rect bottom-right
+                    ((0, 0), (-z, -z)),  # inset bottom-left → rect bottom-left
+                    ((1, 1), (z, z)),    # inset top-right → rect top-right
+                ]
+            elif inset_loc == "lower left":
+                connections = [
+                    ((1, 1), (-z, -z)),  # inset top-right → rect bottom-left
+                    ((1, 0), (z, -z)),   # inset bottom-right → rect bottom-right
+                    ((0, 1), (-z, z)),   # inset top-left → rect top-left
+                ]
+            elif inset_loc == "upper right":
+                connections = [
+                    ((0, 0), (z, z)),    # inset bottom-left → rect top-right
+                    ((0, 1), (-z, z)),   # inset top-left → rect top-left
+                    ((1, 0), (z, -z)),   # inset bottom-right → rect bottom-right
+                ]
+            else:  # upper left
+                connections = [
+                    ((1, 0), (-z, z)),   # inset bottom-right → rect top-left
+                    ((1, 1), (z, z)),    # inset top-right → rect top-right
+                    ((0, 0), (-z, -z)),  # inset bottom-left → rect bottom-left
+                ]
+            for inset_corner, rect_corner in connections:
+                conn = ConnectionPatch(
+                    xyA=inset_corner, coordsA=ax_inset.transAxes,
+                    xyB=rect_corner, coordsB=ax.transData,
+                    color='white', linewidth=1, linestyle='-', zorder=5)
+                fig.add_artist(conn)
+
+        cbar = fig.colorbar(im, ax=ax, pad=0.02)
+        cbar.set_label(cbar_label, fontsize=12)
+        cbar.ax.tick_params(labelsize=10)
+        fig.tight_layout()
+
+    if output_path is not None:
+        fig.savefig(output_path, dpi=dpi)
+
+    plt.close()
+    return fig, ax
+
+
 __all__ = [
     "extract_match_field",
     "match_angular_separation",
@@ -1115,4 +1419,6 @@ __all__ = [
     "plot_cluster_cutout",
     "plot_observed_cluster_cutout",
     "plot_observed_cluster_grid",
+    "plot_single_cluster",
+    "load_slow_galactic_coords",
 ]

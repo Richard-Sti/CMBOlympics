@@ -18,10 +18,10 @@ n_jobs = 4
 # --- Input Maps ---
 # Paths to the HEALPix maps for the tSZ signal and random pointings.
 [input_map]
-# signal_map = "data/deproject_CMB_CIB_default_standard_full.fits"
-# random_pointing = "data/deproject_CMB_CIB_default_standard_full_RAND_POINTING.hdf5"
-signal_map = "data/PR4_NILC_y_map.fits"
-random_pointing = "data/PR4_NILC_y_map__RAND_POINTING.hdf5"
+signal_map = "data/deproject_CMB_CIB_default_standard_full.fits"
+random_pointing = "data/deproject_CMB_CIB_default_standard_full_RAND_POINTING.hdf5"
+# signal_map = "data/PR4_NILC_y_map.fits"
+# random_pointing = "data/PR4_NILC_y_map__RAND_POINTING.hdf5"
 # signal_map = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00.fits"
 # random_pointing = "data/COM_CompMap_Compton-SZMap-nilc-ymaps_2048_R2.00_RAND_POINTING.hdf5"
 
@@ -64,7 +64,7 @@ verbose_bins = true # Print details about the created mass bins
 # --- Analysis Parameters ---
 # Settings for the main analysis pipeline.
 [analysis]
-which_simulation = "csiborg2" # Key for the halo catalogue to use (see below)
+which_simulation = "manticore" # Key for the halo catalogue to use (see below)
 output_folder = "results" # Folder to save the HDF5 output file
 # output_tag = ""             # Optional tag to append to the output filename
 matching_pvalue_threshold = 0.05
